@@ -1,0 +1,21 @@
+{
+  "name": "lotti-kit",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/lotti-kit/Sources",
+  "tags": ["platform:ios", "lang:swift"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift build", "cwd": "packages/lotti-kit" },
+      "inputs": ["{projectRoot}/Package.swift", "{projectRoot}/Sources/**/*"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift test", "cwd": "packages/lotti-kit" },
+      "inputs": ["{projectRoot}/Package.swift", "{projectRoot}/Sources/**/*", "{projectRoot}/Tests/**/*"],
+      "cache": true
+    }
+  }
+}
