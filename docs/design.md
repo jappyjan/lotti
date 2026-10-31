@@ -1,0 +1,149 @@
+# Lotti — Design language
+
+Status: agreed direction after four prototype rounds. This describes the experience only, not how it's built.
+
+## Core idea: everything is a conversation with Lotti
+
+1. **Only Lotti speaks.** Messages and notifications never appear as they arrive. Lotti keeps what doesn't matter quiet and tells you the rest in one sentence, in her own voice.
+2. **You only talk to Lotti.** Hold and say anything: "tell Mara I'm late", "what did she write exactly?", "walk me there". Lotti works out what to do.
+3. **Lotti proposes, you approve.** Anything that affects other people (sending a message, moving a meeting) is shown as exactly what Lotti wants to do and waits for your OK. Nothing goes out without it.
+4. **The original is one question away.** Every summary has "Original" in its choices, or you just ask.
+5. **Lotti learns.** She remembers who matters, what you ignore, how you write, and gets quieter and more accurate over time.
+
+## The display
+
+The glasses show a 576×288 green, see-through display. Black is invisible; only lit pixels are seen.
+
+- **Light means attention.** The display stays dark unless something is worth seeing.
+- **Two text sizes.** Regular for everything; big only for numbers read at a glance (time, distance).
+- **Brightness sets importance.** Bright = new or highlighted; dim = context.
+- **Three things max:** what Lotti says (one or two sentences), optional context, and your choices.
+- **Text first.** Pictures only where they beat words: Lotti's raccoon mask and maps.
+- **Calm.** Screens change in place. Nothing slides, blinks or bounces.
+- **Hints fade away.** Gesture hints show while you're learning, then disappear.
+
+## Screen anatomy
+
+```
+┌───────────────────────────────────┬──────────────┐
+│                                   │              │
+│ (mask) Mara asks if you're still  │ [On my way]  │ ← highlighted = best guess
+│        coming at 8. They're       │  Running late│
+│        ordering pizza.            │  Original    │
+│                                   │              │
+└───────────────────────────────────┴──────────────┘
+  Lotti's sentence (left)             the rail (right)
+```
+
+- **Lotti's line:** the raccoon mask followed by her sentence. The mask marks "this is Lotti talking".
+- **The rail:** every screen with choices puts them in a column on the right, up to 4. The highlight starts on Lotti's best guess. Each item is a shortcut for something you could also say.
+- **No choices, no rail:** the sentence uses the full width.
+- **Originals** are shown without the mask, word for word, with the sender and time in dim text above.
+
+## Gestures
+
+The same on the R1 ring and both temple touchpads.
+
+| Gesture           | Meaning everywhere                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                             |
+| Tap               | Do the highlighted thing                                                                  |
+| Double tap        | Back or dismiss. On the look-up view: display off                                         |
+| Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender) |
+| Look up           | The look-up view; look down to hide it                                                    |
+
+## How loud a screen is
+
+| Level      | Behaviour                                                      | Examples                                              |
+| ---------- | -------------------------------------------------------------- | ----------------------------------------------------- |
+| **Quiet**  | Never appears by itself. Only in the look-up view.             | weather, things Lotti held back, low-priority updates |
+| **Normal** | Shows for a few seconds, then moves to the look-up view.       | most summaries, answers                               |
+| **Urgent** | Stays until you act or dismiss it. Rare; Lotti has to earn it. | turn coming up, a call, someone Lotti knows matters   |
+
+Who and what counts as urgent is not a setting. Lotti learns it (see Memory).
+
+## Building blocks
+
+Lotti composes every screen from these. Layout always comes from the design language.
+
+| Block          | What it shows                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------- |
+| **Lotti says** | Her sentence, optionally with choices in the rail. Summaries, answers, suggestions                |
+| **Proposal**   | Exactly what Lotti wants to do ("I'll tell Mara: …"), with **Send / Change / Cancel** in the rail |
+| **Original**   | The source word for word: a message, a mail, a notification                                       |
+| **List**       | Pick one of many: places, people, the rest of today. One line each                                |
+| **Reading**    | A longer answer, page by page ("Read on" in the rail)                                             |
+| **Working**    | Lotti is on it, and says what she's doing ("Sniffing around… checking the BVG"). Double tap stops |
+| **Listening**  | Your words appearing as you speak, while you hold                                                 |
+| **Card**       | A few facts at a glance (label + value), optionally one big number                                |
+| **Done**       | One line that disappears after 2 s ("Told Mara.")                                                 |
+
+Every screen also has: how loud it is, how long it stays, and which choice is Lotti's best guess.
+
+## Key flows
+
+**A message comes in**
+
+1. Lotti decides: quiet, normal or urgent. Most things stay quiet.
+2. If shown: one sentence in Lotti's voice, choices in the rail (likely replies + "Original").
+3. Several things at once become one summary, with the one that needs you first ("3 new: … Mara first?").
+
+**You reply**
+
+1. Tap a suggested reply, or hold and say what you want ("tell her ten minutes late, and I want a margherita").
+2. Lotti shows a **Proposal** with the exact words, written in your own style: "I'll tell Mara: …" with Send / Change / Cancel.
+3. Tap Send → "Told Mara." The answer comes back later as part of the same conversation.
+
+**Lotti suggests something**
+Always as a question with choices ("Ben moved your 15:00 to 15:30. Push your 15:45 with Lea too?"). Approving leads to a Proposal if it affects other people.
+
+## Look-up view
+
+What you see when you look up: **one thing**. Lotti picks the single most useful sentence right now.
+
+- **Something matters:** "Leave in 8 min for pizza at Mara's. Rain at 21:00, take the umbrella." Time and "2 more" in dim text below.
+- **Nothing matters:** "All quiet. Nothing needs you." Time, date, temperature below.
+- **Scroll:** the rest, in order, as a List. The last item says what Lotti held back ("I kept 14 things quiet, mostly newsletters").
+- **While navigating:** the one thing, plus the next turn pinned at the bottom.
+
+## Navigation
+
+Uses the glasses' own navigation screen, the same as the Even app: turn arrow, distance, street, time left and a small map, plus a full map with a tap. Lotti starts it ("walk me there"), changes it ("add a stop at the Späti") and talks about it in the look-up view, but doesn't redesign it.
+
+## Memory: how Lotti learns
+
+Lotti keeps memories, and you can always ask about them.
+
+- **What she remembers:**
+  - who matters to you and when (Mum always, work chats not after 19:00)
+  - what you ignore
+  - how you write to each person
+  - places (home, Mara's)
+  - preferences you said out loud
+- **How she learns:**
+  - from what you open, answer, dismiss or ignore
+  - from things you tell her ("always let Mum through", "never bother me with the volleyball group")
+  - now and then she asks: "Mum wrote three times today. Should she always come through?" (Yes / No / Only urgent)
+- **Staying in control:**
+  - "What do you know about Mara?"
+  - "Forget that."
+  - "Why did you show me this?" Lotti always has an answer.
+
+## Lotti's voice
+
+- **When Lotti talks to you:** brief, warm, a bit curious. A little raccoon flavour ("Sniffing around…", "Found it"), but never at the cost of clarity.
+- **When Lotti writes for you:** your own style, per person, learned from how you write. Never raccoon flavour. People shouldn't be able to tell.
+
+## Phone app
+
+Plain native iOS look: standard lists and controls, one accent colour (the same green). The goal is that you never need it day to day.
+
+- **Setup:** pair glasses and ring
+- **Status:** connected, batteries
+- **Settings:** Hermes, messengers, privacy
+- **Memory & log:** what Lotti remembers, what she showed or held back and why. Read and delete only; teaching happens by talking to her.
+
+## Open questions
+
+- Should approval ever relax later (e.g. Lotti may send "on my way" to Mara without asking once she's proven herself)? For now: always approve.
+- Should Lotti answer out loud through the phone or earbuds, or only on the display?
