@@ -161,7 +161,7 @@ The workspace is empty for now. Projects get created when their milestone starts
 
 ```
 apps/
-  ios/          Lotti iPhone app (SwiftUI, XcodeGen or Tuist), Nx run-commands targets
+  ios/          Lotti iPhone app (SwiftUI, plain Xcode project), Nx run-commands targets
   simulator/    Web simulator for screens and gestures
 packages/
   ui-schema/    Screen schema (source of truth) + JSON Schema + fixtures
@@ -173,16 +173,16 @@ docs/           vision, architecture, roadmap
 
 ## Decisions
 
-| #   | Decision                                                                                                                          | Status                        |
-| --- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                             | ✅ decided                    |
-| D2  | On-device first, Hermes for escalation                                                                                            | ✅ decided (pending spike S3) |
-| D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                               | ✅ decided                    |
-| D4  | Push-to-talk in v1; wake word if spike S4 shows acceptable battery cost                                                           | ✅ decided                    |
-| D5  | Template-based UI schema instead of free layout                                                                                   | ✅ proposed                   |
-| D6  | Build our own BLE layer vs adopt an existing library (MentraOS iOS SDK, OpenEvenSdk, g2-kit, even-realities-app-template)         | ⏳ open, spike S1             |
-| D7  | Xcode project generation: XcodeGen vs Tuist                                                                                       | ⏳ open                       |
-| D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                              | ⏳ open, revisit after M6     |
-| D9  | Messaging main path: EU notification forwarding for all five messengers                                                           | ✅ decided (pending spike S5) |
-| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                            | ✅ proposed (pending S8)      |
-| D11 | Local model: Apple Foundation Model by default behind the Foundation Models API; Gemma 4 E2B/E4B per task if S3 shows it's needed | ✅ proposed (pending S3)      |
+| #   | Decision                                                                                                                                                                 | Status                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                    | ✅ decided                            |
+| D2  | On-device first, Hermes for escalation                                                                                                                                   | ✅ decided (pending spike S3)         |
+| D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                      | ✅ decided                            |
+| D4  | Push-to-talk in v1; wake word if spike S4 shows acceptable battery cost                                                                                                  | ✅ decided                            |
+| D5  | Template-based UI schema instead of free layout                                                                                                                          | ✅ proposed                           |
+| D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer)) | ✅ decided (pending S1 hardware test) |
+| D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                          | ✅ decided                            |
+| D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                                                                     | ⏳ open, revisit after M6             |
+| D9  | Messaging main path: EU notification forwarding for all five messengers                                                                                                  | ✅ decided (pending spike S5)         |
+| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                   | ✅ proposed (pending S8)              |
+| D11 | Local model: Apple Foundation Model by default behind the Foundation Models API; Gemma 4 E2B/E4B per task if S3 shows it's needed                                        | ✅ proposed (pending S3)              |
