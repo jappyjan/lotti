@@ -3,7 +3,7 @@ import SwiftUI
 
 @main
 struct LottiApp: App {
-    @State private var model = AppModel(link: G2Link(), ring: R1Link())
+    @State private var model = AppModel(link: G2Link())
 
     var body: some Scene {
         WindowGroup {

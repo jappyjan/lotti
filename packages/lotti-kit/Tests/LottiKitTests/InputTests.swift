@@ -15,12 +15,30 @@ struct G2EventTests {
         #expect(decode("080210016a070a05080412016d") == .input(InputEvent(.tap, from: .unknown)))
     }
 
-    @Test func sysEventCarriesTheSource() {
-        // Sys_ItemEvent {1 eventType, 2 eventSource}; an absent eventType is a click.
-        #expect(decode("08026a041a021002") == .input(InputEvent(.tap, from: .ring)))
-        #expect(decode("08026a061a0408031001") == .input(InputEvent(.doubleTap, from: .rightTouchpad)))
-        #expect(decode("08026a061a0408011003") == .input(InputEvent(.scrollUp, from: .leftTouchpad)))
-        #expect(decode("08026a061a0408021002") == .input(InputEvent(.scrollDown, from: .ring)))
+    // Captured from a G2 (firmware 2.2.9) with an R1 linked, 2026-11-01. Payloads of
+    // sid 0xE0 flag 0x01 messages from the right arm.
+    @Test(arguments: [
+        ("08026a041a021001", InputEvent(.tap, from: .rightTouchpad)),
+        ("08026a061a0408031001", InputEvent(.doubleTap, from: .rightTouchpad)),
+        ("08026a041a021003", InputEvent(.tap, from: .leftTouchpad)),
+        ("08026a061a0408031003", InputEvent(.doubleTap, from: .leftTouchpad)),
+        ("08026a041a021002", InputEvent(.tap, from: .ring)),
+        ("08026a061a0408031002", InputEvent(.doubleTap, from: .ring)),
+        // Scrolls come as text-container events and long presses as sys events without a
+        // source, whether from a touchpad or the ring.
+        ("08026a0d120b080112056c6f7474691802", InputEvent(.scrollDown, from: .unknown)),
+        ("08026a0d120b080112056c6f7474691801", InputEvent(.scrollUp, from: .unknown)),
+        ("08026a041a020809", InputEvent(.longPress, from: .unknown)),
+        ("08026a041a02080a", InputEvent(.longPressEnd, from: .unknown)),
+    ])
+    func capturedGestures(payload: String, expected: InputEvent) {
+        #expect(decode(payload) == .input(expected))
+    }
+
+    @Test func capturedStatusMessages() {
+        #expect(decode("08011a0308e001", sid: G2Events.stateService) == .info("state change 08011a0308e001"))
+        // The left arm pushes this every 10 s (flag 0x01). It needs no answer.
+        #expect(decode("080610572a00", sid: G2Service.deviceConfig) == .info("ring info: connect 0, status 0"))
     }
 
     @Test func lifecycleEventsAreInfo() {
@@ -68,18 +86,5 @@ struct InputDeduplicatorTests {
             (InputEvent(.scrollUp, from: .ring), 1.2),
         ])
         #expect(result == [true, true, true])
-    }
-}
-
-struct R1GestureTests {
-    // `FF <type> <param>` from MentraOS controllers/R1.swift.
-    @Test func parsesGestures() {
-        #expect(R1Gesture.parse([0xFF, 0x04, 0x01]) == .tap)
-        #expect(R1Gesture.parse([0xFF, 0x04, 0x02]) == .doubleTap)
-        #expect(R1Gesture.parse([0xFF, 0x03, 0x00]) == .longPress)
-        #expect(R1Gesture.parse([0xFF, 0x05, 0x01]) == .scrollUp)
-        #expect(R1Gesture.parse([0xFF, 0x05, 0xFF]) == .scrollDown)
-        #expect(R1Gesture.parse([0x01]) == nil)
-        #expect(R1Gesture.parse([0xFF, 0x09, 0x00]) == nil)
     }
 }

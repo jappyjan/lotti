@@ -99,6 +99,6 @@ public enum G2Events {
         }
         if let name = ProtoReader.string(info, 3), !name.isEmpty { parts.append("name \(name)") }
         if let result = f[5], result != 0 { parts.append("result \(result)") }
-        return "ring info: " + parts.joined(separator: ", ") + " (\(hex(info)))"
+        return "ring info: " + parts.joined(separator: ", ") + (info.isEmpty ? "" : " (\(hex(info)))")
     }
 }

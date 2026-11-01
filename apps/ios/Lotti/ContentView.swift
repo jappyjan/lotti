@@ -17,7 +17,6 @@ struct ContentView: View {
                 }
 
                 inputSection
-                ringSection
 
                 if link.status.isConnected {
                     Section {
@@ -43,33 +42,9 @@ struct ContentView: View {
                     Text(input.time, format: .dateTime.hour().minute().second())
                 } label: {
                     Text(input.event.gesture.rawValue).font(input.id == model.inputs.first?.id ? .headline : .body)
-                    Text("\(input.event.source.rawValue) · via \(input.path.rawValue)")
+                    Text(input.event.source.rawValue)
                 }
             }
-        }
-    }
-
-    @ViewBuilder private var ringSection: some View {
-        Section {
-            LabeledContent("Ring", value: ringStatusText)
-            switch model.ring.status {
-            case .disconnected, .failed:
-                Button("Connect ring directly") { model.ring.connect() }
-            default:
-                Button("Disconnect ring", role: .destructive) { model.ring.disconnect() }
-            }
-        } footer: {
-            Text("Only needed if the ring isn't linked to the glasses.")
-        }
-    }
-
-    private var ringStatusText: String {
-        switch model.ring.status {
-        case .disconnected: "Not connected"
-        case .scanning: "Scanning…"
-        case .connecting: "Connecting…"
-        case .connected(let name): name
-        case .failed(let reason): reason
         }
     }
 

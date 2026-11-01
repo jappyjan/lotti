@@ -23,14 +23,14 @@ public struct InputEvent: Equatable, Sendable, CustomStringConvertible {
     public var description: String { "\(gesture.rawValue) (\(source.rawValue))" }
 }
 
-/// Drops repeats of the same gesture that arrive within `window` seconds. The glasses send one
-/// touch 2–3 times (once per arm, and sometimes again as a text-container event), so without
-/// this one tap would look like several.
+/// Drops repeats of the same gesture that arrive within `window` seconds. Other clients report
+/// that the glasses can send one touch several times (MentraOS debounces clicks by 100 ms). Our
+/// G2 didn't in S2, so the window is short enough not to eat fast, deliberate scrolls.
 public struct InputDeduplicator: Sendable {
     public var window: TimeInterval
     private var last: (gesture: InputEvent.Gesture, at: TimeInterval)?
 
-    public init(window: TimeInterval = 0.25) {
+    public init(window: TimeInterval = 0.15) {
         self.window = window
     }
 
