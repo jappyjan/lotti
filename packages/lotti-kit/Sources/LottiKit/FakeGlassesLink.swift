@@ -15,6 +15,8 @@ public final class FakeGlassesLink: GlassesLink {
     /// Every frame shown, oldest first. `showText` records a full-width frame.
     public private(set) var frames: [GlassesFrame] = []
     public var showError: Error?
+    /// Makes `startMicrophone()` throw, to test the phone-mic fallback.
+    public var microphoneError: Error?
     public private(set) var microphoneOn = false
     public private(set) var headTracking = false
 
@@ -48,6 +50,7 @@ public final class FakeGlassesLink: GlassesLink {
     public func send(_ event: InputEvent) { inputBroadcast.send(event) }
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
+        if let microphoneError { throw microphoneError }
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream()
         mic = continuation
         microphoneOn = true
