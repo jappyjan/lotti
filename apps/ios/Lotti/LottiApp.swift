@@ -43,6 +43,14 @@ struct LottiApp: App {
 }
 
 enum Settings {
+    static let hiddenCalendarsKey = "hiddenCalendars"
+
+    /// Calendars you switched off. New calendars show up by default.
+    static var hiddenCalendars: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: hiddenCalendarsKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: hiddenCalendarsKey) }
+    }
+
     static let headUpKey = "headUp"
     static let headUpEnabledKey = "headUpEnabled"
 

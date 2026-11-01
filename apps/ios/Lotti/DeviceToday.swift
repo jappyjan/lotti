@@ -26,7 +26,10 @@ actor DeviceToday: TodayProvider {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: now)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
-        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+        let hidden = Settings.hiddenCalendars
+        let calendars = store.calendars(for: .event).filter { !hidden.contains($0.calendarIdentifier) }
+        guard !calendars.isEmpty else { return [] }
+        let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
         return store.events(matching: predicate).map {
             CalendarEntry(title: $0.title ?? "Event", start: $0.startDate, end: $0.endDate, isAllDay: $0.isAllDay,
                           location: $0.location?.isEmpty == false ? $0.location : nil)
