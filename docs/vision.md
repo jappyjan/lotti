@@ -49,7 +49,7 @@ The stock Even app works like a phone squeezed onto glasses: menus, apps, featur
 
 ## Constraints
 
-- **Hardware:** G2 display is 576×288, monochrome green. The official SDK allows up to 12 containers per page and one container that takes input. Raw BLE may allow more; see spike S1. The firmware's service table confirms a second layer above the content for popups; only the spawn command is still unmapped ([D12](architecture.md#decisions), [apk-recon](spikes/apk-recon.md)).
+- **Hardware:** G2 display is 576×288, monochrome green. The official SDK allows up to 12 containers per page and one container that takes input. Raw BLE may allow more; see spike S1. The firmware's service table confirms a second layer above the content for popups, and the spawn command is mapped (EvenHub Cmd 17, `MenuStartUpEvent{widgetId}`); open is the foreground-notification content command ([D12](architecture.md#decisions), [apk-recon](spikes/apk-recon.md)).
 - **Protocol:** we use the community reverse-engineered BLE protocol. Firmware updates can break it.
 - **Exclusive connection:** while Lotti is connected, the Even app can't use the glasses.
 - **iOS notification replies:** only in the EU, via `AccessoryNotifications` (iOS 26.3+), with one forwarding device at a time. Turning it on disables notifications on Apple Watch.
