@@ -9,7 +9,7 @@ Status: done 2026-11-01. Goal: answer the three open protocol questions from the
 
 ## Findings
 
-### Second display layer: the model is real, the spawn command is unmapped
+### Second display layer: confirmed, and the spawn command is already mapped
 
 The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) separates two planes:
 
@@ -18,11 +18,11 @@ The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) sep
 | background (content)   | `DASHBOARD` 1, `NAVIGATION` 8, `EVENHUB` 224                            |
 | foreground (popup)     | `MEUN` 3, `NOTIFICATION` 4, `EVEN_AI` 7, `SYSTEM_ALERT` 33, `SYSTEM_CLOSE` 34 |
 
-So the Even app really does draw content below and popups above. What we still don't have is the EvenHub `Cmd` that spawns a foreground page above the running background one — g2-kit's own notes say the notification/animation/widget-binding commands are unmapped.
+So the Even app really does draw content below and popups above. The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 17` `OS_NOTIFY_MENU_STARTUP_PACKET` → `MenuStartUpEvent { uint32 widgetId = 1 }`, where `widgetId` is the foreground SID (3=menu, 4=notification, 7=even_ai). The glasses reply `Cmd 18` `APP_RESPONSE_MENU_STARTUP_FAILED_PACKET` (`MenuStartUpResPonse`). (g2-kit's `EvenHub_Cmd_List` runs 0–20; the app adds three more, 0x15–0x17 — see "Verified against g2-kit" below.)
 
-### Notifications: the control channel is decoded, the content push is not
+### Notifications: control decoded; content push is dashboard news, foreground popup content still open
 
-`g2.notification` is settings, not the payload: `NotificationControl` (`notifEnable`, `autoDispEnable`, `dispTime`, `avoidDisturbEnable`) and `NotificationIOS` (`appID` + `displayName`, the per-iOS-app whitelist). Showing an actual title/body is a foreground app (SID 4); the `Cmd` that pushes its content is still unmapped.
+`g2.notification` is settings, not the payload: `NotificationControl` (`notifEnable`, `autoDispEnable`, `dispTime`, `avoidDisturbEnable`) and `NotificationIOS` (`appID` + `displayName`, the per-iOS-app whitelist). Content for the dashboard's news widget is `g2.dashboard` `eDashboardCommandId.APP_SEND_NEWS_DATA = 9` → `AppSendNewsData { sessionId, sessionStatus, sessionTotalCount, sessionNewsIndex, newsId, title=6, reportTime=7, source=8, content=9 }`. That is the **background news feed**, though — the command that fills a *foreground* notification popup (SID 4) body is still not pinned down and needs a live BLE capture.
 
 ### Map view: fully decoded, and the phone routes with Mapbox
 
@@ -35,19 +35,33 @@ So the Even app really does draw content below and popups above. What we still d
 
 ## What this changes
 
-- The "second layer" is no longer a guess: the layer model is in the firmware's service table. It stays open only for the spawn command.
+- The "second layer" is no longer a guess: the layer model is in the firmware's service table, and the spawn command (`Cmd 17`, `MenuStartUpEvent{widgetId}`) is already mapped in g2-kit.
 - The navigation plan can rely on the decoded proto instead of re-decoding it.
+- The protocol actually lives in the Flutter AOT binary (`libapp.so`), not the Jiagu-encrypted dex — so the right extraction path is `blutter` on `libapp.so`, not a dex dump (Jiagu only packs the Java dex).
 
-## Getting the last two Cmds (foreground spawn + notification content)
+## Verified against g2-kit (2026-11-01)
 
-Two ways, in order of effort:
+Reconciled with g2-kit's generated protos. Genuinely new (absent from g2-kit):
 
-1. **BLE capture** (fastest, no new tooling): run the official app and capture the sid `0xe0` traffic while it opens a popup or shows a notification. g2-kit already has the envelope + protobuf scaffolding.
-2. **Runtime dex dump** (if we want the app's own Java/Kotlin logic): Jiagu decrypts the real classes in memory at launch, so the reliable route is a runtime dump, not a static one — see below.
+- Three EvenHub commands past `20`, all menu-related:
+  - `OS_NOTIFY_MENU_ITEM_CLICK_PACKET = 0x15` (21) → oneof field 24 `MenuItemClick`
+  - `OS_NOTIFY_MENU_SUBITEM_SWITCH_PACKET = 0x16` (22) → oneof field 25 `MenuSubReq`
+  - `APP_RESPONSE_MENU_SUBITEM_SWITCH_PACKET = 0x17` (23) → oneof field 26 `MenuSubRes`
+- `eNotificationCommandId.NOTIFICATION_WHITELIST_CHK = 4`.
+- Two new SIDs: `UI_NOTE_APP_ID = 0x12` (18) and `UI_TRACEPOINT_APP_ID = 0x11` (17), with their `note.pb.dart` / `tracepoint.pb.dart` protos.
 
-### Unpacking Jiagu (reference)
+Already in g2-kit (so re-derived, not recovered): the foreground-spawn pair (Cmd 17/18), the whole dashboard `AppSendNewsData` / `eDashboardCommandId` news structure, and the file-service enum `ANDROID_MSG_JSON_NOTIFICATION = 1`.
 
-Jiagu decrypts the real dex and the real native lib in memory at launch. To get them:
+## The one remaining gap: foreground notification content
+
+The foreground notification body is not the dashboard news. It travels over the **file service** (sid `0xc4`/`0xc5`, `ANDROID_MSG_JSON_NOTIFICATION`) as a JSON payload whose title/body field names are still undecoded. That is the real remaining gap.
+
+1. **BLE capture** (fastest): run the official app and capture the file-service traffic while it shows a notification.
+2. **Dump the Dart AOT binary** (`libapp.so` with `blutter`) to read how the app builds that JSON schema.
+
+### Unpacking Jiagu (reference — mostly unnecessary now)
+
+Note: the protocol lives in `libapp.so`, which Jiagu does not pack, so `blutter` sidesteps this entirely. If you do need the Java/Kotlin side, Jiagu decrypts the real dex and native lib in memory at launch. To get them:
 
 - Rooted device, or a Magisk-patched emulator **with KVM** (a software-rendered emulator is too slow to be useful).
 - `pip install frida-tools`, push `frida-server`, then `frida-dexdump -U -f com.even.sg` dumps every dex loaded into memory, including the decrypted `com.even.*` classes.
