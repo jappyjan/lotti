@@ -74,7 +74,7 @@ The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 1
 
 So the foreground layer is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
 
-The one genuinely open piece is the command that fills a foreground notification popup's body (title/body) once it's spawned — the dashboard's `APP_SEND_NEWS_DATA` is the background news widget, not the foreground popup. Confirm with a BLE capture of the official app showing a notification.
+The one genuinely open piece is the foreground notification body: it travels over the **file service** (sid `0xc4`/`0xc5`, `ANDROID_MSG_JSON_NOTIFICATION`) as a JSON payload whose title/body field names are still undecoded (the dashboard's `APP_SEND_NEWS_DATA` is the background news widget, not this). Confirm with a BLE capture of the official app showing a notification.
 
 ## Brain: how much can run on the phone?
 

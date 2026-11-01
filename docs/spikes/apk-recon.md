@@ -18,7 +18,7 @@ The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) sep
 | background (content)   | `DASHBOARD` 1, `NAVIGATION` 8, `EVENHUB` 224                            |
 | foreground (popup)     | `MEUN` 3, `NOTIFICATION` 4, `EVEN_AI` 7, `SYSTEM_ALERT` 33, `SYSTEM_CLOSE` 34 |
 
-So the Even app really does draw content below and popups above. The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 17` `OS_NOTIFY_MENU_STARTUP_PACKET` → `MenuStartUpEvent { uint32 widgetId = 1 }`, where `widgetId` is the foreground SID (3=menu, 4=notification, 7=even_ai). The glasses reply `Cmd 18` `APP_RESPONSE_MENU_STARTUP_FAILED_PACKET` (`MenuStartUpResPonse`). (g2-kit's `EvenHub_Cmd_List` runs 0–20; the app's own binary hints at a few commands past 20 — see the verification note below.)
+So the Even app really does draw content below and popups above. The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 17` `OS_NOTIFY_MENU_STARTUP_PACKET` → `MenuStartUpEvent { uint32 widgetId = 1 }`, where `widgetId` is the foreground SID (3=menu, 4=notification, 7=even_ai). The glasses reply `Cmd 18` `APP_RESPONSE_MENU_STARTUP_FAILED_PACKET` (`MenuStartUpResPonse`). (g2-kit's `EvenHub_Cmd_List` runs 0–20; the app adds three more, 0x15–0x17 — see "Verified against g2-kit" below.)
 
 ### Notifications: control decoded; content push is dashboard news, foreground popup content still open
 
@@ -39,12 +39,25 @@ So the Even app really does draw content below and popups above. The spawn comma
 - The navigation plan can rely on the decoded proto instead of re-decoding it.
 - The protocol actually lives in the Flutter AOT binary (`libapp.so`), not the Jiagu-encrypted dex — so the right extraction path is `blutter` on `libapp.so`, not a dex dump (Jiagu only packs the Java dex).
 
+## Verified against g2-kit (2026-11-01)
+
+Reconciled with g2-kit's generated protos. Genuinely new (absent from g2-kit):
+
+- Three EvenHub commands past `20`, all menu-related:
+  - `OS_NOTIFY_MENU_ITEM_CLICK_PACKET = 0x15` (21) → oneof field 24 `MenuItemClick`
+  - `OS_NOTIFY_MENU_SUBITEM_SWITCH_PACKET = 0x16` (22) → oneof field 25 `MenuSubReq`
+  - `APP_RESPONSE_MENU_SUBITEM_SWITCH_PACKET = 0x17` (23) → oneof field 26 `MenuSubRes`
+- `eNotificationCommandId.NOTIFICATION_WHITELIST_CHK = 4`.
+- Two new SIDs: `UI_NOTE_APP_ID = 0x12` (18) and `UI_TRACEPOINT_APP_ID = 0x11` (17), with their `note.pb.dart` / `tracepoint.pb.dart` protos.
+
+Already in g2-kit (so re-derived, not recovered): the foreground-spawn pair (Cmd 17/18), the whole dashboard `AppSendNewsData` / `eDashboardCommandId` news structure, and the file-service enum `ANDROID_MSG_JSON_NOTIFICATION = 1`.
+
 ## The one remaining gap: foreground notification content
 
-The spawn command is mapped (above), so the only genuinely open piece is the command that fills a foreground notification popup's body (title/body) once it's spawned via `Cmd 17` with `widgetId=4` — and confirming the few EvenHub commands past `20` that the app's binary hints at.
+The foreground notification body is not the dashboard news. It travels over the **file service** (sid `0xc4`/`0xc5`, `ANDROID_MSG_JSON_NOTIFICATION`) as a JSON payload whose title/body field names are still undecoded. That is the real remaining gap.
 
-1. **BLE capture** (fastest, no new tooling): run the official app and capture the sid `0xe0` traffic while it shows a notification. g2-kit already has the envelope + protobuf scaffolding.
-2. **Dump the Dart AOT binary** (the actual protocol location): `libapp.so` in the APK is the Flutter AOT compiled code; extract it with `blutter` (built against the app's Dart version) and read the generated `*.pb.dart` enums / `BuilderInfo` directly. This is what recovered the fields above — Jiagu only packs the Java dex, so no dex dump is needed.
+1. **BLE capture** (fastest): run the official app and capture the file-service traffic while it shows a notification.
+2. **Dump the Dart AOT binary** (`libapp.so` with `blutter`) to read how the app builds that JSON schema.
 
 ### Unpacking Jiagu (reference — mostly unnecessary now)
 
