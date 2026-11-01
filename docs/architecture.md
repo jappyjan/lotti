@@ -116,14 +116,15 @@ Known limits (from S3):
 
 One set of tools on the phone, used by the on-device brain, by Hermes and later by the ring's Actions list. Each tool is a `PhoneTool` in LottiKit (name, description, arguments, `read` or `action`); the app implements the real ones in `apps/ios/Lotti/PhoneTools.swift`.
 
-| Tool              | Kind   | Backed by                        | On-device brain | Hermes            |
-| ----------------- | ------ | -------------------------------- | --------------- | ----------------- |
-| `calendar`        | read   | EventKit (your chosen calendars) | ✅              | ✅ if shared      |
-| `weather`         | read   | Open-Meteo at your location      | ✅              | ✅ if shared      |
-| `location`        | read   | CoreLocation + MapKit address    | ✅              | ✅ if shared      |
-| `reminders`       | read   | EventKit reminders               | ✅              | ✅ if shared      |
-| `set_timer`       | action | AlarmKit (rings in silent mode)  | ✅              | ✅ (suggest only) |
-| `create_reminder` | action | EventKit reminders               | ✅              | ✅ (suggest only) |
+| Tool              | Kind   | Backed by                                                                        | On-device brain | Hermes            |
+| ----------------- | ------ | -------------------------------------------------------------------------------- | --------------- | ----------------- |
+| `calendar`        | read   | EventKit (your chosen calendars)                                                 | ✅              | ✅ if shared      |
+| `weather`         | read   | Open-Meteo at your location                                                      | ✅              | ✅ if shared      |
+| `location`        | read   | CoreLocation + MapKit address                                                    | ✅              | ✅ if shared      |
+| `reminders`       | read   | EventKit reminders                                                               | ✅              | ✅ if shared      |
+| `directions`      | read   | MapKit: place search near Jan (~30 km), travel times on foot, bike, transit, car | ✅              | ✅ if shared      |
+| `set_timer`       | action | AlarmKit (rings in silent mode)                                                  | ✅              | ✅ (suggest only) |
+| `create_reminder` | action | EventKit reminders                                                               | ✅              | ✅ (suggest only) |
 
 Rules (enforced by `Toolbox`, not by prompts):
 
@@ -146,7 +147,7 @@ A single session with tool calling failed on the ~3B model: it made up a free ca
 
 Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
 
-Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Still seen: an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
+Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Directions use MapKit on the phone, not Hermes: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. An answer that says "I don't know" goes to Hermes. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
 
 ## Hermes connector
 

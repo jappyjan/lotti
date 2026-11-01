@@ -41,6 +41,7 @@ public enum LocalPipeline {
         var label: String {
             switch tool {
             case "location": "where Jan is right now"
+            case "directions": "the way there"
             case "calendar": "Jan's calendar"
             case "reminders": "Jan's reminder list"
             default: tool
@@ -76,10 +77,14 @@ public enum LocalPipeline {
         ("create_reminder", #"\b(erinner(e|n)? mich|remind me|vergiss nicht|don'?t let me forget)\b"#),
         ("reminders", #"\b(erinnerungen|reminders|to-?dos?|aufgaben(liste)?)\b"#),
         ("set_timer", #"\b(timer|countdown|stoppuhr)\b"#),
+        ("directions", #"\b(wie komme? ich|wie kommen wir|wie weit|wie lange (brauche|fahre|laufe|gehe) ich|weg (zu|zum|zur|nach)|route|navigier\w*|bring mich|führ mich|how do i get|how far|how long (does it take|to get)|directions|way to|take me to|get me to)\b"#),
         ("location", #"\b(wo bin ich|wo sind wir|where am i|where are we|mein(en)? standort|my location)\b"#),
         ("calendar", #"\b(termine?n?|kalender|calendar|meetings?|appointments?|schedule|agenda|steht .*\ban\b|what'?s on|was hab(e)? ich)\b"#),
         ("weather", #"\b(wetter|weather|regen|regnet|rain(ing)?|schirm|umbrella|temperatur(e)?|kalt|cold|warm|grad|sonnig|sunny|schnee|snow|wind(ig|y)?)\b"#),
     ]
+
+    /// Tools only the rules pick, never the model.
+    public static let rulesOnly: Set<String> = ["location"]
 
     /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. Hermes wins
     /// over everything; a new reminder wins over reading the reminder list.
@@ -100,6 +105,7 @@ public enum LocalPipeline {
     /// says what it does ("add_new_reminder", not "create_reminder" next to "reminders").
     static let labels: [String: String] = [
         "location": "where_jan_is",
+        "directions": "route_to_a_place",
         "calendar": "jan_calendar",
         "weather": "weather",
         "reminders": "read_existing_reminders",
@@ -123,6 +129,7 @@ public enum LocalPipeline {
         ]
         let ruleFor: [String: String] = [
             "location": "Where Jan himself is right now (his own position or address)",
+            "directions": "How to get somewhere, how far a place is, how long it takes to get there",
             "calendar": "His calendar, appointments, meetings or plans for any day, and where they are",
             "weather": "Weather, temperature, rain, umbrella, what to wear",
             "reminders": "Jan asks what is on his reminder or to-do list",
@@ -178,6 +185,14 @@ public enum LocalPipeline {
         """
     }
 
+    // MARK: Checks
+
+    /// True if an answer only says it doesn't know. Then Hermes gets the question; the model's own
+    /// "can answer" flag isn't reliable enough.
+    public static func soundsUnsure(_ sentence: String) -> Bool {
+        sentence.lowercased().contains(try! Regex(#"(weiß (ich )?(es |das )?nicht|keine ahnung|kann (ich )?(dir )?(das |es )?nicht (sagen|wissen|beantworten)|habe keine (infos|informationen)|don'?t know|do not know|not sure|can'?t (tell|say|know)|cannot (tell|say|know)|no idea|no information)"#))
+    }
+
     // MARK: Fixed sentences
 
     /// For prepared actions: fixed, so the model can't claim they're done.
@@ -222,6 +237,11 @@ public enum LocalPipeline {
             - No lists, no markdown, no emoji.
             - Follow-ups: up to 3 short questions Jan might ask next, each 1 to 3 words, in \(language).
             """
+    }
+
+    /// For when the full instructions trip the model's language check.
+    public static func shortAnswerInstructions(language: String) -> String {
+        "You are Lotti. Answer Jan in \(language), one or two short sentences, using only the facts given."
     }
 
     public static func answerPrompt(_ message: String, now: String, history: [Turn], facts: [Fact]) -> String {

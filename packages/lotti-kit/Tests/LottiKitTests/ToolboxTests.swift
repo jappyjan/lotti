@@ -165,7 +165,7 @@ struct ToolTextTests {
 }
 
 struct LocalPipelineTests {
-    let specs = ["location", "calendar", "weather", "reminders", "set_timer", "create_reminder"].map {
+    let specs = ["location", "directions", "calendar", "weather", "reminders", "set_timer", "create_reminder"].map {
         PhoneToolSpec(name: $0, description: "", effect: .read, progress: "")
     }
 
@@ -186,6 +186,9 @@ struct LocalPipelineTests {
         ("Was kostet gerade ein Bitcoin?", ["hermes"]),
         ("Who won the game yesterday?", ["hermes"]),
         ("Hat die Apotheke noch offen?", ["hermes"]),
+        ("Wie komme ich von hier zum Media Markt Altenach?", ["directions"]),
+        ("How far is the main station?", ["directions"]),
+        ("Wie lange brauche ich zum Hauptbahnhof?", ["directions"]),
     ])
     func rulesPickTools(_ message: String, _ tools: [String]) {
         #expect(LocalPipeline.ruleTools(message, tools: specs) == tools)
@@ -221,5 +224,21 @@ struct LocalPipelineTests {
         let prompt = LocalPipeline.answerPrompt("Where is Ben?", now: "Now: Sunday", history: [turn], facts: [])
         #expect(prompt.contains("(Jan's calendar: 11:00 Ben (Café))"))
         #expect(!prompt.contains("Berlin"))
+    }
+}
+
+struct DirectionsTextTests {
+    @Test func describesATrip() {
+        let text = ToolText().trip(to: "Media Markt, Ottenser Hauptstraße 10, Hamburg", meters: 2140,
+                                   minutes: ["walk": 26.2, "bike": 9, "transit": 14, "car": 72])
+        #expect(text == "Media Markt, Ottenser Hauptstraße 10, Hamburg: 2.1 km away. On foot 26 min, by bike 9 min, by public transport 14 min, by car 1 h 12 min.")
+        #expect(ToolText().trip(to: "Bäcker", meters: 234, minutes: [:]) == "Bäcker: 230 m away.")
+    }
+
+    @Test func noticesUnsureAnswers() {
+        #expect(LocalPipeline.soundsUnsure("Ich weiß nicht, wie du zum Media Markt Altenach kommst."))
+        #expect(LocalPipeline.soundsUnsure("I don't know that, sorry."))
+        #expect(LocalPipeline.soundsUnsure("Das kann ich dir nicht sagen."))
+        #expect(!LocalPipeline.soundsUnsure("Du bist an der Großen Elbstraße 39."))
     }
 }

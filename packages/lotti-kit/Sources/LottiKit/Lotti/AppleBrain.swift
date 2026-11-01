@@ -126,7 +126,7 @@ public final class AppleBrain: Brain {
                                                  schema: chooseSchema, options: GenerationOptions(temperature: 0))
         let json = (try? JSONValue(json: response.content.jsonString)) ?? .object([:])
         note(String(format: "choose (%.1f s): %@", Date().timeIntervalSince(started), json.json))
-        return LocalPipeline.parseChoice(json, tools: toolbox.specs)
+        return LocalPipeline.parseChoice(json, tools: chooserTools)
     }
 
     private func fillIn(_ spec: PhoneToolSpec, message: String, now: String) async throws -> [String: JSONValue] {
@@ -156,12 +156,19 @@ public final class AppleBrain: Brain {
 
     private func compose(_ message: String, now: String, language: String,
                          facts: [LocalPipeline.Fact]) async throws -> Answer {
-        let session = LanguageModelSession(model: model, instructions: LocalPipeline.answerInstructions(language: language))
         let prompt = LocalPipeline.answerPrompt(message, now: now, history: history, facts: facts)
-        let response = try await session.respond(to: prompt, generating: ChatOutput.self,
-                                                 options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 160))
-        let output = response.content
-        if !output.canAnswer {
+        let output: ChatOutput
+        do {
+            let session = LanguageModelSession(model: model, instructions: LocalPipeline.answerInstructions(language: language))
+            output = try await session.respond(to: prompt, generating: ChatOutput.self,
+                                               options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 160)).content
+        } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
+            // Apple's language check sometimes rejects facts (a street address did it). Shorter
+            // instructions, then plain text, then the facts as they are.
+            note("unsupported language → retrying with short instructions")
+            return try await composeFallback(prompt, language: language, facts: facts)
+        }
+        if !output.canAnswer || LocalPipeline.soundsUnsure(output.sentence) {
             // The facts don't hold the answer: Hermes may know. The conductor says so if Hermes isn't set up.
             note("can't answer (\(output.sentence)) → Hermes")
             return Answer(sentence: LocalPipeline.handoffSentence(language: language), handoff: message)
@@ -170,8 +177,29 @@ public final class AppleBrain: Brain {
         return Answer(sentence: output.sentence.trimmingCharacters(in: .whitespacesAndNewlines), followUps: followUps)
     }
 
+    private func composeFallback(_ prompt: String, language: String, facts: [LocalPipeline.Fact]) async throws -> Answer {
+        let instructions = LocalPipeline.shortAnswerInstructions(language: language)
+        if let output = try? await LanguageModelSession(model: model, instructions: instructions)
+            .respond(to: prompt, generating: ChatOutput.self, options: GenerationOptions(temperature: 0.3)).content {
+            return Answer(sentence: output.sentence, followUps: output.followUps)
+        }
+        if let text = try? await LanguageModelSession(model: model, instructions: instructions)
+            .respond(to: prompt, options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 100)).content {
+            return Answer(sentence: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        note("still unsupported → showing the facts")
+        guard !facts.isEmpty else { throw LanguageModelSession.GenerationError.unsupportedLanguageOrLocale(.init(debugDescription: "")) }
+        return Answer(sentence: facts.map(\.text).joined(separator: " "))
+    }
+
+    /// The tools the model may pick. Not `location`: the model picked it for "where is the meeting"
+    /// and mixed Jan's address into the answer; "wo bin ich / where am I" is a rule.
+    private var chooserTools: [PhoneToolSpec] {
+        toolbox.specs.filter { !LocalPipeline.rulesOnly.contains($0.name) }
+    }
+
     private func chooserSession() -> LanguageModelSession {
-        LanguageModelSession(model: model, instructions: LocalPipeline.chooseInstructions(tools: toolbox.specs))
+        LanguageModelSession(model: model, instructions: LocalPipeline.chooseInstructions(tools: chooserTools))
     }
 
     /// The chooser's output: intent, then up to three tools from a fixed list.
@@ -181,7 +209,7 @@ public final class AppleBrain: Brain {
                                              schema: DynamicGenerationSchema(type: String.self)),
             DynamicGenerationSchema.Property(
                 name: "tools", description: "The tools needed, usually one or none",
-                schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Tool", anyOf: LocalPipeline.options(tools: toolbox.specs)),
+                schema: DynamicGenerationSchema(arrayOf: DynamicGenerationSchema(name: "Tool", anyOf: LocalPipeline.options(tools: chooserTools)),
                                                 minimumElements: 0, maximumElements: 3)),
         ])
         return try! GenerationSchema(root: root, dependencies: [])
