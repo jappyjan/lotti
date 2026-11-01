@@ -53,7 +53,9 @@ struct AppModelTests {
 
 @MainActor private final class SilentBrain: Brain {
     func prewarm() {}
-    func answer(_ message: String, context: String) async throws -> Answer { Answer(sentence: "") }
+    func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+        Answer(sentence: "")
+    }
     func endConversation() {}
 }
 

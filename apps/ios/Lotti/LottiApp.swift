@@ -7,23 +7,40 @@ struct LottiApp: App {
     @State private var model: AppModel
     private let speech: AppleSpeechRecognizer
     private let brain: AppleBrain
+    private let hermes: HermesBrain
+    private let hermesClient: HermesClient
+    private let toolbox: Toolbox
 
     init() {
+        LogFile.start()
         let link = G2Link()
         if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
         link.headUpSettings = Settings.headUp
         let speech = AppleSpeechRecognizer(locale: Locale(identifier: Settings.speechLanguage))
-        let brain = AppleBrain()
-        let conductor = Conductor(link: link, brain: brain, speech: speech, phoneMicrophone: PhoneMicrophone(),
-                                  today: DeviceToday())
+        let today = DeviceToday()
+        let tools = PhoneTools.all(today: today)
+        let toolbox = Toolbox(tools)
+        let brain = AppleBrain(tools: Toolbox(tools.filter { PhoneTools.onDevice.contains($0.spec.name) }))
+        let hermesClient = HermesClient { Settings.hermesConfig }
+        let hermes = HermesBrain(
+            transport: hermesClient, toolbox: toolbox,
+            allowedReads: { Set(toolbox.reads.map(\.name)).subtracting(Settings.hermesHiddenReads) },
+            isConfigured: { Settings.hermesConfig != nil })
+        let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
+                                  phoneMicrophone: PhoneMicrophone(), today: today)
         self.speech = speech
         self.brain = brain
+        self.hermes = hermes
+        self.hermesClient = hermesClient
+        self.toolbox = toolbox
         _model = State(initialValue: AppModel(link: link, conductor: conductor))
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model, speech: speech, brain: brain)
+            ContentView(model: model, speech: speech, brain: brain, hermes: hermes, hermesClient: hermesClient,
+                        toolbox: toolbox)
+                .task { await PhoneTools.requestAccess() }
                 .task {
                     await model.conductor.setHeadTracking(Settings.headUpEnabled)
                     await model.launch()

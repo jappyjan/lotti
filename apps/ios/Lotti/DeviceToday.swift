@@ -8,9 +8,7 @@ actor DeviceToday: TodayProvider {
     private let store = EKEventStore()
     private var calendarAccess: Task<Bool, Never>?
     private var weather: (value: Weather, fetched: Date)?
-    private var location: CLLocationCoordinate2D?
-    /// Berlin, until the phone knows where it is.
-    private static let fallback = CLLocationCoordinate2D(latitude: 52.52, longitude: 13.405)
+    private var location: (coordinate: CLLocationCoordinate2D, found: Date)?
 
     func today(at now: Date) async -> TodayInfo {
         async let events = events(on: now)
@@ -19,13 +17,16 @@ actor DeviceToday: TodayProvider {
     }
 
     private func events(on now: Date) async -> [CalendarEntry] {
+        let start = Calendar.current.startOfDay(for: now)
+        return (try? await events(from: start, to: Calendar.current.date(byAdding: .day, value: 1, to: start)!)) ?? []
+    }
+
+    /// Events in the calendars you didn't switch off. Throws without calendar access.
+    func events(from start: Date, to end: Date) async throws -> [CalendarEntry] {
         if calendarAccess == nil {
             calendarAccess = Task { await self.requestCalendarAccess() }
         }
-        guard await calendarAccess?.value == true else { return [] }
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: now)
-        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        guard await calendarAccess?.value == true else { throw ToolError("Lotti has no access to the calendar.") }
         let hidden = Settings.hiddenCalendars
         let calendars = store.calendars(for: .event).filter { !hidden.contains($0.calendarIdentifier) }
         guard !calendars.isEmpty else { return [] }
@@ -42,9 +43,10 @@ actor DeviceToday: TodayProvider {
         return allowed
     }
 
-    private func currentWeather(now: Date) async -> Weather? {
+    func currentWeather(now: Date) async -> Weather? {
         if let weather, now.timeIntervalSince(weather.fetched) < 20 * 60 { return weather.value }
-        let place = await coordinate()
+        // No location, no weather: better nothing than another city's.
+        guard let place = await coordinate() else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: OpenMeteo.url(latitude: place.latitude, longitude: place.longitude))
             let value = try OpenMeteo.weather(from: data, now: now)
@@ -56,11 +58,24 @@ actor DeviceToday: TodayProvider {
         }
     }
 
-    private func coordinate() async -> CLLocationCoordinate2D {
-        if let location { return location }
-        let found = await Self.findLocation()
-        location = found
-        return found ?? Self.fallback
+    /// A fresh location fix, falling back to the last known one. Nil if there never was one.
+    func freshLocation() async -> CLLocationCoordinate2D? {
+        if let location, Date().timeIntervalSince(location.found) < 60 { return location.coordinate }
+        if let found = await Self.findLocation() {
+            location = (found, Date())
+            return found
+        }
+        return location?.coordinate
+    }
+
+    /// Where the phone is, at most 15 minutes old if a new fix can be had. Nil if never known.
+    private func coordinate() async -> CLLocationCoordinate2D? {
+        if let location, Date().timeIntervalSince(location.found) < 15 * 60 { return location.coordinate }
+        if let found = await Self.findLocation() {
+            location = (found, Date())
+            return found
+        }
+        return location?.coordinate
     }
 
     /// One location fix, or nil after a few seconds or without permission.

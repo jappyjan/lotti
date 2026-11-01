@@ -5,6 +5,7 @@ import SwiftUI
 struct DebugView: View {
     let model: AppModel
     let brain: AppleBrain
+    let hermes: HermesBrain
 
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
@@ -37,6 +38,22 @@ struct DebugView: View {
                 }
             }
 
+            Section("On-device brain, last answer") {
+                if brain.trace.isEmpty { Text("Nothing asked yet.").foregroundStyle(.secondary) }
+                ForEach(Array(brain.trace.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.caption.monospaced())
+                }
+            }
+
+            Section("Hermes") {
+                if hermes.trace.isEmpty {
+                    Text(hermes.isConfigured ? "No conversation yet." : "Not set up.").foregroundStyle(.secondary)
+                }
+                ForEach(Array(hermes.trace.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.caption.monospaced())
+                }
+            }
+
             Section("Head") {
                 LabeledContent("Now", value: link.headPitch.map { String(format: "%.0f°", $0) } ?? "–")
                 LabeledContent("Straight ahead", value: String(format: "%.0f°", link.headUpSettings.straightAhead))
@@ -47,6 +64,10 @@ struct DebugView: View {
                 Section("Try") {
                     Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
                     Button("Ask \"What's on today?\"") { conductor.ask("What's on today?") }
+                    Button("Ask \"Timer for 10 minutes\"") { conductor.ask("Set a timer for 10 minutes") }
+                    if hermes.isConfigured {
+                        Button("Ask Hermes about tomorrow") { conductor.ask("How does tomorrow look?", onHermes: true) }
+                    }
                 }
             }
 

@@ -6,6 +6,9 @@ struct ContentView: View {
     let model: AppModel
     let speech: AppleSpeechRecognizer
     let brain: AppleBrain
+    let hermes: HermesBrain
+    let hermesClient: HermesClient
+    let toolbox: Toolbox
     @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
 
     private var link: any GlassesLink { model.link }
@@ -21,6 +24,11 @@ struct ContentView: View {
                         Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
                     }
                     NavigationLink("Calendars") { CalendarsView() }
+                    NavigationLink {
+                        HermesView(client: hermesClient, readTools: toolbox.reads)
+                    } label: {
+                        LabeledContent("Hermes", value: hermes.isConfigured ? "On" : "Not set up")
+                    }
                     Picker("I speak", selection: $speechLanguage) {
                         ForEach(Settings.languages, id: \.0) { Text($0.1).tag($0.0) }
                     }
@@ -33,7 +41,7 @@ struct ContentView: View {
                 lookUpSection
 
                 Section {
-                    NavigationLink("Debug") { DebugView(model: model, brain: brain) }
+                    NavigationLink("Debug") { DebugView(model: model, brain: brain, hermes: hermes) }
                 }
             }
             .navigationTitle("Lotti")
@@ -71,7 +79,7 @@ struct ContentView: View {
             Text("Glasses")
         } footer: {
             Text(link.status.isConnected
-                 ? "Tap or look up for today. Hold to talk. Scroll and tap to pick, double tap to go back."
+                 ? "Tap or look up for today. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
                  : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
     }

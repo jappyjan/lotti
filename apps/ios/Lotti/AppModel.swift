@@ -105,6 +105,8 @@ final class AppModel {
         if wantsListen {
             if wantsToday { try? await Task.sleep(for: .seconds(4)) }
             print("[App] listening for 5 s")
+            conductor.handle(InputEvent(.doubleTap, from: .unknown))
+            try? await Task.sleep(for: .milliseconds(500))
             conductor.handle(InputEvent(.longPress, from: .unknown))
             try? await Task.sleep(for: .seconds(5))
             conductor.handle(InputEvent(.longPressEnd, from: .unknown))

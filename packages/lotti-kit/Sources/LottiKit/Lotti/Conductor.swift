@@ -8,7 +8,9 @@ import Observation
 /// - scroll moves the rail highlight, tap picks it
 /// - double tap: back (from a screen opened from the rail), otherwise display off, which also
 ///   ends the conversation
-/// - long press: talk to Lotti while held (nothing else is ever on long press)
+/// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
+///   off, talking needs a double tap first, then the hold within a few seconds, so a stray hold
+///   in your pocket or hair doesn't start listening.
 @MainActor
 @Observable
 public final class Conductor {
@@ -17,22 +19,29 @@ public final class Conductor {
         public var idle: Duration
         /// A "Done"-style line goes away after this.
         public var done: Duration
-        /// Give up on the model after this (S3 saw rare 20–60 s stalls).
+        /// Give up on the on-device brain after this: several model steps plus tools (S3 saw rare 20–60 s stalls).
         public var answer: Duration
         /// Wait this long for the final transcript after you let go.
         public var finalTranscript: Duration
         /// A conversation older than this starts fresh.
         public var conversation: Duration
+        /// Give up on Hermes after this. It may research the web; double tap cancels sooner.
+        public var remote: Duration
+        /// With the display off, a hold starts talking only this soon after a double tap.
+        public var talkWindow: Duration
 
         public init(
-            idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(15),
-            finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300)
+            idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
+            finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
+            remote: Duration = .seconds(120), talkWindow: Duration = .seconds(3)
         ) {
             self.idle = idle
             self.done = done
             self.answer = answer
             self.finalTranscript = finalTranscript
             self.conversation = conversation
+            self.remote = remote
+            self.talkWindow = talkWindow
         }
     }
 
@@ -58,6 +67,8 @@ public final class Conductor {
 
     @ObservationIgnored private let link: any GlassesLink
     @ObservationIgnored private let brain: any Brain
+    @ObservationIgnored private let hermes: (any RemoteBrain)?
+    @ObservationIgnored private let toolbox: Toolbox
     @ObservationIgnored private let speech: any SpeechRecognizer
     @ObservationIgnored private let phoneMicrophone: (any Microphone)?
     @ObservationIgnored private let todayProvider: any TodayProvider
@@ -75,15 +86,21 @@ public final class Conductor {
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
+    /// The conversation moved to Hermes: follow-ups go there too, until it ends.
+    @ObservationIgnored private var onHermes = false
+    /// Set by a double tap with the display off: a hold before this starts talking.
+    @ObservationIgnored private var talkArmedUntil: Date?
 
     public init(
-        link: any GlassesLink, brain: any Brain, speech: any SpeechRecognizer,
-        phoneMicrophone: (any Microphone)? = nil, today: any TodayProvider,
+        link: any GlassesLink, brain: any Brain, hermes: (any RemoteBrain)? = nil, toolbox: Toolbox = Toolbox(),
+        speech: any SpeechRecognizer, phoneMicrophone: (any Microphone)? = nil, today: any TodayProvider,
         composer: TodayComposer = TodayComposer(), renderer: ScreenRenderer = ScreenRenderer(),
         timing: Timing = Timing(), now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.link = link
         self.brain = brain
+        self.hermes = hermes
+        self.toolbox = toolbox
         self.speech = speech
         self.phoneMicrophone = phoneMicrophone
         self.todayProvider = today
@@ -121,9 +138,16 @@ public final class Conductor {
 
     public func handle(_ event: InputEvent) {
         log("\(event) in \(mode)")
+        let armed = talkArmedUntil.map { now() <= $0 } ?? false
+        if event.gesture != .longPressEnd { talkArmedUntil = nil }
         switch event.gesture {
-        case .longPress: startListening()
+        case .longPress:
+            // Display off: only "double tap, pause, hold" talks.
+            guard mode != .off || armed else { return log("hold ignored: display off, no double tap first") }
+            startListening()
         case .longPressEnd: if mode == .listening { stopListening() }
+        case .doubleTap where mode == .off:
+            talkArmedUntil = now().addingTimeInterval(timing.talkWindow / .seconds(1))
         case .headUp: if mode == .off { showToday(byHead: true) }
         case .headDown: if mode == .today(byHead: true) { turnOff() }
         case .tap: tap()
@@ -179,6 +203,10 @@ public final class Conductor {
             show(next)
         case .dismiss:
             turnOff()
+        case .perform(let action):
+            perform(action)
+        case .askHermes(let question):
+            ask(question, onHermes: true)
         }
     }
 
@@ -211,9 +239,15 @@ public final class Conductor {
         draw()
         if hadConversation {
             lastAsked = nil
-            brain.endConversation()
+            endConversation()
             brain.prewarm()
         }
+    }
+
+    private func endConversation() {
+        brain.endConversation()
+        hermes?.endConversation()
+        onHermes = false
     }
 
     private func show(_ next: Screen, timeout: Bool = true) {
@@ -352,44 +386,138 @@ public final class Conductor {
 
     // MARK: - Chat
 
-    /// Ask Lotti something (from voice or a rail follow-up).
-    public func ask(_ question: String) {
+    /// Ask Lotti something (from voice or a rail follow-up). `onHermes` sends it straight to Hermes.
+    public func ask(_ question: String, onHermes toHermes: Bool = false) {
         timer?.cancel()
         listening?.cancel()
         thinking?.cancel()
         backStack = []
         mode = .working
-        show(Screen(.working, "Let me think…"), timeout: false)
-        thinking = Task { await answer(question) }
+        show(Screen(.working, toHermes ? "Asking Hermes…" : "Let me think…"), timeout: false)
+        thinking = Task { await answer(question, onHermes: toHermes) }
     }
 
-    private func answer(_ question: String) async {
+    /// Routes a question: to Hermes when you asked for it ("Hermes, …", the rail's "Ask Hermes"),
+    /// when the conversation is already there, or when the on-device brain hands it over;
+    /// otherwise the on-device brain answers.
+    private func answer(_ question: String, onHermes toHermes: Bool = false) async {
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
-            brain.endConversation()
+            endConversation()
         }
         lastAsked = now()
-        let info = await todayProvider.today(at: now())
-        today = info
-        let context = composer.promptSummary(info)
+        // Only the clock goes in; calendar, weather and location come from tools when needed.
+        let info = TodayInfo(now: now())
+        if toHermes || onHermes { return await askHermes(question, info: info) }
+        if let explicit = HermesRoute.explicitQuestion(question) { return await askHermes(explicit, info: info) }
+
+        let context = composer.nowLine(info)
         let brain = self.brain
-        let result: Result<Answer, Error>? = await withTimeout(timing.answer) {
-            do { return .success(try await brain.answer(question, context: context)) } catch { return .failure(error) }
+        let result: Result<Answer, Error>? = await withTimeout(timing.answer) { [weak self] in
+            do {
+                return .success(try await brain.answer(question, context: context) { status in self?.working(status) })
+            } catch {
+                return .failure(error)
+            }
         }
         guard !Task.isCancelled, mode == .working else { return }
-        mode = .showing
         switch result {
         case .success(let answer):
-            log("answer: \(answer.sentence) \(answer.followUps)")
-            show(Screen(.says, answer.sentence, rail: Rail(answer.followUps.map { RailItem($0, .ask($0)) })))
+            log("answer: \(answer.sentence) \(answer.followUps) actions: \(answer.actions.map(\.title)) handoff: \(answer.handoff ?? "-")")
+            if let handoff = answer.handoff {
+                guard hermes?.isConfigured == true else {
+                    mode = .showing
+                    return show(Screen(.says, "I can't look that up on my own, and Hermes isn't set up yet."))
+                }
+                return await askHermes(handoff, info: info)
+            }
+            mode = .showing
+            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question, offerHermes: true)))
         case .failure(let error):
+            mode = .showing
             lastError = error.localizedDescription
             log("brain failed: \(error.localizedDescription)")
             show(Screen(.says, "I can't think right now. \(error.localizedDescription)",
                         rail: Rail([RailItem("Try again", .ask(question))])))
         case nil:
+            mode = .showing
             log("brain timed out")
             brain.endConversation()
             show(Screen(.says, "Sorry, I got stuck on that.", rail: Rail([RailItem("Try again", .ask(question))])))
+        }
+    }
+
+    private func askHermes(_ question: String, info: TodayInfo) async {
+        guard let hermes, hermes.isConfigured else {
+            mode = .showing
+            return show(Screen(.says, "Hermes isn't set up yet. Add it in the Lotti app."))
+        }
+        onHermes = true
+        if mode == .working { show(Screen(.working, "Asking Hermes…"), timeout: false) }
+        let context = composer.nowLine(info)
+        let result: Result<Answer, Error>? = await withTimeout(timing.remote) { [weak self] in
+            do {
+                return .success(try await hermes.answer(question, context: context) { [weak self] status in
+                    self?.working(status)
+                })
+            } catch {
+                return .failure(error)
+            }
+        }
+        guard !Task.isCancelled, mode == .working else { return }
+        mode = .showing
+        switch result {
+        case .success(let answer):
+            log("hermes: \(answer.sentence) \(answer.followUps) actions: \(answer.actions.map(\.title))")
+            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question, offerHermes: false)))
+        case .failure(let error):
+            lastError = "Hermes: \(error.localizedDescription)"
+            log("hermes failed: \(error.localizedDescription)")
+            show(Screen(.says, (error as? HermesError)?.errorDescription ?? "I can't reach Hermes right now.",
+                        rail: Rail([RailItem("Try again", .askHermes(question))])))
+        case nil:
+            log("hermes timed out")
+            show(Screen(.says, "Hermes is taking too long.", rail: Rail([RailItem("Try again", .askHermes(question))])))
+        }
+    }
+
+    /// A status line from a brain at work ("Checking your calendar…").
+    private func working(_ status: String) {
+        guard mode == .working else { return }
+        let line = status.hasSuffix("…") || status.hasSuffix(".") ? status : status + "…"
+        show(Screen(.working, line), timeout: false)
+    }
+
+    /// Actions first (Lotti's best guess), then follow-ups, then "Ask Hermes" if there's room.
+    private func rail(for answer: Answer, question: String, offerHermes: Bool) -> Rail {
+        var items = answer.actions.map { RailItem($0.title, .perform($0)) }
+        items += answer.followUps.map { RailItem($0, .ask($0)) }
+        if offerHermes, hermes?.isConfigured == true {
+            items = Array(items.prefix(Rail.maxItems - 1)) + [RailItem("Ask Hermes", .askHermes(question))]
+        }
+        return Rail(items)
+    }
+
+    /// Runs an action you tapped, then says how it went.
+    private func perform(_ action: ProposedAction) {
+        timer?.cancel()
+        thinking?.cancel()
+        if let current = screen { backStack.append(current) }
+        mode = .working
+        show(Screen(.working, action.title + "…"), timeout: false)
+        let toolbox = self.toolbox
+        thinking = Task {
+            let result = await toolbox.perform(action)
+            guard !Task.isCancelled, mode == .working else { return }
+            log("performed \(action.tool): \(result.ok ? "ok" : "failed") \(result.content)")
+            if result.ok {
+                backStack = []
+                mode = .done
+                show(Screen(.done, result.content))
+            } else {
+                lastError = result.content
+                mode = .showing
+                show(Screen(.says, "That didn't work: \(result.content)"))
+            }
         }
     }
 

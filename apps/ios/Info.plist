@@ -8,5 +8,17 @@
 		<string>bluetooth-central</string>
 		<string>audio</string>
 	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Lotti sets timers when you confirm them on the glasses.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Lotti reads your reminders and adds new ones when you confirm them on the glasses.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Lotti talks to your Hermes on your network.</string>
+	<!-- Hermes may run on the local network or a tailnet without HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
