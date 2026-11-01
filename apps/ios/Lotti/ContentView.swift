@@ -18,6 +18,12 @@ struct ContentView: View {
 
                 inputSection
 
+                if #available(iOS 27.0, *) {
+                    Section("Spike S3") {
+                        NavigationLink("Brain eval") { EvalView() }
+                    }
+                }
+
                 if link.status.isConnected {
                     Section {
                         Button("Send hello") { Task { await model.sendHello() } }

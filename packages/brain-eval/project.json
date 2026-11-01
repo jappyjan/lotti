@@ -1,0 +1,21 @@
+{
+  "name": "brain-eval",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/brain-eval/Sources",
+  "tags": ["platform:ios", "lang:swift"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift build", "cwd": "packages/brain-eval" },
+      "inputs": ["{projectRoot}/Package.swift", "{projectRoot}/Sources/**/*"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift test", "cwd": "packages/brain-eval" },
+      "inputs": ["{projectRoot}/Package.swift", "{projectRoot}/Sources/**/*", "{projectRoot}/Tests/**/*"],
+      "cache": true
+    }
+  }
+}
