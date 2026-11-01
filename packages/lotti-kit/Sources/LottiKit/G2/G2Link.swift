@@ -55,7 +55,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var pageCreated = false
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
-    @ObservationIgnored private var microphone: Microphone?
+    @ObservationIgnored private var microphone: MicSession?
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -169,7 +169,7 @@ public final class G2Link: NSObject, GlassesLink {
         guard let decoder = LC3Decoder() else { throw GlassesLinkError.missingCharacteristics }
         endMicrophone()
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream(bufferingPolicy: .bufferingNewest(100))
-        microphone = Microphone(decoder: decoder, continuation: continuation)
+        microphone = MicSession(decoder: decoder, continuation: continuation)
         right.peripheral.setNotifyValue(true, for: characteristic)
         let m = nextMagic()
         do {
@@ -603,7 +603,7 @@ private final class Arm {
 
 /// An open mic stream: the LC3 decoder and where the PCM goes.
 @MainActor
-private final class Microphone {
+private final class MicSession {
     let decoder: LC3Decoder
     let continuation: AsyncStream<[Int16]>.Continuation
     var packets = 0
