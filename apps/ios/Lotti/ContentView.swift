@@ -79,7 +79,7 @@ struct ContentView: View {
             Text("Glasses")
         } footer: {
             Text(link.status.isConnected
-                 ? "Tap or look up for today. Hold to talk. Scroll and tap to pick, double tap to go back."
+                 ? "Tap or look up for today. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
                  : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
     }

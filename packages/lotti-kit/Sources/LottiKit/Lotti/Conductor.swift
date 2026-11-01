@@ -8,7 +8,9 @@ import Observation
 /// - scroll moves the rail highlight, tap picks it
 /// - double tap: back (from a screen opened from the rail), otherwise display off, which also
 ///   ends the conversation
-/// - long press: talk to Lotti while held (nothing else is ever on long press)
+/// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
+///   off, talking needs a double tap first, then the hold within a few seconds, so a stray hold
+///   in your pocket or hair doesn't start listening.
 @MainActor
 @Observable
 public final class Conductor {
@@ -25,11 +27,13 @@ public final class Conductor {
         public var conversation: Duration
         /// Give up on Hermes after this. It may research the web; double tap cancels sooner.
         public var remote: Duration
+        /// With the display off, a hold starts talking only this soon after a double tap.
+        public var talkWindow: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120)
+            remote: Duration = .seconds(120), talkWindow: Duration = .seconds(3)
         ) {
             self.idle = idle
             self.done = done
@@ -37,6 +41,7 @@ public final class Conductor {
             self.finalTranscript = finalTranscript
             self.conversation = conversation
             self.remote = remote
+            self.talkWindow = talkWindow
         }
     }
 
@@ -83,6 +88,8 @@ public final class Conductor {
     @ObservationIgnored private var drawing = false
     /// The conversation moved to Hermes: follow-ups go there too, until it ends.
     @ObservationIgnored private var onHermes = false
+    /// Set by a double tap with the display off: a hold before this starts talking.
+    @ObservationIgnored private var talkArmedUntil: Date?
 
     public init(
         link: any GlassesLink, brain: any Brain, hermes: (any RemoteBrain)? = nil, toolbox: Toolbox = Toolbox(),
@@ -131,9 +138,16 @@ public final class Conductor {
 
     public func handle(_ event: InputEvent) {
         log("\(event) in \(mode)")
+        let armed = talkArmedUntil.map { now() <= $0 } ?? false
+        if event.gesture != .longPressEnd { talkArmedUntil = nil }
         switch event.gesture {
-        case .longPress: startListening()
+        case .longPress:
+            // Display off: only "double tap, pause, hold" talks.
+            guard mode != .off || armed else { return log("hold ignored: display off, no double tap first") }
+            startListening()
         case .longPressEnd: if mode == .listening { stopListening() }
+        case .doubleTap where mode == .off:
+            talkArmedUntil = now().addingTimeInterval(timing.talkWindow / .seconds(1))
         case .headUp: if mode == .off { showToday(byHead: true) }
         case .headDown: if mode == .today(byHead: true) { turnOff() }
         case .tap: tap()

@@ -214,6 +214,7 @@ struct ConductorTests {
     @Test func holdToTalkShowsYourWordsThenTheAnswer() async throws {
         speech.script = [Transcript("What's"), Transcript("What's on today", isFinal: true)]
         brain.answers = ["What's on today": Answer(sentence: "Nothing, enjoy your Sunday.")]
+        press(.doubleTap)
         press(.longPress)
         #expect(conductor.mode == .listening)
         try await eventually { link.microphoneOn }
@@ -227,6 +228,7 @@ struct ConductorTests {
     }
 
     @Test func silenceSaysSorry() async throws {
+        press(.doubleTap)
         press(.longPress)
         try await eventually { link.microphoneOn }
         press(.longPressEnd)
@@ -238,12 +240,43 @@ struct ConductorTests {
         link.microphoneError = GlassesLinkError.missingCharacteristics
         speech.script = [Transcript("Hello", isFinal: true)]
         brain.answers = ["Hello": Answer(sentence: "Hi!")]
+        press(.doubleTap)
         press(.longPress)
         try await eventually { phoneMic.on }
         press(.longPressEnd)
         try await eventually { conductor.screen?.text == "Hi!" }
         #expect(conductor.microphoneSource == "phone")
         #expect(!phoneMic.on)
+    }
+
+    @Test func withTheDisplayOffAHoldAloneDoesNothing() {
+        press(.longPress)
+        #expect(conductor.mode == .off)
+        press(.longPressEnd)
+        #expect(conductor.mode == .off)
+    }
+
+    @Test func withTheDisplayOffDoubleTapThenHoldTalks() {
+        press(.doubleTap)
+        #expect(conductor.mode == .off)  // nothing lights up
+        press(.longPress)
+        #expect(conductor.mode == .listening)
+    }
+
+    @Test func theDoubleTapIsOnlyGoodForAFewSeconds() async throws {
+        let conductor = Conductor(link: link, brain: brain, speech: speech, today: FixedToday(info: TodayInfo(now: Date())),
+                                  timing: .init(talkWindow: .milliseconds(100)))
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        try await Task.sleep(for: .milliseconds(200))
+        conductor.handle(InputEvent(.longPress, from: .ring))
+        #expect(conductor.mode == .off)
+    }
+
+    @Test func anotherGestureInBetweenCancelsTheDoubleTap() {
+        press(.doubleTap)
+        press(.scrollDown)
+        press(.longPress)
+        #expect(conductor.mode == .off)
     }
 
     @Test func longPressIsOnlyTalk() async throws {
