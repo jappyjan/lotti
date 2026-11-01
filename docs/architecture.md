@@ -106,11 +106,18 @@ Known limits (from S3):
 - Rail choices are the weakest output. Fill fixed choices from the template and let the model add one or two.
 - Running in the background (locked phone, BLE wake-ups) is still unmeasured. Measure it once the MVP runs all day and something drains or gets killed.
 
-**Router tiers:**
+**Routing (`Router`): Hermes by default, the phone for simple tasks and as the fallback.**
 
-1. **Rules** (0 ms): deterministic stuff. Ring "back", known apps muted, do-not-disturb.
-2. **On-device model** (0.4–1.7 s for an answer with tools; Apple FM, as a pipeline of small steps, see below): everyday questions, phone tools, quick replies, starting navigation.
-3. **Hermes connector** (seconds): anything the on-device chooser hands over, or you ask for explicitly ("Hermes, …", "Dig into…", "Ask Hermes" in the rail).
+| Question                                                                                                         | Who answers                                  | If Hermes fails or takes over 20 s |
+| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------- |
+| A rule recognises a simple task: weather, timer, new reminder, reminder list, calendar, "where am I", directions | the phone                                    | –                                  |
+| … weather or directions for another place ("in Lissabon", "from Berlin")                                         | Hermes (it can still call the phone's tools) | the phone                          |
+| Anything else: small talk, open questions, knowledge                                                             | Hermes                                       | the phone                          |
+| Only Hermes can know: news, prices, opening hours, results, search                                               | Hermes                                       | an error with "Try again"          |
+| You ask for Hermes: "Hermes, …", "Dig into …", "Ask Hermes" in the rail                                          | Hermes, waits up to 2 minutes                | an error with "Try again"          |
+| Hermes isn't set up                                                                                              | the phone, for everything                    | –                                  |
+
+The local set is the tasks the on-device eval passes reliably (`Router.localTools`). When the phone stands in for Hermes and can't answer, it says so instead of handing back to Hermes. When the phone answers a simple task and finds it can't (an "I don't know"), it hands the question to Hermes. Deterministic rules come before all of this: ring "back", gestures, the today view.
 
 ## Phone tools
 
@@ -153,13 +160,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 
 Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's API server (`hermes gateway`, OpenAI-compatible `/v1/chat/completions`), with the address and `API_SERVER_KEY` set in the Lotti app (key in the Keychain). Nothing in Hermes needs configuring.
 
-**When Lotti asks Hermes:**
-
-1. You say so: "Hermes, …", "Frag Hermes …", "Dig into …" (rules, no model).
-2. The on-device chooser picks Hermes (news, the web, prices, opening hours, research).
-3. You pick "Ask Hermes" in the rail under any on-device answer.
-
-Once a conversation is with Hermes, its follow-ups stay there until the conversation ends (double tap, or 5 minutes).
+**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own; Hermes keeps its conversation (so follow-ups have context) until the conversation ends (double tap, or 5 minutes).
 
 **Phone tools for Hermes: Lotti's reply format.** Hermes runs its own tools on its server and never hands tool calls back to the client, so the phone's tools travel inside the conversation as JSON. Lotti's system message (Hermes layers it on top of its own prompt) lists the tools you share and asks for exactly one JSON object per reply:
 

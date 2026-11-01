@@ -25,15 +25,17 @@ public final class Conductor {
         public var finalTranscript: Duration
         /// A conversation older than this starts fresh.
         public var conversation: Duration
-        /// Give up on Hermes after this. It may research the web; double tap cancels sooner.
+        /// Give up on Hermes after this when you asked for it. It may research the web; double tap cancels sooner.
         public var remote: Duration
+        /// For questions Hermes gets by default: after this, the phone answers instead.
+        public var remoteFallback: Duration
         /// With the display off, a hold starts talking only this soon after a double tap.
         public var talkWindow: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120), talkWindow: Duration = .seconds(3)
+            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20), talkWindow: Duration = .seconds(3)
         ) {
             self.idle = idle
             self.done = done
@@ -41,6 +43,7 @@ public final class Conductor {
             self.finalTranscript = finalTranscript
             self.conversation = conversation
             self.remote = remote
+            self.remoteFallback = remoteFallback
             self.talkWindow = talkWindow
         }
     }
@@ -86,8 +89,6 @@ public final class Conductor {
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
-    /// The conversation moved to Hermes: follow-ups go there too, until it ends.
-    @ObservationIgnored private var onHermes = false
     /// Set by a double tap with the display off: a hold before this starts talking.
     @ObservationIgnored private var talkArmedUntil: Date?
 
@@ -247,7 +248,6 @@ public final class Conductor {
     private func endConversation() {
         brain.endConversation()
         hermes?.endConversation()
-        onHermes = false
     }
 
     private func show(_ next: Screen, timeout: Bool = true) {
@@ -397,9 +397,9 @@ public final class Conductor {
         thinking = Task { await answer(question, onHermes: toHermes) }
     }
 
-    /// Routes a question: to Hermes when you asked for it ("Hermes, …", the rail's "Ask Hermes"),
-    /// when the conversation is already there, or when the on-device brain hands it over;
-    /// otherwise the on-device brain answers.
+    /// Routes a question (see `Router`): simple tasks the phone's rules recognise go to the
+    /// on-device brain; everything else to Hermes, with the phone as the fallback when Hermes is
+    /// missing, failing or too slow. "Ask Hermes" and "Hermes, …" go to Hermes without fallback.
     private func answer(_ question: String, onHermes toHermes: Bool = false) async {
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
             endConversation()
@@ -407,9 +407,18 @@ public final class Conductor {
         lastAsked = now()
         // Only the clock goes in; calendar, weather and location come from tools when needed.
         let info = TodayInfo(now: now())
-        if toHermes || onHermes { return await askHermes(question, info: info) }
-        if let explicit = HermesRoute.explicitQuestion(question) { return await askHermes(explicit, info: info) }
+        let route: Router.Route = toHermes
+            ? .hermes(question, fallback: false)
+            : Router.route(question, hermesAvailable: hermes?.isConfigured == true)
+        log("route: \(route)")
+        switch route {
+        case .local: await askLocal(question, info: info, mayHandOff: true)
+        case .hermes(let text, let fallback): await askHermes(text, info: info, fallback: fallback ? question : nil)
+        }
+    }
 
+    /// The on-device brain. `mayHandOff`: false when it's already standing in for Hermes.
+    private func askLocal(_ question: String, info: TodayInfo, mayHandOff: Bool) async {
         let context = composer.nowLine(info)
         let brain = self.brain
         let result: Result<Answer, Error>? = await withTimeout(timing.answer) { [weak self] in
@@ -424,11 +433,16 @@ public final class Conductor {
         case .success(let answer):
             log("answer: \(answer.sentence) \(answer.followUps) actions: \(answer.actions.map(\.title)) handoff: \(answer.handoff ?? "-")")
             if let handoff = answer.handoff {
+                mode = .showing
                 guard hermes?.isConfigured == true else {
-                    mode = .showing
                     return show(Screen(.says, "I can't look that up on my own, and Hermes isn't set up yet."))
                 }
-                return await askHermes(handoff, info: info)
+                guard mayHandOff else {
+                    return show(Screen(.says, "Hermes isn't answering, and I can't answer that myself.",
+                                       rail: Rail([RailItem("Try Hermes again", .askHermes(question))])))
+                }
+                mode = .working
+                return await askHermes(handoff, info: info, fallback: nil)
             }
             mode = .showing
             show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question, offerHermes: true)))
@@ -446,15 +460,17 @@ public final class Conductor {
         }
     }
 
-    private func askHermes(_ question: String, info: TodayInfo) async {
+    /// Hermes. `fallback`: the question for the on-device brain if Hermes fails or takes longer
+    /// than `timing.remoteFallback`; nil to wait up to `timing.remote` and report errors.
+    private func askHermes(_ question: String, info: TodayInfo, fallback: String?) async {
         guard let hermes, hermes.isConfigured else {
+            if let fallback { return await askLocal(fallback, info: info, mayHandOff: false) }
             mode = .showing
             return show(Screen(.says, "Hermes isn't set up yet. Add it in the Lotti app."))
         }
-        onHermes = true
         if mode == .working { show(Screen(.working, "Asking Hermes…"), timeout: false) }
         let context = composer.nowLine(info)
-        let result: Result<Answer, Error>? = await withTimeout(timing.remote) { [weak self] in
+        let result: Result<Answer, Error>? = await withTimeout(fallback == nil ? timing.remote : timing.remoteFallback) { [weak self] in
             do {
                 return .success(try await hermes.answer(question, context: context) { [weak self] status in
                     self?.working(status)
@@ -464,6 +480,19 @@ public final class Conductor {
             }
         }
         guard !Task.isCancelled, mode == .working else { return }
+        if let fallback {
+            let problem: String? = switch result {
+            case .failure(let error): error.localizedDescription
+            case nil: "too slow"
+            case .success: nil
+            }
+            if let problem {
+                lastError = "Hermes: \(problem)"
+                log("hermes failed (\(problem)), answering on the phone")
+                show(Screen(.working, "Hermes isn't answering, trying myself…"), timeout: false)
+                return await askLocal(fallback, info: info, mayHandOff: false)
+            }
+        }
         mode = .showing
         switch result {
         case .success(let answer):

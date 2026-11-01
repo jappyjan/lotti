@@ -219,3 +219,37 @@ struct HermesBrainTests {
         #expect(statuses == ["Searching the web"])
     }
 }
+
+struct RouterTests {
+    @Test(arguments: [
+        "Brauche ich heute einen Schirm?", "Wie wird das Wetter?", "Stell einen Timer auf 10 Minuten",
+        "Erinner mich morgen an die Wäsche", "Was steht morgen an?", "Wo bin ich?", "Wie komme ich zum Hauptbahnhof?",
+    ])
+    func simpleTasksStayLocal(_ question: String) {
+        #expect(Router.route(question, hermesAvailable: true) == .local)
+    }
+
+    @Test func everythingElseGoesToHermesWithTheFallback() {
+        #expect(Router.route("Wie geht's dir?", hermesAvailable: true) == .hermes("Wie geht's dir?", fallback: true))
+        #expect(Router.route("Wie hoch ist der Eiffelturm?", hermesAvailable: true)
+                == .hermes("Wie hoch ist der Eiffelturm?", fallback: true))
+    }
+
+    @Test func anotherPlaceGoesToHermes() {
+        #expect(Router.route("Wie ist das Wetter in Lissabon?", hermesAvailable: true)
+                == .hermes("Wie ist das Wetter in Lissabon?", fallback: true))
+        #expect(Router.route("How far is it to Hamburg Airport from Berlin?", hermesAvailable: true) != .local)
+        #expect(Router.route("Stell einen Timer für Pasta", hermesAvailable: true) == .local)  // actions stay local
+        #expect(Router.route("Wie wird das Wetter morgen?", hermesAvailable: true) == .local)
+    }
+
+    @Test func onlyHermesKnowsSoNoFallback() {
+        #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: true) == .hermes("Was kostet ein Bitcoin?", fallback: false))
+        #expect(Router.route("Hermes, plan my week", hermesAvailable: true) == .hermes("plan my week", fallback: false))
+    }
+
+    @Test func withoutHermesEverythingIsLocal() {
+        #expect(Router.route("Wie geht's dir?", hermesAvailable: false) == .local)
+        #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: false) == .local)
+    }
+}

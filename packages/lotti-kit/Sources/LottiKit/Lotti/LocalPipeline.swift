@@ -89,8 +89,12 @@ public enum LocalPipeline {
     /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. Hermes wins
     /// over everything; a new reminder wins over reading the reminder list.
     public static func ruleTools(_ message: String, tools: [PhoneToolSpec]) -> [String]? {
+        ruleTools(message, names: Set(tools.map(\.name)))
+    }
+
+    public static func ruleTools(_ message: String, names: Set<String>) -> [String]? {
         let text = message.lowercased()
-        let available = Set(tools.map(\.name) + ["hermes"])
+        let available = names.union(["hermes"])
         var picked = rules.filter { rule in
             available.contains(rule.tool) && (try? Regex(rule.pattern)).map { text.contains($0) } == true
         }.map(\.tool)
