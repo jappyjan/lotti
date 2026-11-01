@@ -74,7 +74,7 @@ public final class Conductor {
     @ObservationIgnored private let phoneMicrophone: (any Microphone)?
     @ObservationIgnored private let todayProvider: any TodayProvider
     @ObservationIgnored private let composer: TodayComposer
-    @ObservationIgnored private let renderer: ScreenRenderer
+    @ObservationIgnored private var renderer: ScreenRenderer
     @ObservationIgnored private let timing: Timing
     @ObservationIgnored private let now: @Sendable () -> Date
 
@@ -130,6 +130,13 @@ public final class Conductor {
     public func glassesConnected() async {
         shownFrame = nil
         await link.setHeadTracking(headTracking)
+        draw()
+    }
+
+    /// Switch the layout variant for the choices. The frame carries the style, so the link
+    /// rebuilds the page geometry and the next answers build their rails to fit it.
+    public func setDisplayStyle(_ style: DisplayStyle) {
+        renderer.style = style
         draw()
     }
 
@@ -526,12 +533,13 @@ public final class Conductor {
 
     /// Actions first (Lotti's best guess), then follow-ups, then "Ask Hermes" if there's room.
     private func rail(for answer: Answer, question: String, offerHermes: Bool) -> Rail {
+        let maxItems = renderer.style.maxRailItems
         var items = answer.actions.map { RailItem($0.title, .perform($0)) }
         items += answer.followUps.map { RailItem($0, .ask($0)) }
         if offerHermes, hermes?.isConfigured == true {
-            items = Array(items.prefix(Rail.maxItems - 1)) + [RailItem("Ask Hermes", .askHermes(question))]
+            items = Array(items.prefix(maxItems - 1)) + [RailItem("Ask Hermes", .askHermes(question))]
         }
-        return Rail(items)
+        return Rail(items, limit: maxItems)
     }
 
     /// Runs an action you tapped, then says how it went.

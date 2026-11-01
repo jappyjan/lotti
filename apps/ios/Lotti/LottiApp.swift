@@ -28,6 +28,7 @@ struct LottiApp: App {
             isConfigured: { Settings.hermesConfig != nil })
         let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
                                   phoneMicrophone: PhoneMicrophone(), today: today)
+        conductor.setDisplayStyle(Settings.displayStyle)
         self.speech = speech
         self.brain = brain
         self.hermes = hermes
@@ -86,6 +87,15 @@ enum Settings {
 
     static let speechLanguageKey = "speechLanguage"
     static let languages = [("de-DE", "Deutsch"), ("en-US", "English")]
+
+    static let displayStyleKey = "displayStyle"
+
+    /// The layout variant for the choices on the glasses (Debug → Display layout).
+    /// Defaults to the judged winner, choices below the sentence.
+    static var displayStyle: DisplayStyle {
+        get { UserDefaults.standard.string(forKey: displayStyleKey).flatMap(DisplayStyle.init(rawValue:)) ?? .choicesBelow }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: displayStyleKey) }
+    }
 
     /// The language you speak to Lotti in. Defaults to the phone's language if it's German.
     static var speechLanguage: String {

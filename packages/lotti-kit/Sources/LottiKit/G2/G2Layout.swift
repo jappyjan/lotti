@@ -11,30 +11,75 @@ public enum G2Layout {
     public static let width = 576
     public static let height = 288
 
-    /// Lotti's text with a rail next to it.
-    public static let mainWidthWithRail = 384
-    /// The rail: the column of choices on the right. The 16 px gap keeps the two apart.
-    public static let railX = 400
-    public static let railWidth = 176
+    /// The gap between the sentence and the rail when they sit side by side.
+    public static let gap = 16
 
-    /// About how many average characters fit on one line.
+    /// About how many average characters fit on one line, for the `.rail` style.
     public static let charsPerLineFullWidth = 46
     public static let charsPerLineWithRail = 31
     public static let charsPerLineRail = 13
     /// Lines that fit on the display (all columns are full height).
     public static let lines = 10
 
+    /// Six lines above the choices block in `.choicesBelow` (one line ≈ 29 px).
+    public static let choicesBelowMainHeight = 174
+    /// The choices block in `.choicesBelow`, under the sentence.
+    public static let choicesBelowRailY = 174
+    public static let choicesBelowRailHeight = 114
+
+    /// The width of Lotti's text when the rail sits next to it.
+    public static func mainWidth(_ style: DisplayStyle) -> Int {
+        switch style {
+        case .rail: 384
+        case .wideRail: 320
+        case .choicesBelow: width
+        }
+    }
+
+    /// The rail's left edge and width when it sits next to the sentence.
+    public static func railX(_ style: DisplayStyle) -> Int {
+        switch style {
+        case .rail: 400
+        case .wideRail: 336
+        case .choicesBelow: 0
+        }
+    }
+
+    public static func railWidth(_ style: DisplayStyle) -> Int {
+        switch style {
+        case .rail: 176
+        case .wideRail: 240
+        case .choicesBelow: width
+        }
+    }
+
+    public static func railY(_ style: DisplayStyle) -> Int {
+        switch style {
+        case .rail, .wideRail: 0
+        case .choicesBelow: choicesBelowRailY
+        }
+    }
+
+    public static func railHeight(_ style: DisplayStyle) -> Int {
+        switch style {
+        case .rail, .wideRail: height
+        case .choicesBelow: choicesBelowRailHeight
+        }
+    }
+
     /// What a blank container gets. MentraOS blanks text in place with "\n" (keeps the page and
     /// the event pipeline alive); an empty Cmd 5 isn't confirmed to work.
     static let blank = "\n"
 }
 
-/// The two page layouts Lotti uses.
+/// The page layouts Lotti uses.
 public enum G2PageShape: Equatable, Sendable {
     /// One text container across the whole display.
     case fullWidth
-    /// Lotti's text on the left, the rail on the right.
-    case withRail
+    /// Lotti's text on the left, the rail on the right, with the style's widths.
+    case withRail(DisplayStyle)
+    /// The sentence on top, the choices in a block underneath.
+    case choicesBelow
 }
 
 /// One text container on the page. Ids are the routing key for Cmd 5 updates (even-g2-protocol
@@ -54,15 +99,21 @@ public struct G2TextBox: Equatable, Sendable {
     public static let mainID = 1
     public static let railID = 2
 
-    static func main(_ text: String, shape: G2PageShape) -> G2TextBox {
-        G2TextBox(id: mainID, name: "main", x: 0, y: 0,
-                  width: shape == .fullWidth ? G2Layout.width : G2Layout.mainWidthWithRail,
-                  height: G2Layout.height, capturesEvents: true, text: text)
+    static func main(_ text: String, shape: G2PageShape, style: DisplayStyle = .rail) -> G2TextBox {
+        let width: Int = switch shape {
+        case .fullWidth, .choicesBelow: G2Layout.width
+        case .withRail(let style): G2Layout.mainWidth(style)
+        }
+        // Full-width screens keep the full height; only the choicesBelow shape shares it.
+        let height: Int = shape == .choicesBelow ? G2Layout.choicesBelowMainHeight : G2Layout.height
+        return G2TextBox(id: mainID, name: "main", x: 0, y: 0, width: width,
+                         height: height, capturesEvents: true, text: text)
     }
 
-    static func rail(_ text: String) -> G2TextBox {
-        G2TextBox(id: railID, name: "rail", x: G2Layout.railX, y: 0, width: G2Layout.railWidth,
-                  height: G2Layout.height, capturesEvents: false, text: text)
+    static func rail(_ text: String, style: DisplayStyle) -> G2TextBox {
+        G2TextBox(id: railID, name: "rail", x: G2Layout.railX(style), y: G2Layout.railY(style),
+                  width: G2Layout.railWidth(style), height: G2Layout.railHeight(style),
+                  capturesEvents: false, text: text)
     }
 }
 
@@ -102,9 +153,13 @@ public struct G2PagePlanner: Equatable, Sendable {
     /// The commands that show `frame`, and assumes they all succeed. Call `markUnknown()` if one
     /// fails.
     public mutating func plan(_ frame: GlassesFrame) -> [Command] {
-        let shape: G2PageShape = frame.rail == nil ? .fullWidth : .withRail
-        var boxes = [G2TextBox.main(Self.text(frame.main), shape: shape)]
-        if let rail = frame.rail { boxes.append(.rail(Self.text(rail))) }
+        let shape: G2PageShape = frame.rail == nil
+            ? .fullWidth
+            : (frame.style == .choicesBelow ? .choicesBelow : .withRail(frame.style))
+        var boxes = [G2TextBox.main(Self.text(frame.main), shape: shape, style: frame.style)]
+        if let rail = frame.rail, shape != .fullWidth {
+            boxes.append(.rail(Self.text(rail), style: frame.style))
+        }
         let texts = Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, $0.text) })
 
         let commands: [Command]

@@ -58,6 +58,39 @@ struct ScreenRendererTests {
         #expect(lines.last?.hasSuffix("…") == true || lines.last!.count <= 20)
         #expect(!lines.contains("dropped"))
     }
+
+    @Test func wideRailGivesTheChoicesMoreRoom() {
+        let renderer = ScreenRenderer(style: .wideRail)
+        // 17 characters: would be clipped in the 13-column rail (11 usable), fits in the wide one.
+        let rail = Rail([RailItem("Send my location", .dismiss), RailItem("On my way", .dismiss)])
+        let frame = renderer.render(Screen(.says, "Mara asks if you are still coming and wants pizza", rail: rail))
+        #expect(frame.style == .wideRail)
+        #expect(frame.rail == "> Send my location\n  On my way")
+        #expect(frame.main.components(separatedBy: "\n").first!.count <= TextLayout.wideRail.mainColumnsWithRail)
+    }
+
+    @Test func choicesBelowUsesTheFullWidth() {
+        let renderer = ScreenRenderer(style: .choicesBelow)
+        let rail = Rail([RailItem("On my way", .dismiss), RailItem("Running late", .dismiss)])
+        let frame = renderer.render(Screen(.says, "Mara asks if you are still coming", rail: rail))
+        #expect(frame.style == .choicesBelow)
+        #expect(frame.main == "Mara asks if you are still coming")
+        #expect(frame.rail == "> On my way\n  Running late")
+    }
+
+    @Test func choicesBelowCutsTheSentenceToSixLines() {
+        let renderer = ScreenRenderer(style: .choicesBelow)
+        let text = Array(repeating: "word", count: 60).joined(separator: " ")
+        let frame = renderer.render(Screen(.says, text, rail: Rail([RailItem("Yes", .dismiss)])))
+        let lines = frame.main.components(separatedBy: "\n")
+        #expect(lines.count == 6)
+        #expect(frame.rail == "> Yes")
+    }
+
+    @Test func wideRailCapsAtThreeItems() {
+        let rail = Rail((1...4).map { RailItem("\($0)", .dismiss) }, limit: DisplayStyle.wideRail.maxRailItems)
+        #expect(rail.items.count == 3)
+    }
 }
 
 struct TodayComposerTests {

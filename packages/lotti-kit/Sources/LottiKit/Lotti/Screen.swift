@@ -32,8 +32,8 @@ public struct Rail: Equatable, Sendable {
     public private(set) var items: [RailItem]
     public private(set) var highlighted: Int
 
-    public init(_ items: [RailItem], highlighted: Int = 0) {
-        self.items = Array(items.prefix(Self.maxItems))
+    public init(_ items: [RailItem], highlighted: Int = 0, limit: Int = Self.maxItems) {
+        self.items = Array(items.prefix(limit))
         self.highlighted = min(max(highlighted, 0), max(self.items.count - 1, 0))
     }
 

@@ -10,6 +10,13 @@ struct DebugView: View {
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
 
+    @State private var displayStyle: DisplayStyle = Settings.displayStyle
+
+    private func setDisplayStyle(_ style: DisplayStyle) {
+        Settings.displayStyle = style
+        conductor.setDisplayStyle(style)
+    }
+
     var body: some View {
         List {
             Section("On the glasses") {
@@ -26,6 +33,15 @@ struct DebugView: View {
                     Text("Display off").foregroundStyle(.secondary)
                 }
                 LabeledContent("Mode", value: String(describing: conductor.mode))
+            }
+
+            Section("Display layout") {
+                Picker("Choices", selection: $displayStyle) {
+                    Text("Choices below (default)").tag(DisplayStyle.choicesBelow)
+                    Text("Wider rail, 3 choices").tag(DisplayStyle.wideRail)
+                    Text("Rail (old)").tag(DisplayStyle.rail)
+                }
+                .onChange(of: displayStyle) { _, style in setDisplayStyle(style) }
             }
 
             Section("Lotti") {

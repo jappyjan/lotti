@@ -25,33 +25,29 @@ The glasses show a 576×288 green, see-through display. Black is invisible; only
 ## Screen anatomy
 
 ```
-┌───────────────────────────────────┬──────────────┐
-│                                   │              │
-│ (mask) Mara asks if you're still  │ [On my way]  │ ← highlighted = best guess
-│        coming at 8. They're       │  Running late│
-│        ordering pizza.            │  Original    │
-│                                   │              │
-└───────────────────────────────────┴──────────────┘
-  Lotti's sentence (left)             the rail (right)
+┌───────────────────────────────────┐
+│ (mask) Mara asks if you're still  │
+│        coming at 8. They're       │
+│        ordering pizza.            │
+│                                   │
+│ > On my way                       │ ← highlighted = best guess
+│   Running late                    │
+│   Original                        │
+└───────────────────────────────────┘
+  Lotti's sentence (top, full width)  choices (below, one per line)
 ```
 
 - **Lotti's line:** the raccoon mask followed by her sentence. The mask marks "this is Lotti talking".
-- **The rail:** every screen with choices puts them in a column on the right, up to 4. The highlight starts on Lotti's best guess. Each item is a shortcut for something you could also say.
-- **No choices, no rail:** the sentence uses the full width.
+- **The choices:** in one block under the sentence, one per line, up to 4. The highlight starts on Lotti's best guess. Each item is a shortcut for something you could also say. The sentence gets 6 of the 10 lines, so it only works with short sentences; without choices the sentence uses the full height.
 - **Originals** are shown without the mask, word for word, with the sender and time in dim text above.
 
 ### The rail is too narrow
 
-In use the choices on the right are too small and too short: the rail gets 176 of 576 px, about 13 characters a line, so a real suggestion ("Running late, order me a margherita") arrives as two clipped words. The rail as drawn above is the weakest part of the screen.
+In use the choices on the right were too small and too short: the rail got 176 of 576 px, about 13 characters a line, so a real suggestion ("Running late, order me a margherita") arrived as two clipped words.
 
-Options to test, cheapest first:
+**Decided 2026-11-01 by wearing all three built variants: choices below the sentence** — the sentence gets the full 576 px, the choices sit in one block underneath, one per line, highlighted as today. Costs 3–4 of the 10 lines, so it only works with short sentences. A wider rail (240 px, three choices) is still switchable on the phone (Debug → Display layout) and might return once popups exist.
 
-1. **Wider rail, fewer choices.** 240 px (~18 characters) with three choices instead of four. The sentence drops to ~26 characters a line instead of 31.
-2. **Choices below the sentence.** The sentence gets the full 576 px, the choices sit in one block underneath, one per line, highlighted as today. Costs 3–4 of the 10 lines, so it only works with short sentences.
-3. **A popup on a second layer.** The sentence alone on the content layer; the choices appear on the layer above on a scroll or tap and vanish when you pick one. This is how the Even app does it: two layers, content below, popups above. Whether the firmware gives the second layer to us is not known yet ([architecture.md](architecture.md#a-second-layer-for-popups-unverified)).
-4. **Two steps.** The rail keeps Lotti's best guess plus "More"; "More" opens the full list on the popup layer.
-
-How to compare: there is no simulator yet, so the hand-coded screen switches between the variants with a debug setting on the phone and we judge them while wearing the glasses. The winner replaces the anatomy above and goes into the renderer.
+**Preferred long-term: choices in a popup on the second display layer** — the sentence alone on the content layer; the choices appear on the layer above on a scroll or tap and vanish when you pick one. This is how the Even app does it: two layers, content below, popups above. The menu widget's content command is mapped (`g2.menu` `APP_SEND_MENU_INFO`, selectable items, picks back over EvenHub Cmd 0x15), but the menu is opened by the firmware, not the app — there is no known app-side "open popup" command. A live BLE capture with the Even app is the next step to find one (see [apk-recon](spikes/apk-recon.md), [D12](architecture.md#decisions)). "Two steps" (best guess + "More" → full list on the popup layer) rides along.
 
 ## Gestures
 

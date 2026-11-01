@@ -52,7 +52,7 @@ _Done when:_ you wear Lotti for a normal day and use the today view and chat fro
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Choices and layout** `ios` `design`: the rail on the right is too narrow and the choices too short in real use. Test a wider rail, the choices below the sentence, and a popup on a second display layer — the Even app uses two layers (content, plus one above for popups), we don't yet know whether our protocol has them. See [design.md](design.md#the-rail-is-too-narrow) and [architecture.md](architecture.md#a-second-layer-for-popups-unverified).
+1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the default. Wider rail still switchable in Debug. **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
 2. **Put it on** `ios` `design` `brain`: wear detection. When the glasses are picked up, Lotti greets and says what happened and what's coming, instead of waiting for a look-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".

@@ -61,10 +61,13 @@ public enum GlassesLinkError: Error, Equatable, LocalizedError {
 public struct GlassesFrame: Equatable, Sendable {
     public var main: String
     public var rail: String?
+    /// The layout the strings were written for, so switching styles rebuilds the page geometry.
+    public var style: DisplayStyle
 
-    public init(main: String, rail: String? = nil) {
+    public init(main: String, rail: String? = nil, style: DisplayStyle = .rail) {
         self.main = main
         self.rail = rail
+        self.style = style
     }
 
     public static let dark = GlassesFrame(main: "")
