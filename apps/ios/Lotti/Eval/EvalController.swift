@@ -34,7 +34,10 @@ final class EvalController {
         if let minutes = value("--soak").flatMap(Int.init) {
             runSoak(choice, minutes: minutes)
         } else if let minutes = value("--background").flatMap(Int.init) {
-            runBackgroundProbe(Self.choices(value("--probe")) ?? [choice], minutes: minutes)
+            // `--then-soak 30 --soak-models apple,gemma4-e2b`: after the probe, wait for the phone to be
+            // unlocked, then soak each model in turn.
+            let soak = value("--then-soak").flatMap(Int.init).map { ($0, Self.choices(value("--soak-models")) ?? [choice]) }
+            runBackgroundProbe(Self.choices(value("--probe")) ?? [choice], minutes: minutes, thenSoak: soak)
         } else {
             let tasks = value("--tasks").map { Set($0.split(separator: ",").compactMap { EvalTask(rawValue: String($0)) }) }
             // `--then-background 10 --probe apple,gemma4-e2b`: run the eval, then the background probe.
@@ -77,10 +80,22 @@ final class EvalController {
     /// Runs a triage case on each model every 20 s for `minutes`, logging app state, so we can see
     /// what still works with the phone locked. Asks iOS for background time when the app leaves the
     /// foreground. At most one Gemma per probe.
-    func runBackgroundProbe(_ choices: [EvalModelChoice], minutes: Int = 10) {
+    func runBackgroundProbe(_ choices: [EvalModelChoice], minutes: Int = 10, thenSoak soak: (Int, [EvalModelChoice])? = nil) {
         let labels = choices.map(\.label).joined(separator: "+")
         start("Background probe \(labels)") { [self] runner in
             await self.backgroundProbe(choices, minutes: minutes, runner: runner)
+            guard let (soakMinutes, soakChoices) = soak else { return }
+            status = "Probe done. Unlock the phone and leave Lotti open for the soak."
+            print("[Eval] probe done, waiting for unlock")
+            while !Task.isCancelled, Self.appState() != "active" { try? await Task.sleep(for: .seconds(2)) }
+            for choice in soakChoices where !Task.isCancelled {
+                status = "Soak \(choice.label) \(soakMinutes) min…"
+                print("[Eval] start soak \(choice.label)")
+                _ = await self.withModel(choice) { model in
+                    await Soak(runner: runner).run(model, label: choice.label, minutes: soakMinutes, device: { await Self.deviceStats() })
+                }
+                print("[Eval] end soak \(choice.label)")
+            }
         }
     }
 
@@ -104,7 +119,7 @@ final class EvalController {
                     let remaining = UIApplication.shared.backgroundTimeRemaining
                     print(EvalLog.line("background", BackgroundSample(
                         model: choice.label, n: n, appState: state,
-                        backgroundTimeRemaining: remaining.isFinite ? Int(remaining) : -1,
+                        backgroundTimeRemaining: backgroundSeconds(remaining),
                         ok: result.error == nil, totalMs: result.totalMs, error: result.error,
                         protectedData: UIApplication.shared.isProtectedDataAvailable)))
                 }
@@ -202,6 +217,11 @@ final class EvalController {
     }
 }
 
+/// Background time left in whole seconds; -1 while in the foreground (iOS reports `.greatestFiniteMagnitude`).
+func backgroundSeconds(_ remaining: TimeInterval) -> Int {
+    remaining < 86_400 ? Int(remaining) : -1
+}
+
 struct BackgroundSample: Codable {
     var model: String
     var n: Int
@@ -230,7 +250,7 @@ final class BackgroundTime {
             print("[Eval] background time expired")
             self?.end()
         }
-        print("[Eval] background task begun, remaining=\(Int(UIApplication.shared.backgroundTimeRemaining))s")
+        print("[Eval] background task begun, remaining=\(backgroundSeconds(UIApplication.shared.backgroundTimeRemaining))s")
     }
 
     func end() {
