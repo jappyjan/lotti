@@ -64,6 +64,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
     @ObservationIgnored private var microphone: MicSession?
+    @ObservationIgnored private var strayMicPackets = 0
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -219,12 +220,16 @@ public final class G2Link: NSObject, GlassesLink {
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
         guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
-        guard let characteristic = right.mic else { throw GlassesLinkError.missingCharacteristics }
+        guard right.mic != nil || arms[.left]?.mic != nil else { throw GlassesLinkError.missingCharacteristics }
         guard let decoder = LC3Decoder() else { throw GlassesLinkError.missingCharacteristics }
         endMicrophone()
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream(bufferingPolicy: .bufferingNewest(100))
         microphone = MicSession(decoder: decoder, continuation: continuation)
-        right.peripheral.setNotifyValue(true, for: characteristic)
+        // Both arms stay subscribed to `…6402` from connect on (MentraOS). The firmware only
+        // starts streaming on an off → on edge, so switch it off first.
+        await send(G2Payload.audioControl(magic: nextMagic(), enabled: false), sid: G2Service.evenHub,
+                   flag: G2Flag.request, to: right)
+        try? await Task.sleep(for: .milliseconds(300))
         let m = nextMagic()
         do {
             _ = try await request(G2Payload.audioControl(magic: m, enabled: true), sid: G2Service.evenHub,
@@ -242,7 +247,6 @@ public final class G2Link: NSObject, GlassesLink {
         log("[Mic] off after \(mic.packets) packets")
         endMicrophone()
         guard let right = arms[.right] else { return }
-        if let characteristic = right.mic { right.peripheral.setNotifyValue(false, for: characteristic) }
         let m = nextMagic()
         _ = try? await request(G2Payload.audioControl(magic: m, enabled: false), sid: G2Service.evenHub,
                                flag: G2Flag.request, magic: m, to: right, step: "turning the mic off", seconds: 2)
@@ -254,11 +258,19 @@ public final class G2Link: NSObject, GlassesLink {
         microphone = nil
     }
 
-    private func receiveMicPacket(_ bytes: [UInt8]) {
-        guard let mic = microphone else { return }
-        if mic.packets == 0 {
-            log("[Mic] first packet: \(bytes.count) bytes, starts \(hex(Array(bytes.prefix(12))))")
+    private func receiveMicPacket(_ bytes: [UInt8], from side: G2Side) {
+        guard let mic = microphone else {
+            strayMicPackets += 1
+            if strayMicPackets == 1 { log("[Mic] audio from the \(side) arm while off") }
+            return
         }
+        // Both arms may stream; use the one that sends first. Drop exact repeats (MentraOS).
+        if mic.side == nil {
+            mic.side = side
+            log("[Mic] first packet from the \(side) arm: \(bytes.count) bytes, starts \(hex(Array(bytes.prefix(12))))")
+        }
+        guard mic.side == side, bytes != mic.last else { return }
+        mic.last = bytes
         mic.packets += 1
         if mic.packets % 200 == 0 { log("[Mic] \(mic.packets) packets") }
         mic.continuation.yield(mic.decoder.decode(packet: bytes))
@@ -611,7 +623,10 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == Self.controlWrite { arm.write = characteristic }
             if characteristic.uuid == Self.controlNotify { arm.notify = characteristic }
-            if characteristic.uuid == Self.micNotify { arm.mic = characteristic }
+            if characteristic.uuid == Self.micNotify {
+                arm.mic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+            }
         }
         arm.pendingServices -= 1
         guard arm.pendingServices == 0 else { return }
@@ -625,7 +640,7 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?
     ) {
         if characteristic.uuid == Self.micNotify {
-            log("[Mic] notify \(characteristic.isNotifying ? "on" : "off")\(error.map { ", error: \($0.localizedDescription)" } ?? "")")
+            log("[Mic] \(arm(for: peripheral)?.side.rawValue ?? "?") notify \(characteristic.isNotifying ? "on" : "off")\(error.map { ", error: \($0.localizedDescription)" } ?? "")")
             return
         }
         guard characteristic.uuid == Self.controlNotify else { return }
@@ -640,7 +655,8 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         _ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?
     ) {
         if characteristic.uuid == Self.micNotify, let data = characteristic.value {
-            return receiveMicPacket([UInt8](data))
+            guard let arm = arm(for: peripheral) else { return }
+            return receiveMicPacket([UInt8](data), from: arm.side)
         }
         guard characteristic.uuid == Self.controlNotify, let arm = arm(for: peripheral),
               let data = characteristic.value else { return }
@@ -732,6 +748,9 @@ private final class MicSession {
     let decoder: LC3Decoder
     let continuation: AsyncStream<[Int16]>.Continuation
     var packets = 0
+    /// The arm whose audio we use (the first to send).
+    var side: G2Side?
+    var last: [UInt8]?
 
     init(decoder: LC3Decoder, continuation: AsyncStream<[Int16]>.Continuation) {
         self.decoder = decoder
