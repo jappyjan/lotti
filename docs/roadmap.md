@@ -41,14 +41,15 @@ _Done when:_ you wear Lotti for a normal day and answer messages from the glasse
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
-2. **Push-to-talk** `voice`: hold to talk, glasses mic, on-device speech-to-text, "tell Mara I'm late".
-3. **Look-up view** `design`: the one most useful sentence when you look up.
-4. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
-5. **Hermes connector** `brain` (was S6): escalate "dig into…" requests to your existing Hermes.
-6. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix, prompt and eval harness on top of `packages/brain-eval`.
-7. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed. The S3 eval screen already has `--soak` and `--background` runs.
+1. **Look-up view and actions without voice** `ios` `design`: the one most useful sentence when you look up; tap opens a ring-driven list of common actions (reply to the last message, timer, navigate home, quiet for an hour, media). More ready-made replies behind "Change". See [design.md](design.md#without-voice).
+2. **Media controls** `ios`: now playing in the look-up view; play/pause, next, previous and volume from the ring. Starts with a quick check of what iOS allows: `MPMusicPlayerController.systemMusicPlayer` only covers Apple Music; Spotify needs its App Remote SDK; or the glasses may speak Apple's Bluetooth media service (AMS) themselves.
+3. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
+4. **Push-to-talk** `voice`: hold to talk, glasses mic, on-device speech-to-text, "tell Mara I'm late".
+5. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
+6. **Hermes connector** `brain` (was S6): escalate "dig into…" requests to your existing Hermes.
+7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix, prompt and eval harness on top of `packages/brain-eval`.
+8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
+9. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed. The S3 eval screen already has `--soak` and `--background` runs.
 
 ## Later / ideas
 

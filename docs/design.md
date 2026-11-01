@@ -5,7 +5,7 @@ Status: agreed direction after four prototype rounds. This describes the experie
 ## Core idea: everything is a conversation with Lotti
 
 1. **Only Lotti speaks.** Messages and notifications never appear as they arrive. Lotti keeps what doesn't matter quiet and tells you the rest in one sentence, in her own voice.
-2. **You only talk to Lotti.** Hold and say anything: "tell Mara I'm late", "what did she write exactly?", "walk me there". Lotti works out what to do.
+2. **You only talk to Lotti.** Hold and say anything: "tell Mara I'm late", "what did she write exactly?", "walk me there". Lotti works out what to do. Or say nothing: everything you do often also works with the ring alone (see [Without voice](#without-voice)).
 3. **Lotti proposes, you approve.** Anything that affects other people (sending a message, moving a meeting) is shown as exactly what Lotti wants to do and waits for your OK. Nothing goes out without it.
 4. **The original is one question away.** Every summary has "Original" in its choices, or you just ask.
 5. **Lotti learns.** She remembers who matters, what you ignore, how you write, and gets quieter and more accurate over time.
@@ -51,6 +51,20 @@ The same on the R1 ring and both temple touchpads.
 | Double tap        | Back or dismiss. On the look-up view: display off                                         |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender) |
 | Look up           | The look-up view; look down to hide it                                                    |
+
+## Without voice
+
+Often you can't speak: in a meeting, on a full train, somewhere loud. Voice is a shortcut, never the only way.
+
+- **Answering:** pick one of Lotti's suggested replies. "Change" in a Proposal offers more ready-made replies (the ones you use most with this person) instead of dictation. Free text means taking out the phone.
+- **Starting something:** tap on the look-up view opens **Actions**, a List of things to do, with what you most likely need right now first: reply to the last message, media, timer (5 / 10 / 25 min), navigate home or to a favourite place, quiet for an hour, read the last summary again.
+- **Rule:** every voice command people use often gets an entry in Actions.
+
+## Media
+
+- **Now playing** is a quiet line in the look-up view while something plays.
+- Actions → **Media** opens a Card: title and artist, with Play/Pause, Next, Previous and Volume in the rail. On Volume, scroll changes the volume.
+- Voice works too ("pause", "next song"), but it's never needed.
 
 ## How loud a screen is
 
@@ -103,6 +117,7 @@ What you see when you look up: **one thing**. Lotti picks the single most useful
 
 - **Something matters:** "Leave in 8 min for pizza at Mara's. Rain at 21:00, take the umbrella." Time and "2 more" in dim text below.
 - **Nothing matters:** "All quiet. Nothing needs you." Time, date, temperature below.
+- **Tap:** Actions (see [Without voice](#without-voice)).
 - **Scroll:** the rest, in order, as a List. The last item says what Lotti held back ("I kept 14 things quiet, mostly newsletters").
 - **While navigating:** the one thing, plus the next turn pinned at the bottom.
 
