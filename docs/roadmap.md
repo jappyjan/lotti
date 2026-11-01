@@ -51,13 +51,15 @@ _Done when:_ you wear Lotti for a normal day and use the today view and chat fro
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
-2. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
-3. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
-4. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
-5. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
-6. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-7. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
+1. **Choices and layout** `ios` `design`: the rail on the right is too narrow and the choices too short in real use. Test a wider rail, the choices below the sentence, and a popup on a second display layer — the Even app uses two layers (content, plus one above for popups), we don't yet know whether our protocol has them. See [design.md](design.md#the-rail-is-too-narrow) and [architecture.md](architecture.md#a-second-layer-for-popups-unverified).
+2. **Put it on** `ios` `design` `brain`: wear detection. When the glasses are picked up, Lotti greets and says what happened and what's coming, instead of waiting for a look-up. See [design.md](design.md#key-flows).
+3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
+4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
+5. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
+6. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
+7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
+8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
+9. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 
