@@ -21,13 +21,14 @@ public struct HeadUpDetector: Sendable {
         public var offset: Double = 0
         public var upAngle: Double = 40
         public var downAngle: Double = 30
-        /// How long the pitch must stay past the threshold.
-        public var upHold: TimeInterval = 0.2
+        /// How long the pitch must stay past the threshold. The G2 sends about one sample a second, so
+        /// one sample above `upAngle` is enough for up.
+        public var upHold: TimeInterval = 0
         public var downHold: TimeInterval = 0.6
 
         public init(
             axis: Axis = .x, sign: Float = 1, offset: Double = 0, upAngle: Double = 40, downAngle: Double = 30,
-            upHold: TimeInterval = 0.2, downHold: TimeInterval = 0.6
+            upHold: TimeInterval = 0, downHold: TimeInterval = 0.6
         ) {
             self.axis = axis
             self.sign = sign
