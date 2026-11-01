@@ -1,9 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict>
-	<!-- Spike S3: lets the app use more memory, for Gemma 4 weights loaded with MLX. -->
-	<key>com.apple.developer.kernel.increased-memory-limit</key>
-	<true/>
-</dict>
+<dict/>
 </plist>
