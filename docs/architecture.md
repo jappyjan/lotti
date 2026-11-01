@@ -66,15 +66,15 @@ One schema definition feeds three consumers:
 
 Shared JSON fixtures act as contract tests so all three stay in sync.
 
-## A second layer for popups (confirmed model, unmapped command)
+## A second layer for popups (confirmed; the spawn command is mapped)
 
-The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) separates two planes: **background** content (`DASHBOARD` 1, `NAVIGATION` 8, `EVENHUB` 224) and **foreground** popups (`MEUN` 3, `NOTIFICATION` 4, `EVEN_AI` 7, `SYSTEM_ALERT` 33, `SYSTEM_CLOSE` 34). So the Even app really does draw content below and popups above. See [apk-recon](spikes/apk-recon.md).
+The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) separates two planes: **background** content (`DASHBOARD` 1, `NAVIGATION` 8, `EVENHUB` 224) and **foreground** popups (`MEUN` 3, `NOTIFICATION` 4, `EVEN_AI` 7, `SYSTEM_ALERT` 33, `SYSTEM_CLOSE` 34). So the Even app really does draw content below and popups above.
 
-What we still don't have is the EvenHub `Cmd` that spawns a foreground page above the running background one — g2-kit's notes say the notification/animation/widget-binding commands are unmapped.
+The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 17` `OS_NOTIFY_MENU_STARTUP_PACKET` carries `MenuStartUpEvent { uint32 widgetId = 1 }`, where `widgetId` is the foreground SID (3=menu, 4=notification, 7=even_ai); the glasses reply `Cmd 18` `APP_RESPONSE_MENU_STARTUP_FAILED_PACKET` (`MenuStartUpResPonse`). See [apk-recon](spikes/apk-recon.md).
 
-If the spawn command exists, the foreground layer is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
+So the foreground layer is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
 
-Cheapest check before code: capture the BLE traffic while the official app opens a popup.
+The one genuinely open piece is the command that fills a foreground notification popup's body (title/body) once it's spawned — the dashboard's `APP_SEND_NEWS_DATA` is the background news widget, not the foreground popup. Confirm with a BLE capture of the official app showing a notification.
 
 ## Brain: how much can run on the phone?
 
@@ -294,4 +294,4 @@ docs/           vision, architecture, roadmap
 | D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
 | D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ proposed (pending S8)              |
 | D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
-| D12 | A second display layer for popups. The firmware's service table splits background (content) from foreground (popup), confirmed via `g2.service_id_def.SID`. What's left is the EvenHub `Cmd` that spawns a foreground page ([apk-recon](spikes/apk-recon.md)) | ⏳ open (spawn Cmd)              |
+| D12 | A second display layer for popups. Confirmed via `g2.service_id_def.SID` (background vs foreground); the spawn command is EvenHub Cmd 17 `OS_NOTIFY_MENU_STARTUP_PACKET` → `MenuStartUpEvent{widgetId}`. Open: the foreground-notification content command ([apk-recon](spikes/apk-recon.md)) | ✅ mapped (spawn); ⏳ content cmd |
