@@ -102,10 +102,18 @@ public final class Conductor {
         }
     }
 
+    /// Open the today view when you look up. On by default.
+    public private(set) var headTracking = true
+
+    public func setHeadTracking(_ enabled: Bool) async {
+        headTracking = enabled
+        if link.status.isConnected { await link.setHeadTracking(enabled) }
+    }
+
     /// Call after the glasses (re)connect: the page is new, so redraw, and turn head tracking on.
     public func glassesConnected() async {
         shownFrame = nil
-        await link.setHeadTracking(true)
+        await link.setHeadTracking(headTracking)
         draw()
     }
 

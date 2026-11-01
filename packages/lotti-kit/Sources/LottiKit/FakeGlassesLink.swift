@@ -19,6 +19,8 @@ public final class FakeGlassesLink: GlassesLink {
     public var microphoneError: Error?
     public private(set) var microphoneOn = false
     public private(set) var headTracking = false
+    public var headUpSettings = HeadUpSettings()
+    public var headPitch: Double?
 
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var mic: AsyncStream<[Int16]>.Continuation?

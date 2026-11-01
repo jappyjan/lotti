@@ -96,6 +96,10 @@ public protocol GlassesLink: AnyObject, Observable {
     func stopMicrophone() async
     /// Report head-up / head-down (from the glasses' IMU) as `.headUp` / `.headDown` inputs.
     func setHeadTracking(_ enabled: Bool) async
+    /// When looking up counts as head-up.
+    var headUpSettings: HeadUpSettings { get set }
+    /// The head's latest pitch in degrees while head tracking is on, for calibrating.
+    var headPitch: Double? { get }
     /// Gestures from the touchpads and from the ring. The ring is linked to the glasses, which
     /// relay its gestures. Each call returns a new stream; repeats are already filtered out.
     func inputs() -> AsyncStream<InputEvent>

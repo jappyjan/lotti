@@ -62,7 +62,7 @@ public final class G2Link: NSObject, GlassesLink {
     /// Seconds between `[IMU]` log lines (lower it to calibrate head-up).
     @ObservationIgnored public var imuLogInterval: TimeInterval = 1
     @ObservationIgnored private var lastImuLog: TimeInterval = 0
-    @ObservationIgnored private var headUp = HeadUpDetector()
+    @ObservationIgnored private var headUp = HeadUpDetector(config: HeadUpSettings().config)
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
     @ObservationIgnored private var microphone: MicSession?
@@ -297,6 +297,11 @@ public final class G2Link: NSObject, GlassesLink {
     }
 
     /// Tuning for head-up detection; see `HeadUpDetector.Config`.
+    public var headUpSettings = HeadUpSettings() {
+        didSet { headUp.config = headUpSettings.config }
+    }
+    public private(set) var headPitch: Double?
+
     public var headUpConfig: HeadUpDetector.Config {
         get { headUp.config }
         set { headUp.config = newValue }
@@ -351,6 +356,7 @@ public final class G2Link: NSObject, GlassesLink {
             let pitch = headUp.pitch(x: x, y: y, z: z).map { String(format: "%.0f°", $0) } ?? "?"
             print(String(format: "[IMU] x %.2f y %.2f z %.2f", x, y, z) + " pitch(\(headUp.config.axis)) \(pitch)")
         }
+        if let pitch = headUp.pitch(x: x, y: y, z: z) { headPitch = pitch }
         if let gesture = headUp.feed(x: x, y: y, z: z, at: now) {
             print("[IMU] \(gesture.rawValue)")
             inputBroadcast.send(InputEvent(gesture, from: .imu))

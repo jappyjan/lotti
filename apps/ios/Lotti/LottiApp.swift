@@ -11,6 +11,7 @@ struct LottiApp: App {
     init() {
         let link = G2Link()
         if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
+        link.headUpSettings = Settings.headUp
         let speech = AppleSpeechRecognizer(locale: Locale(identifier: Settings.speechLanguage))
         let brain = AppleBrain()
         let conductor = Conductor(link: link, brain: brain, speech: speech, phoneMicrophone: PhoneMicrophone(),
@@ -23,7 +24,10 @@ struct LottiApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, speech: speech, brain: brain)
-                .task { await model.launch() }
+                .task {
+                    await model.conductor.setHeadTracking(Settings.headUpEnabled)
+                    await model.launch()
+                }
                 .task { await model.keepConnected() }
                 .task { await model.conductor.run() }
                 .task { await model.receiveInputs() }
@@ -39,6 +43,22 @@ struct LottiApp: App {
 }
 
 enum Settings {
+    static let headUpKey = "headUp"
+    static let headUpEnabledKey = "headUpEnabled"
+
+    static var headUp: HeadUpSettings {
+        get {
+            UserDefaults.standard.data(forKey: headUpKey).flatMap { try? JSONDecoder().decode(HeadUpSettings.self, from: $0) }
+                ?? HeadUpSettings()
+        }
+        set { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: headUpKey) }
+    }
+
+    static var headUpEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: headUpEnabledKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: headUpEnabledKey) }
+    }
+
     static let speechLanguageKey = "speechLanguage"
     static let languages = [("de-DE", "Deutsch"), ("en-US", "English")]
 

@@ -7,6 +7,24 @@ import Foundation
 /// looking at the ceiling about +57°, at the floor about −75°.
 /// Hysteresis (up above `upAngle`, down only below `downAngle`) plus a short hold keeps a nod or
 /// a bump from flipping the state.
+/// When looking up opens the today view: degrees above your own straight-ahead pitch.
+public struct HeadUpSettings: Equatable, Sendable, Codable {
+    /// Your pitch when looking straight ahead (glasses sit differently on every nose).
+    public var straightAhead: Double
+    /// How far above straight ahead counts as looking up.
+    public var lookUp: Double
+
+    public init(straightAhead: Double = 15, lookUp: Double = 15) {
+        self.straightAhead = straightAhead
+        self.lookUp = lookUp
+    }
+
+    /// Down again once the head is back below about half the look-up angle.
+    public var config: HeadUpDetector.Config {
+        HeadUpDetector.Config(upAngle: straightAhead + lookUp, downAngle: straightAhead + lookUp / 2)
+    }
+}
+
 public struct HeadUpDetector: Sendable {
     public enum Axis: String, Sendable, CaseIterable {
         case x, y, z

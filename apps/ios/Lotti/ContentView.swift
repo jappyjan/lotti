@@ -41,6 +41,8 @@ struct ContentView: View {
                     }
                 }
 
+                lookUpSection
+
                 if link.status.isConnected {
                     Section {
                         Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
@@ -58,6 +60,43 @@ struct ContentView: View {
             .navigationTitle("Lotti")
         }
         .tint(.green)
+    }
+
+    @ViewBuilder private var lookUpSection: some View {
+        Section {
+            Toggle("Open today when I look up", isOn: Binding(
+                get: { conductor.headTracking },
+                set: { on in
+                    Settings.headUpEnabled = on
+                    Task { await conductor.setHeadTracking(on) }
+                }))
+            if conductor.headTracking {
+                LabeledContent("Head now", value: link.headPitch.map { String(format: "%.0f°", $0) } ?? "–")
+                LabeledContent("Straight ahead", value: String(format: "%.0f°", link.headUpSettings.straightAhead))
+                Button("This is straight ahead") {
+                    guard let pitch = link.headPitch else { return }
+                    update { $0.straightAhead = pitch.rounded() }
+                }
+                .disabled(link.headPitch == nil)
+                VStack(alignment: .leading) {
+                    Text(String(format: "Look up by %.0f°", link.headUpSettings.lookUp))
+                    Slider(value: Binding(
+                        get: { link.headUpSettings.lookUp },
+                        set: { value in update { $0.lookUp = value.rounded() } }), in: 5...40, step: 1)
+                }
+            }
+        } header: {
+            Text("Look up")
+        } footer: {
+            Text("Look straight ahead and press the button, then pick how far up opens the today view.")
+        }
+    }
+
+    private func update(_ change: (inout HeadUpSettings) -> Void) {
+        var settings = link.headUpSettings
+        change(&settings)
+        link.headUpSettings = settings
+        Settings.headUp = settings
     }
 
     /// What the glasses show right now, so you can check without wearing them.

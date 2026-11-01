@@ -204,3 +204,12 @@ struct HeadUpSettingTests {
         #expect(G2Payload.headUpSetting(magic: 1, enabled: false) == [0x08, 0x01, 0x10, 0x01, 0x1A, 0x04, 0x22, 0x02, 0x08, 0x00])
     }
 }
+
+struct HeadUpSettingsTests {
+    @Test func anglesAreRelativeToStraightAhead() {
+        let config = HeadUpSettings(straightAhead: 12, lookUp: 16).config
+        #expect(config.upAngle == 28)
+        #expect(config.downAngle == 20)
+        #expect(config.axis == .x)
+    }
+}
