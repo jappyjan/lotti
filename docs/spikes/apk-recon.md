@@ -59,6 +59,21 @@ The foreground notification body is not the dashboard news. It travels over the 
 1. **BLE capture** (fastest): run the official app and capture the file-service traffic while it shows a notification.
 2. **Dump the Dart AOT binary** (`libapp.so` with `blutter`) to read how the app builds that JSON schema.
 
+## Follow-up 2026-11-01: the menu popup is mapped — but firmware-opened
+
+Re-read the blutter output chasing "choices in a popup" (design.md). Findings:
+
+**The menu content command exists and is fully mapped** — `g2.menu` (sid `0x03`, the foreground MEUN widget):
+
+- `meun_main_msg_ctx { Cmd = APP_SEND_MENU_INFO (0), MagicRandom, sendData = MenuInfoSend }`
+- `MenuInfoSend { itemTotalNum, item[] }` with `Menu_Item_Ctx { itemType, iconNum, itemName, itemAppId }` — named, selectable items, exactly what a choices popup needs. The app builds it in `BleG2CmdProtoExt._createMenuDataPackage` (ble_g2_cmd_proto.dart) and the OS reports picks with EvenHub `Cmd 0x15 OS_NOTIFY_MENU_ITEM_CLICK_PACKET` (oneof field 24 `MenuItemClick`; `MenuSubReq`/`MenuSubRes` on 25/26).
+
+**But the app can't open the menu itself.** `Cmd 17 OS_NOTIFY_MENU_STARTUP_PACKET` is OS → app: the firmware opens the menu (user gesture on the glasses) and *asks the app for the items*; the app replies `Cmd 18` ok/failed (`_handEvenHubMenuStartEvent` in even_hub_app_service.dart is called from the incoming EvenHub dispatcher). No app → OS "open menu" command exists in the known protocol.
+
+**The notification widget (sid `0x04`) is app-triggerable** (unprompted push is its purpose) and is the only known on-demand foreground popup. Its content JSON (`ANDROID_MSG_JSON_NOTIFICATION`) is *not* built in the readable Dart: the Dart forwarding service (android_notification_forwarding_service.dart) sends the whitelist JSON (`NOTIFICATION_JSON_WHITELIST`) itself but hands the content payload to `sendFileOwned` as an opaque map assembled on the native/Jiagu side. So the schema needs either a live BLE capture or the Jiagu unpacking, as above.
+
+**Consequence for Lotti:** a second-layer choices popup rides on the menu widget, but only if we learn how the menu is opened while *our* page is up — the same BLE capture (Even app + notification → file service) should show whether an app page receives `Cmd 17` after some gesture, or whether there's an undocumented open command. Until then, the choices stay on the content layer (choices-below layout, judged the winner).
+
 ### Unpacking Jiagu (reference — mostly unnecessary now)
 
 Note: the protocol lives in `libapp.so`, which Jiagu does not pack, so `blutter` sidesteps this entirely. If you do need the Java/Kotlin side, Jiagu decrypts the real dex and native lib in memory at launch. To get them:
