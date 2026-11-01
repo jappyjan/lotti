@@ -1,0 +1,165 @@
+import Foundation
+import Testing
+@testable import LottiKit
+
+/// A tool with a canned result, an optional delay, and a log of its runs.
+final class FakeTool: PhoneTool, @unchecked Sendable {
+    let spec: PhoneToolSpec
+    var result: String
+    var delay: Duration?
+    var error: Error?
+    private let lock = NSLock()
+    private var _runs: [ToolArguments] = []
+    var runs: [ToolArguments] { lock.withLock { _runs } }
+
+    init(_ name: String, _ effect: PhoneToolSpec.Effect = .read, parameters: [ToolParameter] = [], result: String = "ok",
+         delay: Duration? = nil) {
+        spec = PhoneToolSpec(name: name, description: "Fake \(name).", parameters: parameters, effect: effect,
+                             progress: "Checking \(name)…")
+        self.result = result
+        self.delay = delay
+    }
+
+    func run(_ arguments: ToolArguments) async throws -> String {
+        lock.withLock { _runs.append(arguments) }
+        if let delay { try await Task.sleep(for: delay) }
+        if let error { throw error }
+        return result
+    }
+
+    func title(for arguments: ToolArguments) -> String {
+        spec.name == "set_timer" ? "Timer \(arguments.int("minutes") ?? 0) min" : spec.name
+    }
+}
+
+extension FakeTool {
+    static func timer() -> FakeTool {
+        FakeTool("set_timer", .action, parameters: [
+            ToolParameter("minutes", .integer, "Length in minutes"),
+            ToolParameter("label", .string, "What it's for", optional: true),
+        ], result: "Timer set for 10 minutes.")
+    }
+}
+
+struct ToolboxTests {
+    @Test func runsSeveralCallsAtOnceAndKeepsTheirOrder() async {
+        let calendar = FakeTool("calendar", result: "Standup 9:30", delay: .milliseconds(200))
+        let weather = FakeTool("weather", result: "12°, cloudy", delay: .milliseconds(200))
+        let toolbox = Toolbox([calendar, weather])
+        let started = Date()
+        let results = await toolbox.run([ToolCall(id: "c1", tool: "calendar"), ToolCall(id: "c2", tool: "weather")],
+                                        allowed: ["calendar", "weather"])
+        #expect(Date().timeIntervalSince(started) < 0.35)
+        #expect(results == [ToolResult(id: "c1", ok: true, content: "Standup 9:30"),
+                            ToolResult(id: "c2", ok: true, content: "12°, cloudy")])
+    }
+
+    @Test func refusesUnknownToolsActionsAndUnsharedReads() async {
+        let timer = FakeTool.timer()
+        let toolbox = Toolbox([FakeTool("location"), timer])
+        let results = await toolbox.run([
+            ToolCall(id: "1", tool: "teleport"),
+            ToolCall(id: "2", tool: "set_timer", arguments: ["minutes": 5]),
+            ToolCall(id: "3", tool: "location"),
+        ], allowed: [])
+        #expect(results.map(\.ok) == [false, false, false])
+        #expect(results[1].content.contains("actions"))
+        #expect(results[2].content.contains("doesn't share"))
+        #expect(timer.runs.isEmpty)
+    }
+
+    @Test func checksArguments() async {
+        let tool = FakeTool("calendar", parameters: [
+            ToolParameter("from", .string, ""),
+            ToolParameter("days", .integer, "", optional: true),
+            ToolParameter("kind", .oneOf(["work", "home"]), "", optional: true),
+        ])
+        let toolbox = Toolbox([tool])
+        let missing = await toolbox.run([ToolCall(id: "1", tool: "calendar", arguments: ["days": 2])], allowed: ["calendar"])
+        #expect(missing.first?.ok == false)
+        #expect(missing.first?.content == "calendar: missing from")
+
+        let coerced = await toolbox.run([ToolCall(id: "2", tool: "calendar",
+                                                  arguments: ["from": "2026-11-02", "days": "3", "kind": "Work", "extra": 1])],
+                                        allowed: ["calendar"])
+        #expect(coerced.first?.ok == true)
+        #expect(tool.runs.last == ToolArguments(["from": "2026-11-02", "days": 3, "kind": "work"]))
+
+        let wrong = await toolbox.run([ToolCall(id: "3", tool: "calendar", arguments: ["from": "x", "days": 1.5])],
+                                      allowed: ["calendar"])
+        #expect(wrong.first?.content == "calendar: days should be an integer")
+    }
+
+    @Test func aSlowToolTimesOut() async {
+        let toolbox = Toolbox([FakeTool("slow", delay: .seconds(5))], callTimeout: .milliseconds(100))
+        let results = await toolbox.run([ToolCall(id: "1", tool: "slow")], allowed: ["slow"])
+        #expect(results == [ToolResult(id: "1", ok: false, content: "slow took too long.")])
+    }
+
+    @Test func aFailingToolReportsItsError() async {
+        let tool = FakeTool("reminders")
+        tool.error = ToolError("No access to reminders.")
+        let results = await Toolbox([tool]).run([ToolCall(id: "1", tool: "reminders")], allowed: ["reminders"])
+        #expect(results == [ToolResult(id: "1", ok: false, content: "No access to reminders.")])
+    }
+
+    @Test func actionsBecomeProposalsAndRunOnlyWhenPerformed() async {
+        let timer = FakeTool.timer()
+        let toolbox = Toolbox([timer, FakeTool("weather")])
+        let proposal = toolbox.proposal(for: ToolCall(id: "a1", tool: "set_timer", arguments: ["minutes": 10, "label": "Pasta"]))
+        #expect(proposal?.title == "Timer 10 min")
+        #expect(timer.runs.isEmpty)
+        #expect(toolbox.proposal(for: ToolCall(id: "a2", tool: "set_timer", arguments: [:])) == nil)
+        #expect(toolbox.proposal(for: ToolCall(id: "a3", tool: "weather")) == nil)
+
+        let result = await toolbox.perform(proposal!)
+        #expect(result.ok)
+        #expect(timer.runs == [ToolArguments(["minutes": 10, "label": "Pasta"])])
+    }
+
+    @Test func progressLine() {
+        let toolbox = Toolbox([FakeTool("calendar"), FakeTool("weather")])
+        #expect(toolbox.progress(for: [ToolCall(id: "1", tool: "calendar")]) == "Checking calendar…")
+        #expect(toolbox.progress(for: [ToolCall(id: "1", tool: "calendar"), ToolCall(id: "2", tool: "weather")])
+                == "Checking your phone…")
+    }
+}
+
+struct ToolTextTests {
+    var text: ToolText {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        return ToolText(calendar: calendar)
+    }
+    var now: Date { text.moment("2026-11-01 14:05")! }
+
+    @Test func readsDays() {
+        #expect(text.dayName(text.day(nil, now: now)!) == "Sun 1 Nov")
+        #expect(text.dayName(text.day("tomorrow", now: now)!) == "Mon 2 Nov")
+        #expect(text.dayName(text.day("2026-11-05", now: now)!) == "Thu 5 Nov")
+        #expect(text.day("next week", now: now) == nil)
+        #expect(text.day("2026-02-31", now: now) == nil)
+    }
+
+    @Test func readsMoments() {
+        #expect(text.dayAndTime(text.moment("2026-11-02 18:30")!) == "Mon 2 Nov 18:30")
+        #expect(text.dayAndTime(text.moment("2026-11-02T07:15:00")!) == "Mon 2 Nov 07:15")
+        #expect(text.dayAndTime(text.moment("2026-11-02")!) == "Mon 2 Nov 09:00")
+    }
+
+    @Test func describesEventsPerDay() {
+        let day = text.day("2026-11-02", now: now)!
+        let events = [
+            CalendarEntry(title: "Ben", start: text.moment("2026-11-02 11:00")!, end: text.moment("2026-11-02 12:00")!,
+                          location: "Café"),
+            CalendarEntry(title: "Standup", start: text.moment("2026-11-02 09:30")!, end: text.moment("2026-11-02 09:45")!),
+            CalendarEntry(title: "Holiday", start: text.moment("2026-11-04 00:00")!, end: text.moment("2026-11-05 00:00")!,
+                          isAllDay: true),
+        ]
+        #expect(text.events(events, from: day, days: 3) == """
+            Mon 2 Nov: 09:30–09:45 Standup; 11:00–12:00 Ben (Café)
+            Tue 3 Nov: nothing
+            Wed 4 Nov: all day: Holiday
+            """)
+    }
+}

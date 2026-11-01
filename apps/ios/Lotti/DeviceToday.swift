@@ -19,13 +19,16 @@ actor DeviceToday: TodayProvider {
     }
 
     private func events(on now: Date) async -> [CalendarEntry] {
+        let start = Calendar.current.startOfDay(for: now)
+        return (try? await events(from: start, to: Calendar.current.date(byAdding: .day, value: 1, to: start)!)) ?? []
+    }
+
+    /// Events in the calendars you didn't switch off. Throws without calendar access.
+    func events(from start: Date, to end: Date) async throws -> [CalendarEntry] {
         if calendarAccess == nil {
             calendarAccess = Task { await self.requestCalendarAccess() }
         }
-        guard await calendarAccess?.value == true else { return [] }
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: now)
-        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+        guard await calendarAccess?.value == true else { throw ToolError("Lotti has no access to the calendar.") }
         let hidden = Settings.hiddenCalendars
         let calendars = store.calendars(for: .event).filter { !hidden.contains($0.calendarIdentifier) }
         guard !calendars.isEmpty else { return [] }
@@ -42,7 +45,7 @@ actor DeviceToday: TodayProvider {
         return allowed
     }
 
-    private func currentWeather(now: Date) async -> Weather? {
+    func currentWeather(now: Date) async -> Weather? {
         if let weather, now.timeIntervalSince(weather.fetched) < 20 * 60 { return weather.value }
         let place = await coordinate()
         do {
@@ -54,6 +57,15 @@ actor DeviceToday: TodayProvider {
             print("[Today] weather failed: \(error.localizedDescription)")
             return weather?.value
         }
+    }
+
+    /// A fresh location fix, falling back to the last known one. Nil if there never was one.
+    func freshLocation() async -> CLLocationCoordinate2D? {
+        if let found = await Self.findLocation() {
+            location = found
+            return found
+        }
+        return location
     }
 
     private func coordinate() async -> CLLocationCoordinate2D {

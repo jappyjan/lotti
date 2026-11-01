@@ -8,6 +8,10 @@ public enum RailAction: Equatable, Sendable {
     case show(Screen)
     /// Turn the display off.
     case dismiss
+    /// Run a phone action a brain prepared (timer, reminder). This tap is your approval.
+    case perform(ProposedAction)
+    /// Pass this question to Hermes.
+    case askHermes(String)
 }
 
 public struct RailItem: Equatable, Sendable {

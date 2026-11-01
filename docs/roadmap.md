@@ -16,6 +16,8 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
 - **S2 — Ring and touchpad input** ([write-up](spikes/s2-ring.md)): ring gestures arrive through the glasses link.
 - **S3 — On-device brain** ([write-up](spikes/s3-brain.md)): Apple's on-device model for every task (D11). Eval set and runner in `packages/brain-eval`.
 
+- **Phone tools and Hermes** (2026-11-01, pulled forward from After the MVP): one set of phone tools (calendar, weather, location, reminders; timer and new reminder as tap-to-confirm actions) for the on-device brain and Hermes, and the Hermes connector with Lotti's reply format, which lets Hermes call several phone tools at once. See [architecture.md](architecture.md#phone-tools). Still to do: try it against your real Hermes and on the glasses.
+
 ---
 
 ## MVP — "Talk to Lotti"
@@ -47,10 +49,9 @@ Rough order, to be re-sorted by what real use shows:
 2. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
 3. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
 4. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
-5. **Hermes connector** `brain` (was S6): escalate "dig into…" requests to your existing Hermes.
-6. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix, prompt and eval harness on top of `packages/brain-eval`.
-7. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
+5. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix, prompt and eval harness on top of `packages/brain-eval`.
+6. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
+7. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 

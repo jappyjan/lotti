@@ -119,7 +119,7 @@ public struct TodayComposer: Sendable {
 
     /// A compact description of today for the chat prompt.
     public func promptSummary(_ info: TodayInfo) -> String {
-        var lines = ["Now: " + format(info.now, "EEEE d MMMM yyyy") + ", " + time(info.now)]
+        var lines = [nowLine(info)]
         let events = info.allDay.map { "all day: \($0.title)" }
             + info.remaining.map { e in "\(time(e.start))–\(time(e.end)): \(e.title)" + (e.location.map { " (\($0))" } ?? "") }
         lines.append("Calendar today: " + (events.isEmpty ? "nothing left" : events.joined(separator: "; ")))
@@ -131,6 +131,11 @@ public struct TodayComposer: Sendable {
             if let t = w.tomorrow { lines.append("Weather tomorrow: \(t.condition), \(t.low)–\(t.high)°C") }
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// "Now: Sunday 1 November 2026, 14:05".
+    public func nowLine(_ info: TodayInfo) -> String {
+        "Now: " + format(info.now, "EEEE d MMMM yyyy") + ", " + time(info.now)
     }
 
     func nextUp(_ info: TodayInfo) -> String {

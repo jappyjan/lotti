@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: draft for discussion. Nothing here is built yet.
+Status: living document. Built so far: glasses link, ring input, the hand-coded screen and today view, on-device chat and voice, phone tools and the Hermes connector. The UI schema, simulator, messaging and navigation are still plans.
 
 ## Big picture
 
@@ -44,7 +44,8 @@ The **phone is the hub.** It owns the glasses and ring connection, gathers signa
 | Memory           | iOS    | What Lotti has learned: who matters, what you ignore, your writing style per person, places. On the phone; viewable and deletable |
 | Brain router     | iOS    | Decides per event: rules → on-device model → Hermes connector                                                                     |
 | On-device brain  | iOS    | Apple Foundation Models with tool calling and guided generation of screens                                                        |
-| Hermes connector | iOS    | Sends a request to your Hermes endpoint, gets back screens or text. Endpoint and key set in Lotti settings                        |
+| Phone tools      | iOS    | Calendar, weather, location, reminders, timer, new reminder; shared by both brains (see below)                                    |
+| Hermes connector | iOS    | Sends a question to your Hermes, runs the phone tools it asks for, gets back a sentence and actions. Address and key in Lotti     |
 | Simulator        | web    | Renders schema screens at 576×288 with keyboard-as-ring, so UI and prompts can be iterated without glasses                        |
 | UI schema        | shared | Single source of truth for screens; TypeScript, JSON Schema for LLMs, Swift mirror                                                |
 | Persona          | shared | Lotti's system prompt and voice, used by the on-device brain and sent along with Hermes requests                                  |
@@ -109,19 +110,96 @@ Known limits (from S3):
 
 1. **Rules** (0 ms): deterministic stuff. Ring "back", known apps muted, do-not-disturb.
 2. **On-device model** (first token ~1.3 s, full screen ~2.4 s; Apple FM): triage, quick replies, screen generation, simple tools, starting navigation.
-3. **Hermes connector** (seconds): anything the on-device model flags as "needs more", or the user asks for explicitly ("Lotti, dig into…").
+3. **Hermes connector** (seconds): anything the on-device model hands over with `ask_hermes`, or you ask for explicitly ("Hermes, …", "Dig into…", "Ask Hermes" in the rail).
+
+## Phone tools
+
+One set of tools on the phone, used by the on-device brain, by Hermes and later by the ring's Actions list. Each tool is a `PhoneTool` in LottiKit (name, description, arguments, `read` or `action`); the app implements the real ones in `apps/ios/Lotti/PhoneTools.swift`.
+
+| Tool              | Kind   | Backed by                        | On-device brain | Hermes            |
+| ----------------- | ------ | -------------------------------- | --------------- | ----------------- |
+| `calendar`        | read   | EventKit (your chosen calendars) | ✅              | ✅ if shared      |
+| `weather`         | read   | Open-Meteo at your location      | in the prompt   | ✅ if shared      |
+| `location`        | read   | CoreLocation + MapKit address    | –               | ✅ if shared      |
+| `reminders`       | read   | EventKit reminders               | –               | ✅ if shared      |
+| `set_timer`       | action | AlarmKit (rings in silent mode)  | ✅              | ✅ (suggest only) |
+| `create_reminder` | action | EventKit reminders               | ✅              | ✅ (suggest only) |
+| `ask_hermes`      | –      | hands the question to Hermes     | ✅              | –                 |
+
+Rules (enforced by `Toolbox`, not by prompts):
+
+- **Reads** run as soon as a brain asks, several at once, each with a 10 s limit. Arguments are checked against the tool's parameters first.
+- **Actions never run on a brain's say-so.** A brain can only _prepare_ one: it becomes a choice in the rail ("Timer 10 min"), and runs when you tap it. A wrong transcript or a confused model can't set anything.
+- **You choose what Hermes may read** (Lotti app → Hermes). Unshared reads are left out of Hermes's prompt and refused if asked for anyway.
+- The on-device brain gets only `calendar`, the two actions and `ask_hermes`: every tool costs prompt tokens in its 4K context, and today's calendar and weather are already in its prompt.
 
 ## Hermes connector
 
-What Lotti needs from Hermes, and nothing more:
+Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's API server (`hermes gateway`, OpenAI-compatible `/v1/chat/completions`), with the address and `API_SERVER_KEY` set in the Lotti app (key in the Keychain). Nothing in Hermes needs configuring.
 
-- **An endpoint + API key**, entered in Lotti's settings. Hermes Agent exposes an OpenAI-compatible API; the connector work after the MVP confirms the details.
-- **Request:** Lotti's persona prompt, the screen JSON Schema, a short description of the event (utterance, notification, location), and minimal context the user allowed.
-- **Response:** a screen (structured output, or a `show_screen` call Lotti defines on the client side), or plain text, which Lotti wraps in a `text` screen.
-- **Streaming:** while Hermes works, the glasses show a `progress`/`stream` screen; ring "back" cancels.
-- **Offline / unreachable:** a clear toast, and the on-device brain handles what it can.
+**When Lotti asks Hermes:**
 
-Lotti does **not** run a server of its own in this plan. If we later need Hermes to push things to the glasses unprompted (a long task finishes an hour later), that needs a small relay. It's listed under "Later" in the roadmap, decision D8.
+1. You say so: "Hermes, …", "Frag Hermes …", "Dig into …" (rules, no model).
+2. The on-device brain calls `ask_hermes` (news, the web, prices, opening hours, research).
+3. You pick "Ask Hermes" in the rail under any on-device answer.
+
+Once a conversation is with Hermes, its follow-ups stay there until the conversation ends (double tap, or 5 minutes).
+
+**Phone tools for Hermes: Lotti's reply format.** Hermes runs its own tools on its server and never hands tool calls back to the client, so the phone's tools travel inside the conversation as JSON. Lotti's system message (Hermes layers it on top of its own prompt) lists the tools you share and asks for exactly one JSON object per reply:
+
+```json
+{
+  "type": "call",
+  "status": "Checking your day",
+  "calls": [
+    { "id": "c1", "tool": "calendar", "args": { "from": "2026-11-02" } },
+    { "id": "c2", "tool": "weather", "args": {} }
+  ]
+}
+```
+
+All calls in one reply run at the same time. The phone answers in the same conversation:
+
+```json
+{
+  "type": "results",
+  "results": [
+    { "id": "c1", "ok": true, "content": "Mon 2 Nov: 09:30–09:45 Standup" },
+    {
+      "id": "c2",
+      "ok": true,
+      "content": "Weather tomorrow: light rain, 6–11°C"
+    }
+  ]
+}
+```
+
+and Hermes calls again or answers:
+
+```json
+{
+  "type": "answer",
+  "sentence": "Standup at 9:30, and take an umbrella.",
+  "followUps": ["Later?"],
+  "actions": [
+    { "tool": "set_timer", "args": { "minutes": 10, "label": "Leave" } }
+  ]
+}
+```
+
+Details:
+
+- **Limits:** at most 4 rounds of phone calls per question; with the last results Hermes is told to answer now. The whole question gives up after 2 minutes; double tap cancels sooner.
+- **Hermes asks for what it needs.** The first message carries only the date and time; calendar, weather and location are sent only when Hermes calls for them.
+- **Forgiving parser:** finds the JSON inside fences or prose, accepts `args` or `arguments`, numbers missing ids. A reply that isn't JSON is shown as plain text. Invalid actions are dropped.
+- **Stateless:** every request carries the whole conversation, so the phone owns the history (Hermes's `X-Hermes-Session-Id` isn't used; mixing it with a full history isn't documented). A failed or cancelled question is removed, so "Try again" starts clean.
+- **Streaming:** Hermes's `hermes.tool.progress` events and the format's `status` show on the glasses' working screen ("Searching the web…", "Checking your calendar…").
+- **Errors:** unreachable, wrong key, busy or too slow each get a short sentence and a "Try again" choice.
+- **Network:** HTTPS (e.g. `tailscale serve`) or plain HTTP on the local network. Hermes binds to localhost by default, so it has to be reachable from the phone.
+
+**Trying it without Hermes:** `python3 packages/lotti-kit/scripts/mock-hermes.py` plays Hermes (two parallel phone calls, then an answer with a timer). `HERMES_URL=… HERMES_KEY=… swift test --filter LiveHermes` runs the connector against it or against your real Hermes. `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel` checks the on-device brain's tool use.
+
+Lotti still runs no server of its own. Hermes pushing to the glasses unprompted (a long task finishing later) needs a relay: decision D8, under "Later".
 
 ## Messaging: iMessage, WhatsApp, Signal, Telegram, Matrix
 
