@@ -24,7 +24,7 @@ Goal: phone in the pocket, glasses on. Look up or tap and Lotti tells you about 
 
 In this order:
 
-1. **Screen and gestures** `ios`: one hand-coded screen: Lotti's sentence on the left, choices in the rail on the right. Scroll moves the highlight, tap picks, double tap goes back or turns the display off, long press is talk (only). The rail is reusable for Actions and Media later.
+1. **Screen and gestures** `ios`: one hand-coded screen: Lotti's sentence on the left, choices in the rail on the right. Scroll moves the highlight, tap picks, double tap goes back or turns the display off, long press is talk (only). The rail is reusable for the Actions list later.
 2. **Today view** `ios` `design`: the look-up view. Time, date, your next appointments and the weather, as one sentence from Lotti plus dim details. Opens on a tap when the display is off, or when you look up (head-up from the glasses' IMU, if the firmware sends it).
 3. **Chat** `ios` `brain`: Apple's on-device model as Lotti, with S3's persona. A conversation keeps context until you dismiss it. Answers are one or two sentences plus up to three follow-ups in the rail. Simple tools: today's calendar, weather, time. Prewarmed, with a timeout (S3 saw rare 20–60 s stalls).
 4. **Voice** `ios` `voice`: hold to talk, the glasses' mic (LC3), on-device speech-to-text (`SpeechAnalyzer`), your words shown while you hold (Listening), then Lotti answers. Phone mic as fallback if the glasses' mic doesn't work.
