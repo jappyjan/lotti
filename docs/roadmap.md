@@ -73,6 +73,7 @@ Rough order, to be re-sorted by what real use shows:
 - Health data from the R1 ring
 - iOS 27 Private Cloud Compute as a middle brain tier (bigger Apple model, not offline, needs a paid developer account)
 - Publish parts (BLE layer, renderer) as open source
+- Custom firmware: possible today (CRC-only, no signature) and already a community ecosystem — faceclaw, g2flash, openCFW, webflasher, g2emu. See [custom-firmware](spikes/custom-firmware.md).
 
 ## Open questions
 
