@@ -124,8 +124,8 @@ public struct TodayComposer: Sendable {
             + info.remaining.map { e in "\(time(e.start))–\(time(e.end)): \(e.title)" + (e.location.map { " (\($0))" } ?? "") }
         lines.append("Calendar today: " + (events.isEmpty ? "nothing left" : events.joined(separator: "; ")))
         if let w = info.weather {
-            var weather = "Weather: \(w.temperature)°C, \(w.condition)"
-            if let high = w.high, let low = w.low { weather += ", high \(high)°, low \(low)°" }
+            var weather = "Weather now: \(w.temperature)°C, \(w.condition)"
+            if let high = w.high, let low = w.low { weather += ", today between \(low)° and \(high)°" }
             if let rain = w.rainFrom { weather += ", rain from \(time(rain))" }
             lines.append(weather)
             if let t = w.tomorrow { lines.append("Weather tomorrow: \(t.condition), \(t.low)–\(t.high)°C") }

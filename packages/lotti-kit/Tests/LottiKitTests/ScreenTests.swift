@@ -112,7 +112,7 @@ struct TodayComposerTests {
         #expect(composer.promptSummary(info) == """
             Now: Sunday 1 November 2026, 09:00
             Calendar today: 15:00–16:00: Dentist (Kastanienallee)
-            Weather: 12°C, cloudy
+            Weather now: 12°C, cloudy
             """)
     }
 }

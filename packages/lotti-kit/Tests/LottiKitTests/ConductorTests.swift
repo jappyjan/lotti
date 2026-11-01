@@ -70,7 +70,7 @@ struct ConductorTests {
         #expect(conductor.screen?.kind == .working)
         try await eventually { conductor.screen?.text == "No rain today." }
         #expect(conductor.screen?.rail?.items.map(\.title) == ["Tomorrow?", "Wind?"])
-        #expect(brain.contexts.first?.contains("Weather: 12°C, cloudy") == true)
+        #expect(brain.contexts.first?.contains("Weather now: 12°C, cloudy") == true)
 
         brain.answers["Wind?"] = Answer(sentence: "A light breeze.")
         press(.scrollDown)
