@@ -69,15 +69,15 @@ Shared JSON fixtures act as contract tests so all three stay in sync.
 
 **Short answer: most of the everyday work. Not the heavy tasks.**
 
-| Task                                                        | On-device?  | Notes                                                                                                       |
-| ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
-| Speech-to-text (dictation, push-to-talk)                    | ✅          | `SpeechAnalyzer` (iOS 26+), on-device and fast                                                              |
-| Wake word "Hey Lotti"                                       | ✅ but DIY  | No iOS API; small keyword-spotting model on the glasses mic stream. Battery is the open question (spike S4) |
-| Notification triage (show / ignore / priority)              | ✅          | Small classification task, a good fit for a ~3B model                                                       |
-| Quick replies for messages                                  | ✅          | Short generation, user tone from a few examples                                                             |
-| Choosing and filling a screen template                      | ✅          | Guided generation (`@Generable`) produces valid screens directly                                            |
-| Simple tools (timer, reminder, calendar lookup, navigation) | ✅          | Tool calling in Foundation Models                                                                           |
-| Multi-step research, mail summaries, web, anything agentic  | ❌ → Hermes | Needs a bigger model, more context and whatever tools your Hermes has                                       |
+| Task                                                        | On-device?  | Notes                                                                                                                                       |
+| ----------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Speech-to-text (dictation, push-to-talk)                    | ✅          | `SpeechAnalyzer` (iOS 26+), on-device and fast                                                                                              |
+| Wake word "Hey Lotti"                                       | ✅ but DIY  | No iOS API; small keyword-spotting model on the glasses mic stream. Battery is the open question; only built if push-to-talk feels limiting |
+| Notification triage (show / ignore / priority)              | ✅          | Small classification task, a good fit for a ~3B model                                                                                       |
+| Quick replies for messages                                  | ✅          | Short generation, user tone from a few examples                                                                                             |
+| Choosing and filling a screen template                      | ✅          | Guided generation (`@Generable`) produces valid screens directly                                                                            |
+| Simple tools (timer, reminder, calendar lookup, navigation) | ✅          | Tool calling in Foundation Models                                                                                                           |
+| Multi-step research, mail summaries, web, anything agentic  | ❌ → Hermes | Needs a bigger model, more context and whatever tools your Hermes has                                                                       |
 
 ### Which model runs locally
 
@@ -94,16 +94,16 @@ Why this shape:
 
 - **iOS 27 made the Foundation Models API model-agnostic** ("Language Model protocol", "Dynamic Profiles"). Lotti's brain is written once against this API, with tools, guided screen generation and persona. Apple's local model, a Gemma provider, PCC or even the Hermes connector can sit behind it and be swapped per task.
 - **Apple's model for everything.** In S3 it scored 25/35 against Gemma 4 E2B's 23/35. It led on screens, tool calls and replies, tied on triage and summaries, and was about twice as fast. It costs nothing in memory or setup.
-- **Gemma 4 E2B is a tested drop-in, not a dependency.** It was clearly better only at rail suggestions, which template defaults can cover. If M5's eval harness shows a task falling short, E2B can take it over through the same API. E4B doesn't fit on 8 GB iPhones.
+- **Gemma 4 E2B is a tested drop-in, not a dependency.** It was clearly better only at rail suggestions, which template defaults can cover. If real use or the eval harness shows a task falling short, E2B can take it over through the same API. E4B doesn't fit on 8 GB iPhones.
 - **Speech stays on Apple's `SpeechAnalyzer`.** Gemma's audio input is interesting (talk straight to the model), but it's heavier and not needed for v1.
 
 Known limits (from S3):
 
 - Apple's on-device context is 4K, also on iOS 27. Screens and tool calls already use 500–1,000 prompt tokens, mostly schema. Keep prompts tiny, drop tool outputs after use, and pass only the few memories relevant to the current event.
 - Write prompts as explicit rules. The ~3B model copies examples from its instructions, and only calls tools when told when to.
-- First token in 1.2–1.4 s, a full screen in ~2.4 s, and a cold first call in ~5 s. Meeting M5's 1.5 s needs streaming, prewarming and a timeout (two calls stalled for 23 s and 59 s).
+- First token in 1.2–1.4 s, a full screen in ~2.4 s, and a cold first call in ~5 s. A first screen in under 1.5 s needs streaming, prewarming and a timeout (two calls stalled for 23 s and 59 s).
 - Rail choices are the weakest output. Fill fixed choices from the template and let the model add one or two.
-- Running in the background (locked phone, BLE wake-ups) is still unmeasured. It moved to spike S7.
+- Running in the background (locked phone, BLE wake-ups) is still unmeasured. Measure it once the MVP runs all day and something drains or gets killed.
 
 **Router tiers:**
 
@@ -115,7 +115,7 @@ Known limits (from S3):
 
 What Lotti needs from Hermes, and nothing more:
 
-- **An endpoint + API key**, entered in Lotti's settings. Hermes Agent exposes an OpenAI-compatible API; spike S6 confirms the details.
+- **An endpoint + API key**, entered in Lotti's settings. Hermes Agent exposes an OpenAI-compatible API; the connector work after the MVP confirms the details.
 - **Request:** Lotti's persona prompt, the screen JSON Schema, a short description of the event (utterance, notification, location), and minimal context the user allowed.
 - **Response:** a screen (structured output, or a `show_screen` call Lotti defines on the client side), or plain text, which Lotti wraps in a `text` screen.
 - **Streaming:** while Hermes works, the glasses show a `progress`/`stream` screen; ring "back" cancels.
@@ -129,7 +129,7 @@ Main path for all five: **EU notification forwarding (`AccessoryNotifications`, 
 
 What this means in practice:
 
-- Replies only work where the messenger's iOS notification offers an inline "Reply" field. All five do or should, but S5 has to confirm each one, especially Element/Matrix.
+- Replies only work where the messenger's iOS notification offers an inline "Reply" field. All five do or should, but the MVP's first step has to confirm each one, especially Element/Matrix.
 - Lotti only sees what's in the notification: no chat history, no earlier messages. Reply suggestions have to work from that, plus whatever Lotti remembers from earlier notifications in the same chat.
 - Only one device can receive forwarded notifications. Turning it on for Lotti turns it off for an Apple Watch.
 
@@ -137,11 +137,11 @@ Per messenger:
 
 | Messenger | Notification reply (main path) | Richer access, if we ever need it (history, sending first)                                        |
 | --------- | ------------------------------ | ------------------------------------------------------------------------------------------------- |
-| iMessage  | ✅ expected, verify in S5      | None on iPhone. Only via a Mac (Messages.app automation). Not planned                             |
-| WhatsApp  | ✅ expected, verify in S5      | No personal API. Unofficial libraries risk an account ban. Not planned                            |
-| Signal    | ✅ expected, verify in S5      | `signal-cli` as a linked device, which needs a server. Later, optional                            |
-| Telegram  | ✅ expected, verify in S5      | Official client API (TDLib), works on-device. Later                                               |
-| Matrix    | ⚠️ verify Element X in S5      | Open client-server API, works on-device. Easiest full integration, and a fallback if replies fail |
+| iMessage  | ✅ expected, verify in MVP     | None on iPhone. Only via a Mac (Messages.app automation). Not planned                             |
+| WhatsApp  | ✅ expected, verify in MVP     | No personal API. Unofficial libraries risk an account ban. Not planned                            |
+| Signal    | ✅ expected, verify in MVP     | `signal-cli` as a linked device, which needs a server. Later, optional                            |
+| Telegram  | ✅ expected, verify in MVP     | Official client API (TDLib), works on-device. Later                                               |
+| Matrix    | ⚠️ verify Element X in MVP     | Open client-server API, works on-device. Easiest full integration, and a fallback if replies fail |
 
 **Starting a new message** ("Lotti, tell Mara I'm late") isn't covered by notification replies. For v1 that goes through Apple's Messages compose sheet, Shortcuts or app URL schemes, and needs a tap on the phone. True hands-free sending only works for Telegram and Matrix through their APIs.
 
@@ -157,7 +157,7 @@ The Even app's turn-by-turn navigation is the one stock feature we need to keep.
   - Unverified: everything is decoded from the app binary, and nobody has confirmed it live yet. Fallback: our own `nav` screen in containers.
   - Even's nav supports walking and cycling only; driving would need our own screen.
 - **Heading:** the native nav screen uses the glasses' compass (it sends compass events back). Outside native nav: phone compass.
-- **Battery:** navigation is location-heavy. Measure it in the navigation spike (S8).
+- **Battery:** navigation is location-heavy. Measure it when navigation is built.
 
 ## Planned repo layout
 
@@ -182,7 +182,7 @@ docs/           vision, architecture, roadmap
 | D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
 | D2  | On-device first, Hermes for escalation                                                                                                                                                  | ✅ decided ([S3](spikes/s3-brain.md)) |
 | D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                                     | ✅ decided                            |
-| D4  | Push-to-talk in v1; wake word if spike S4 shows acceptable battery cost                                                                                                                 | ✅ decided                            |
+| D4  | Push-to-talk after the MVP; wake word only if push-to-talk feels limiting (then check battery)                                                                                          | ✅ decided                            |
 | D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
 | D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                | ✅ decided                            |
 | D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |
