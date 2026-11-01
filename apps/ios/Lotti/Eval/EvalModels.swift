@@ -30,8 +30,10 @@ enum EvalModelChoice: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Gemma weights are downloaded on the phone from Hugging Face into the app's caches
-/// (not the app bundle, not git). They survive app updates; deleting the app removes them.
+/// Gemma weights live in the app's caches, never in the app bundle or git. Two ways in:
+/// - sideloaded from the Mac into `Library/Caches/models/<name>` (see docs/spikes/s3-brain.md), or
+/// - downloaded on the phone from Hugging Face on first use.
+/// They survive app updates; deleting the app removes them.
 @available(iOS 27.0, *)
 enum GemmaModels {
     static func make(_ choice: EvalModelChoice) -> MLXLanguageModel {
@@ -39,9 +41,13 @@ enum GemmaModels {
         return MLXLanguageModel(
             configuration: configuration,
             capabilities: [.guidedGeneration, .toolCalling],
-            weightsLocation: { id in weightsDirectory(id) },
+            weightsLocation: { id in sideloaded(id) ?? weightsDirectory(id) },
             load: { configuration, progress in
                 let label = choice.label
+                if let directory = sideloaded(configuration.name) {
+                    print("[Eval] loading \(label) from sideloaded \(directory.path)")
+                    return try await loadModelContainer(from: directory, using: TransformersTokenizerLoader())
+                }
                 return try await loadModelContainer(
                     from: HubDownloader(),
                     using: TransformersTokenizerLoader(),
@@ -52,6 +58,16 @@ enum GemmaModels {
                         if percent % 10 == 0 { print("[Eval] download \(label) \(percent)%") }
                     })
             })
+    }
+
+    /// `Library/Caches/models/<repo name>`, if it holds a complete model.
+    static func sideloaded(_ id: String) -> URL? {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let directory = caches.appending(path: "models/\(id.split(separator: "/").last ?? "")")
+        let complete = ["config.json", "model.safetensors", "tokenizer.json"].allSatisfy {
+            FileManager.default.fileExists(atPath: directory.appending(path: $0).path)
+        }
+        return complete ? directory : nil
     }
 
     static func weightsDirectory(_ id: String) -> URL {

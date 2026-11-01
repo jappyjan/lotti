@@ -293,7 +293,7 @@
       "task": "tool",
       "now": "Fri 23:40",
       "utterance": "Hey Lotti, walk me home",
-      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "home|zuhause|Home", "mode": "walk" } } }
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "home|zuhause|Home|Kastanienallee", "mode": "walk" } } }
     },
     {
       "id": "tool-03-next-meeting-de",

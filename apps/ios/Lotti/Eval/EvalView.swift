@@ -21,7 +21,7 @@ struct EvalView: View {
             Section("Run") {
                 Button("Run eval (all \(EvalTask.allCases.count) tasks)") { controller.runEval(choice) }
                 Button("Soak: 30 min back-to-back") { controller.runSoak(choice) }
-                Button("Background probe: 10 min, lock the phone") { controller.runBackgroundProbe(choice) }
+                Button("Background probe: 10 min, lock the phone") { controller.runBackgroundProbe([choice]) }
                 Button("Cancel", role: .destructive) { controller.cancel() }
                     .disabled(!controller.isRunning)
             }

@@ -34,10 +34,17 @@ final class EvalController {
         if let minutes = value("--soak").flatMap(Int.init) {
             runSoak(choice, minutes: minutes)
         } else if let minutes = value("--background").flatMap(Int.init) {
-            runBackgroundProbe(choice, minutes: minutes)
+            runBackgroundProbe(Self.choices(value("--probe")) ?? [choice], minutes: minutes)
         } else {
-            runEval(choice, tasks: value("--tasks").map { Set($0.split(separator: ",").compactMap { EvalTask(rawValue: String($0)) }) })
+            let tasks = value("--tasks").map { Set($0.split(separator: ",").compactMap { EvalTask(rawValue: String($0)) }) }
+            // `--then-background 10 --probe apple,gemma4-e2b`: run the eval, then the background probe.
+            let then = value("--then-background").flatMap(Int.init).map { ($0, Self.choices(value("--probe")) ?? [choice]) }
+            runEval(choice, tasks: tasks, then: then)
         }
+    }
+
+    private static func choices(_ list: String?) -> [EvalModelChoice]? {
+        list.map { $0.split(separator: ",").compactMap { l in EvalModelChoice.allCases.first { $0.label == l } } }
     }
 
     func cancel() {
@@ -45,13 +52,16 @@ final class EvalController {
         status = "Cancelling…"
     }
 
-    func runEval(_ choice: EvalModelChoice, tasks: Set<EvalTask>? = nil) {
+    func runEval(_ choice: EvalModelChoice, tasks: Set<EvalTask>? = nil, then background: (Int, [EvalModelChoice])? = nil) {
         start("Eval \(choice.label)") { [self] runner in
             let cases = runner.set.cases.filter { tasks?.contains($0.task) ?? true }
             let results = await self.withModel(choice) { model in
                 await runner.run(model, label: choice.label, cases: cases)
             }
             lastSummaries = TaskSummary.make(results ?? [])
+            if let (minutes, choices) = background {
+                await self.backgroundProbe(choices, minutes: minutes, runner: runner)
+            }
         }
     }
 
@@ -64,30 +74,50 @@ final class EvalController {
         }
     }
 
-    /// Runs a triage case every 20 s for `minutes`, logging app state, so we can see what still works
-    /// with the phone locked. Asks iOS for background time when the app leaves the foreground.
-    func runBackgroundProbe(_ choice: EvalModelChoice, minutes: Int = 10) {
-        start("Background probe \(choice.label)") { [self] runner in
-            let evalCase = runner.set.cases.first { $0.task == .triage }!
+    /// Runs a triage case on each model every 20 s for `minutes`, logging app state, so we can see
+    /// what still works with the phone locked. Asks iOS for background time when the app leaves the
+    /// foreground. At most one Gemma per probe.
+    func runBackgroundProbe(_ choices: [EvalModelChoice], minutes: Int = 10) {
+        let labels = choices.map(\.label).joined(separator: "+")
+        start("Background probe \(labels)") { [self] runner in
+            await self.backgroundProbe(choices, minutes: minutes, runner: runner)
+        }
+    }
+
+    private func backgroundProbe(_ choices: [EvalModelChoice], minutes: Int, runner: EvalRunner) async {
+        let evalCase = runner.set.cases.first { $0.task == .triage }!
+        var models: [(EvalModelChoice, any LanguageModel)] = []
+        if choices.contains(.apple) { models.append((.apple, SystemLanguageModel.default)) }
+        let loop: () async -> Void = { [self] in
             let background = BackgroundTime()
             defer { background.end() }
-            _ = await self.withModel(choice) { model in
-                let started = ContinuousClock.now
-                var n = 0
-                while !Task.isCancelled, ContinuousClock.now - started < .seconds(minutes * 60) {
-                    n += 1
-                    let state = await MainActor.run { Self.appState() }
-                    if state != "active" { await MainActor.run { background.begin() } }
+            status = "Background probe running. Lock the phone now."
+            print("[Eval] background probe ready, lock the phone")
+            let started = ContinuousClock.now
+            var n = 0
+            while !Task.isCancelled, ContinuousClock.now - started < .seconds(minutes * 60) {
+                n += 1
+                for (choice, model) in models {
+                    let state = Self.appState()
+                    if state != "active" { background.begin() }
                     let result = await runner.run(evalCase, model: model, label: choice.label)
-                    let remaining = await MainActor.run { UIApplication.shared.backgroundTimeRemaining }
+                    let remaining = UIApplication.shared.backgroundTimeRemaining
                     print(EvalLog.line("background", BackgroundSample(
                         model: choice.label, n: n, appState: state,
                         backgroundTimeRemaining: remaining.isFinite ? Int(remaining) : -1,
                         ok: result.error == nil, totalMs: result.totalMs, error: result.error,
-                        protectedData: await MainActor.run { UIApplication.shared.isProtectedDataAvailable })))
-                    try? await Task.sleep(for: .seconds(20))
+                        protectedData: UIApplication.shared.isProtectedDataAvailable)))
                 }
+                try? await Task.sleep(for: .seconds(20))
             }
+        }
+        if let gemmaChoice = choices.first(where: \.isGemma) {
+            _ = await withModel(gemmaChoice) { gemmaModel in
+                models.append((gemmaChoice, gemmaModel))
+                await loop()
+            }
+        } else {
+            await loop()
         }
     }
 
@@ -138,7 +168,7 @@ final class EvalController {
                 return nil
             }
             let loadMs = EvalRunnerTime.ms(ContinuousClock.now - clock)
-            print("[Eval] loaded \(choice.label) loadMs=\(loadMs) footprintMB=\(before)->\(memoryFootprintMB()) weights=\(GemmaModels.weightsDirectory(model.configuration.name).path)")
+            print("[Eval] loaded \(choice.label) loadMs=\(loadMs) footprintMB=\(before)->\(memoryFootprintMB()) weights=\((GemmaModels.sideloaded(model.configuration.name) ?? GemmaModels.weightsDirectory(model.configuration.name)).path)")
             status = "Running \(choice.label)…"
             return await body(model)
         }
