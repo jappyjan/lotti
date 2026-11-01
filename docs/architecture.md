@@ -81,31 +81,34 @@ Shared JSON fixtures act as contract tests so all three stay in sync.
 
 ### Which model runs locally
 
-**Proposal (D11): Apple's on-device Foundation Model by default, behind Apple's Foundation Models API, so the model can be swapped. Gemma 4 is the challenger in spike S3.**
+**Decision (D11, confirmed by [S3](spikes/s3-brain.md)): Apple's on-device Foundation Model for every task type, behind the Foundation Models `LanguageModel` API, so the model can be swapped. Gemma isn't bundled in v1.**
 
-| Option                                                | For                                                                                                                                                                                                                | Against                                                                                                                                                                                               |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Apple Foundation Model** (on-device, ~3B)           | Built into iOS: no download, no app memory, tuned for the Neural Engine, so it's light on battery and heat. Guided generation (`@Generable`) produces valid screens directly. Tool calling. Free. German supported | Small context (4K in iOS 26; reportedly larger in iOS 27, unconfirmed). Quality ceiling of a ~3B model. Apple decides the model version. Needs Apple Intelligence enabled (check EU status on iOS 27) |
-| **Gemma 4 E2B / E4B** (Google, open, Apr 2026)        | Likely better writing and multilingual quality, especially E4B. Native function calling. Native audio and image input. Runs on recent iPhones (~40–50 tok/s E2B on iPhone 17 Pro, community numbers). Apache 2.0   | 2.5–5 GB download and app memory. Speed drops sharply under sustained load (reported to ~38% of peak) → heat and battery. Runtime via LiteRT-LM or MLX (Swift support partly community)               |
-| **Other small open models** (Qwen 3, LFM2, Llama 3.2) | Very fast at 0.6–3B                                                                                                                                                                                                | Weaker at summarising and writing in your style. Only interesting as tiny helpers                                                                                                                     |
-| **Apple Private Cloud Compute** (iOS 27)              | Bigger Apple model, ~32K context, reasoning, private by design. Free for apps under 2M downloads                                                                                                                   | Not offline. A middle tier between the phone and Hermes, not a local model                                                                                                                            |
+| Option                                                | For                                                                                                                                                                                                                | Against                                                                                                                                                                                                                                        |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Apple Foundation Model** (on-device, ~3B)           | Built into iOS: no download, no app memory, tuned for the Neural Engine, so it's light on battery and heat. Guided generation (`@Generable`) produces valid screens directly. Tool calling. Free. German supported | Small context: still 4K on iOS 27 (iPhone 16, S3). Quality ceiling of a ~3B model. Apple decides the model version. Needs Apple Intelligence enabled (works in Germany on iOS 27, S3)                                                          |
+| **Gemma 4 E2B / E4B** (Google, open, Apr 2026)        | Likely better writing and multilingual quality, especially E4B. Native function calling. Native audio and image input. Runs on recent iPhones (~40–50 tok/s E2B on iPhone 17 Pro, community numbers). Apache 2.0   | S3 on iPhone 16: E2B 3.3 GB download, 2.9 GB app memory, ~2× Apple's latency (3× for tool calls); E4B 4.4 GB, killed by iOS for memory. GPU only, so likely unusable with the phone locked. Runtime: Apple's `MLXLanguageModel` (mlx-swift-lm) |
+| **Other small open models** (Qwen 3, LFM2, Llama 3.2) | Very fast at 0.6–3B                                                                                                                                                                                                | Weaker at summarising and writing in your style. Only interesting as tiny helpers                                                                                                                                                              |
+| **Apple Private Cloud Compute** (iOS 27)              | Bigger Apple model, 32K context, reasoning, private by design. Free for apps under 2M downloads; per-user daily quota                                                                                              | Not offline. Needs a managed entitlement (paid developer account). A middle tier, not a local model                                                                                                                                            |
 
 Why this shape:
 
 - **iOS 27 made the Foundation Models API model-agnostic** ("Language Model protocol", "Dynamic Profiles"). Lotti's brain is written once against this API, with tools, guided screen generation and persona. Apple's local model, a Gemma provider, PCC or even the Hermes connector can sit behind it and be swapped per task.
-- **Start with Apple's model** because it costs nothing in memory, battery or setup, and most of Lotti's work is short (triage, one-sentence summaries, rail suggestions, short proposals).
-- **Switch a task to Gemma 4 only if S3 shows Apple's model falls short**, most likely in writing replies in your style and in German summaries. Then Lotti would bundle Gemma 4 (E2B first, E4B if quality needs it) for those tasks only.
+- **Apple's model for everything.** In S3 it scored 25/35 against Gemma 4 E2B's 23/35. It led on screens, tool calls and replies, tied on triage and summaries, and was about twice as fast. It costs nothing in memory or setup.
+- **Gemma 4 E2B is a tested drop-in, not a dependency.** It was clearly better only at rail suggestions, which template defaults can cover. If M5's eval harness shows a task falling short, E2B can take it over through the same API. E4B doesn't fit on 8 GB iPhones.
 - **Speech stays on Apple's `SpeechAnalyzer`.** Gemma's audio input is interesting (talk straight to the model), but it's heavier and not needed for v1.
 
-Known limits (verify in spike S3):
+Known limits (from S3):
 
-- Apple's on-device context is small (4K in iOS 26). Keep prompts tiny, drop tool outputs after use, and pass only the few memories relevant to the current event.
-- Running in the background (locked phone, BLE wake-ups) is reported to work but needs confirming, for Apple's model and for Gemma.
+- Apple's on-device context is 4K, also on iOS 27. Screens and tool calls already use 500–1,000 prompt tokens, mostly schema. Keep prompts tiny, drop tool outputs after use, and pass only the few memories relevant to the current event.
+- Write prompts as explicit rules. The ~3B model copies examples from its instructions, and only calls tools when told when to.
+- First token in 1.2–1.4 s, a full screen in ~2.4 s, and a cold first call in ~5 s. Meeting M5's 1.5 s needs streaming, prewarming and a timeout (two calls stalled for 23 s and 59 s).
+- Rail choices are the weakest output. Fill fixed choices from the template and let the model add one or two.
+- Running in the background (locked phone, BLE wake-ups) is still unmeasured. It moved to spike S7.
 
 **Router tiers:**
 
 1. **Rules** (0 ms): deterministic stuff. Ring "back", known apps muted, do-not-disturb.
-2. **On-device model** (~0.3–1 s; Apple FM, or Gemma 4 for tasks where S3 says so): triage, quick replies, screen generation, simple tools, starting navigation.
+2. **On-device model** (first token ~1.3 s, full screen ~2.4 s; Apple FM): triage, quick replies, screen generation, simple tools, starting navigation.
 3. **Hermes connector** (seconds): anything the on-device model flags as "needs more", or the user asks for explicitly ("Lotti, dig into…").
 
 ## Hermes connector
@@ -174,16 +177,16 @@ docs/           vision, architecture, roadmap
 
 ## Decisions
 
-| #   | Decision                                                                                                                                                                 | Status                        |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                    | ✅ decided                    |
-| D2  | On-device first, Hermes for escalation                                                                                                                                   | ✅ decided (pending spike S3) |
-| D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                      | ✅ decided                    |
-| D4  | Push-to-talk in v1; wake word if spike S4 shows acceptable battery cost                                                                                                  | ✅ decided                    |
-| D5  | Template-based UI schema instead of free layout                                                                                                                          | ✅ proposed                   |
-| D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer)) | ✅ decided                    |
-| D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                          | ✅ decided                    |
-| D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                                                                     | ⏳ open, revisit after M6     |
-| D9  | Messaging main path: EU notification forwarding for all five messengers                                                                                                  | ✅ decided (pending spike S5) |
-| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                   | ✅ proposed (pending S8)      |
-| D11 | Local model: Apple Foundation Model by default behind the Foundation Models API; Gemma 4 E2B/E4B per task if S3 shows it's needed                                        | ✅ proposed (pending S3)      |
+| #   | Decision                                                                                                                                                                                | Status                                |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
+| D2  | On-device first, Hermes for escalation                                                                                                                                                  | ✅ decided ([S3](spikes/s3-brain.md)) |
+| D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                                     | ✅ decided                            |
+| D4  | Push-to-talk in v1; wake word if spike S4 shows acceptable battery cost                                                                                                                 | ✅ decided                            |
+| D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
+| D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                | ✅ decided                            |
+| D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |
+| D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                                                                                    | ⏳ open, revisit after M6             |
+| D9  | Messaging main path: EU notification forwarding for all five messengers                                                                                                                 | ✅ decided (pending spike S5)         |
+| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ proposed (pending S8)              |
+| D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |

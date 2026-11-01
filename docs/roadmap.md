@@ -22,6 +22,7 @@ Goal: answer the risky questions with throwaway prototypes. Each spike ends with
 - **S3 — On-device brain quality** `spike` `ios` `brain`
   Apple's on-device Foundation Model vs Gemma 4 E2B and E4B on a real iPhone, both behind the Foundation Models API. Tasks: triage, one-sentence summaries (German + English), rail suggestions, replies in your own style, screen generation, tool calls. Measure quality, latency, memory, battery and heat over 30 minutes of sustained use, and background behaviour. Check what iOS 27 changes (on-device context size, Private Cloud Compute).
   _Done when:_ there's a small eval set (~30 real notifications/requests) with Apple FM vs Gemma 4 vs Hermes results, a model choice per task type, and decision D11 confirmed or changed.
+  ✅ Done ([write-up](spikes/s3-brain.md)): Apple's model for all tasks, Gemma not bundled. Hermes and PCC not run (no endpoint; PCC needs a paid account). Battery/heat and locked-phone runs moved to S7.
 - **S4 — Wake word battery cost** `spike` `ios` `voice`
   Stream the glasses mic continuously, run a keyword spotter (openWakeWord / Porcupine / custom) for "Hey Lotti". Measure glasses + phone battery drain per hour against push-to-talk only. Measure false wake-ups per hour of normal conversation (German + English).
   _Done when:_ a table of battery drain and false-trigger rate exists; decision on wake word for v1.
@@ -32,7 +33,7 @@ Goal: answer the risky questions with throwaway prototypes. Each spike ends with
   Call an existing Hermes from the phone: endpoint, auth, streaming, and how to get a screen back (structured output vs a client-side `show_screen` tool). No changes to Hermes itself.
   _Done when:_ an utterance sent from the phone comes back as a valid screen shown in the simulator or on the glasses.
 - **S7 — Background life on iOS** `spike` `ios`
-  Keep BLE, mic and model working with the phone locked for hours. What gets killed and when?
+  Keep BLE, mic and model working with the phone locked for hours. What gets killed and when? Includes what S3 didn't get to: Apple's model with the phone locked, and battery and heat over 30 minutes of sustained use (`--background` / `--soak` in the eval screen, see [S3](spikes/s3-brain.md#running-the-eval)).
   _Done when:_ a 4-hour locked-phone test log exists.
 - **S8 — Navigation** `spike` `ios` `navigation`
   Drive the G2's **built-in navigation screen** (BLE sid `0x08`, decoded but untested; see architecture.md): START → BASIC_INFO with arrow ID + texts, heartbeat, ARRIVE/STOP. Capture BLE traffic from the Even app during a real walk to learn the mini/full map bitmap format. Plus MapKit walking/cycling routes in Germany, step tracking with background location, rerouting. Measure battery per hour of guidance.
@@ -99,7 +100,7 @@ _Done when:_ walk, bike and drive routes in your city are guided on the glasses 
 - Brain router: rules → on-device → Hermes connector, with a visible reason for each decision `ios` `brain`
 - On-device screen generation with guided generation `ios` `brain`
 - Phone tools for the model: time, timer, reminder, calendar, contacts, location, **start navigation** `ios` `brain`
-- Prompt and eval harness: replay recorded events against the brain, score results `shared` `brain`
+- Prompt and eval harness: replay recorded events against the brain, score results; builds on `packages/brain-eval` from S3 `shared` `brain`
 
 _Done when:_ "Hey Lotti, when's my next meeting?" and "Hey Lotti, walk me home" work offline, first screen in under 1.5 s.
 
