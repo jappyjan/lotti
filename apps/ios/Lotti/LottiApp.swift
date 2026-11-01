@@ -10,6 +10,7 @@ struct LottiApp: App {
 
     init() {
         let link = G2Link()
+        if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
         let speech = AppleSpeechRecognizer(locale: Locale(identifier: Settings.speechLanguage))
         let brain = AppleBrain()
         let conductor = Conductor(link: link, brain: brain, speech: speech, phoneMicrophone: PhoneMicrophone(),

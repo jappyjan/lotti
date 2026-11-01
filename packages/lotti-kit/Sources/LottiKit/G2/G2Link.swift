@@ -59,6 +59,8 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var imuArming = false
     @ObservationIgnored private var imuField: Int?
     @ObservationIgnored private var lastImuSample: TimeInterval?
+    /// Seconds between `[IMU]` log lines (lower it to calibrate head-up).
+    @ObservationIgnored public var imuLogInterval: TimeInterval = 1
     @ObservationIgnored private var lastImuLog: TimeInterval = 0
     @ObservationIgnored private var headUp = HeadUpDetector()
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
@@ -326,7 +328,7 @@ public final class G2Link: NSObject, GlassesLink {
         let now = ProcessInfo.processInfo.systemUptime
         lastImuSample = now
         guard headTrackingWanted else { return }
-        if now - lastImuLog >= 1 {
+        if now - lastImuLog >= imuLogInterval {
             lastImuLog = now
             let pitch = headUp.pitch(x: x, y: y, z: z).map { String(format: "%.0f°", $0) } ?? "?"
             print(String(format: "[IMU] x %.2f y %.2f z %.2f", x, y, z) + " pitch(\(headUp.config.axis)) \(pitch)")
