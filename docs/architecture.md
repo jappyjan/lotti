@@ -66,6 +66,14 @@ One schema definition feeds three consumers:
 
 Shared JSON fixtures act as contract tests so all three stay in sync.
 
+## A second layer for popups (unverified)
+
+Jan reports the official Even app draws on **two layers**: one with the content, and one above it for popups and menus. Our own notes describe a single page with up to 12 containers (see [vision.md](vision.md#constraints)), so we know one layer and nothing about a second.
+
+If the firmware exposes it, it is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page. That would also fix the layout question without giving up screen width.
+
+Where to look: MentraOS's `G2.swift` covers menu, dashboard and notification surfaces; g2-kit's `ble/docs/` documents the protobufs the Even app itself uses. If either has a second page or layer command, that settles it. Cheapest check before code: capture the BLE traffic while the official app opens a popup.
+
 ## Brain: how much can run on the phone?
 
 **Short answer: most of the everyday work. Not the heavy tasks.**
@@ -284,3 +292,4 @@ docs/           vision, architecture, roadmap
 | D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
 | D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ proposed (pending S8)              |
 | D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
+| D12 | A second display layer for popups, the way the Even app has one. Unknown whether the firmware exposes it to us: check MentraOS/g2-kit and one BLE capture of the official app first       | ⏳ open                               |
