@@ -1,6 +1,9 @@
 /// Something the glasses report on their own, without a request: a gesture, or a status change.
 public enum G2Event: Equatable, Sendable {
     case input(InputEvent)
+    /// One IMU sample (only while IMU reporting is on): gravity-normalised, so |v| ≈ 1 at rest
+    /// (MentraOS). Axis orientation on the head isn't confirmed yet.
+    case imu(x: Float, y: Float, z: Float)
     /// Anything else worth logging (app lifecycle, state change, ring status), in words.
     case info(String)
 }
@@ -22,6 +25,8 @@ public enum G2Event: Equatable, Sendable {
 public enum G2Events {
     /// sid 0x0D: device state changes (wear detect, head-up, dashboard open/close).
     public static let stateService: UInt8 = 0x0D
+    /// The sid 0x0D payload saying EvenHub (our page) is the active app again (S1 capture).
+    public static let evenHubActive: [UInt8] = [0x08, 0x01, 0x1A, 0x03, 0x08, 0xE0, 0x01]
     /// Device config Cmd 6, RING_CONNECT_INFO: the ring link between glasses and ring.
     public static let ringConnectInfo: UInt64 = 6
 
@@ -51,6 +56,11 @@ public enum G2Events {
         }
         if let sys = ProtoReader.message(event, 3) {
             let f = ProtoReader.varintFields(sys)
+            // IMU_Report_Data {1 x, 2 y, 3 z}, 32-bit floats (MentraOS `parseImuReportData`).
+            if f[1] == 8, let data = ProtoReader.message(sys, 3) {
+                let v = ProtoReader.floatFields(data)
+                return .imu(x: v[1] ?? 0, y: v[2] ?? 0, z: v[3] ?? 0)
+            }
             let source: InputEvent.Source = switch f[2] ?? 0 {
             case 1: .rightTouchpad
             case 2: .ring

@@ -6,6 +6,8 @@ public enum G2Service {
     public static let appLaunch: UInt8 = 0x01
     /// Device config: auth, arm roles, time sync.
     public static let deviceConfig: UInt8 = 0x80
+    /// Glasses settings (brightness, head-up, wear detection).
+    public static let settings: UInt8 = 0x09
     /// EvenHub: pages, text/list/image containers, heartbeat.
     public static let evenHub: UInt8 = 0xE0
 }
@@ -53,6 +55,19 @@ public enum G2Payload {
         return w.bytes
     }
 
+    // MARK: Settings (sid 0x09)
+
+    /// Switch the firmware's own head-up dashboard on or off. Lotti's today view replaces it, and
+    /// the native one takes over the display and shuts our page down (MentraOS).
+    /// `{1: set(1), 2: magic, 3: {4: headUp {1: switch}}}` (even-g2-protocol `build_head_up`).
+    public static func headUpSetting(magic: UInt64, enabled: Bool) -> [UInt8] {
+        var w = ProtoWriter()
+        w.varint(1, 1)
+        w.varint(2, magic)
+        w.message(3) { $0.message(4) { $0.varint(1, enabled ? 1 : 0) } }
+        return w.bytes
+    }
+
     // MARK: App launch (sid 0x01)
 
     /// Magic of the prelude; the glasses' ack echoes it.
@@ -88,19 +103,61 @@ public enum G2Payload {
     public static func createTextPage(
         magic: UInt64, containerID: Int, containerName: String, text: String
     ) -> [UInt8] {
+        createPage(magic: magic, boxes: [
+            G2TextBox(id: containerID, name: containerName, x: 0, y: 0, width: displayWidth,
+                      height: displayHeight, capturesEvents: true, text: text),
+        ])
+    }
+
+    /// Cmd 0, CreateStartUpPage with several text containers. Only valid once per session; use
+    /// `rebuildPage` to change the layout afterwards.
+    /// `{1: container count, 3: TextObject (repeated), 5: widget id}`
+    public static func createPage(magic: UInt64, boxes: [G2TextBox]) -> [UInt8] {
         evenHub(command: 0, magic: magic, field: 3) {
-            $0.varint(1, 1)  // container count
-            $0.message(3) {  // TextObject
-                $0.varint(1, 0)  // x
-                $0.varint(2, 0)  // y
-                $0.varint(3, displayWidth)
-                $0.varint(4, displayHeight)
-                $0.varint(9, containerID)
-                $0.string(10, containerName)
-                $0.varint(11, 1)  // capture events
-                $0.string(12, text)
-            }
+            $0.varint(1, boxes.count)
+            for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
             $0.varint(5, 10000)  // widget id, as used by every known client
+        }
+    }
+
+    /// Cmd 7, RebuildPageContainer: replace the page's containers. Same body as the create, but
+    /// in envelope field 7 and without a widget id (field 5 is a MenuObject here). The glasses
+    /// ack with Cmd 8 `{8: {1: 6 success / 7 failed}}`. Layout from even-g2-protocol
+    /// `build_rebuild_page` and MentraOS `rebuildPageMessage`.
+    public static func rebuildPage(magic: UInt64, boxes: [G2TextBox]) -> [UInt8] {
+        evenHub(command: 7, magic: magic, field: 7) {
+            $0.varint(1, boxes.count)
+            for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
+        }
+    }
+
+    /// Result code in a Cmd 8 rebuild ack: 6 = success, 7 = failed; nil if it's not a rebuild ack.
+    public static func rebuildResult(_ reply: [UInt8]) -> UInt64? {
+        guard ProtoReader.varintFields(reply)[1] == 8, let res = ProtoReader.message(reply, 8) else { return nil }
+        return ProtoReader.varintFields(res)[1] ?? 0
+    }
+
+    /// TextContainerProperty `{1 x, 2 y, 3 w, 4 h, 9 id, 10 name, 11 capture events, 12 text}`.
+    /// Fields 5–8 (border, padding) are left out, as in the hardware-confirmed builders.
+    private static func textObject(_ box: G2TextBox, into w: inout ProtoWriter) {
+        w.varint(1, box.x)
+        w.varint(2, box.y)
+        w.varint(3, box.width)
+        w.varint(4, box.height)
+        w.varint(9, box.id)
+        w.string(10, box.name)
+        if box.capturesEvents { w.varint(11, 1) }
+        w.string(12, box.text)
+    }
+
+    /// Cmd 19, IMU control: `{1: enable, 2: report pace}` in envelope field 20 (MentraOS, found by
+    /// brute force on hardware) or 22 (even-g2-protocol). The pace is a code from 100 to 1000 in
+    /// steps of 100, not Hz, and is only sent when enabling. Reports then arrive as Sys events of
+    /// type 8 (see `G2Events`). Needs a live EvenHub page.
+    public static func imuControl(magic: UInt64, enable: Bool, pace: Int = 500, field: Int = 20) -> [UInt8] {
+        evenHub(command: 19, magic: magic, field: field) {
+            $0.varint(1, enable ? 1 : 0)
+            if enable { $0.varint(2, pace) }
         }
     }
 

@@ -69,13 +69,25 @@ enum ProtoReader {
         return found
     }
 
+    /// First value of each 32-bit fixed field (wire type 5), read as a little-endian float.
+    static func floatFields(_ bytes: [UInt8]) -> [Int: Float] {
+        var result: [Int: Float] = [:]
+        walk(bytes, fixed32: { field, bits in
+            if result[field] == nil { result[field] = Float(bitPattern: bits) }
+        }) { _, _, _ in }
+        return result
+    }
+
     static func string(_ bytes: [UInt8], _ field: Int) -> String? {
         message(bytes, field).map { String(decoding: $0, as: UTF8.self) }
     }
 
     /// Calls `visit` for every field: varints with their value, length-delimited fields with
-    /// their bytes. Fixed-width fields are skipped. Stops at the first malformed byte.
-    private static func walk(_ bytes: [UInt8], _ visit: (Int, UInt64?, [UInt8]?) -> Void) {
+    /// their bytes. 64-bit fields are skipped, 32-bit ones go to `fixed32` if given. Stops at the
+    /// first malformed byte.
+    private static func walk(
+        _ bytes: [UInt8], fixed32: ((Int, UInt32) -> Void)? = nil, _ visit: (Int, UInt64?, [UInt8]?) -> Void
+    ) {
         var i = 0
         while i < bytes.count {
             guard let key = readVarint(bytes, &i) else { return }
@@ -90,7 +102,11 @@ enum ProtoReader {
                 else { return }
                 visit(field, nil, Array(bytes[i..<i + len]))
                 i += len
-            case 5: i += 4
+            case 5:
+                guard i + 4 <= bytes.count else { return }
+                let bits = (0..<4).reduce(UInt32(0)) { $0 | UInt32(bytes[i + $1]) << (8 * $1) }
+                fixed32?(field, bits)
+                i += 4
             default: return
             }
         }
