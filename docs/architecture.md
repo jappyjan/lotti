@@ -66,13 +66,15 @@ One schema definition feeds three consumers:
 
 Shared JSON fixtures act as contract tests so all three stay in sync.
 
-## A second layer for popups (unverified)
+## A second layer for popups (confirmed model, unmapped command)
 
-Jan reports the official Even app draws on **two layers**: one with the content, and one above it for popups and menus. Our own notes describe a single page with up to 12 containers (see [vision.md](vision.md#constraints)), so we know one layer and nothing about a second.
+The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) separates two planes: **background** content (`DASHBOARD` 1, `NAVIGATION` 8, `EVENHUB` 224) and **foreground** popups (`MEUN` 3, `NOTIFICATION` 4, `EVEN_AI` 7, `SYSTEM_ALERT` 33, `SYSTEM_CLOSE` 34). So the Even app really does draw content below and popups above. See [apk-recon](spikes/apk-recon.md).
 
-If the firmware exposes it, it is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page. That would also fix the layout question without giving up screen width.
+What we still don't have is the EvenHub `Cmd` that spawns a foreground page above the running background one — g2-kit's notes say the notification/animation/widget-binding commands are unmapped.
 
-Where to look: MentraOS's `G2.swift` covers menu, dashboard and notification surfaces; g2-kit's `ble/docs/` documents the protobufs the Even app itself uses. If either has a second page or layer command, that settles it. Cheapest check before code: capture the BLE traffic while the official app opens a popup.
+If the spawn command exists, the foreground layer is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
+
+Cheapest check before code: capture the BLE traffic while the official app opens a popup.
 
 ## Brain: how much can run on the phone?
 
@@ -257,7 +259,7 @@ The Even app's turn-by-turn navigation is the one stock feature we need to keep.
 - **Guidance:** iOS has no turn-by-turn API for third-party apps, so Lotti tracks progress itself: background location, distance to the next step, announce at fixed distances, reroute when off-route.
 - **On the glasses: use the firmware's built-in navigation screen.** The G2 has a native navigation mini-app on its own BLE service (sid `0x08`, `g2.navigation` protobuf, decoded from the Even app; see [g2-kit](https://github.com/Commute773/g2-kit), [even-g2-protocol `apps/navigation.py`](https://github.com/ithinkthisiscool/even-g2-protocol)). The phone sends an arrow ID (1–35: turns, U-turns, roundabouts, forks…) plus short text fields (distance, road, time, remaining distance, ETA, speed), and the firmware lays out the screen. The phone sends maps (mini map and full map) as bitmaps. The firmware handles the heading-up rotation and the compass, and reports view changes and exit back to the phone. This is what Even's own app uses, so we get Even's layout without drawing it ourselves.
   - Plan: arrow and text first; maps once their format is known (capture BLE traffic from the Even app during a real walk).
-  - Unverified: everything is decoded from the app binary, and nobody has confirmed it live yet. Fallback: our own `nav` screen in containers.
+  - Decoded: the `g2.navigation` proto is complete (arrow ID, text fields, mini/max map bitmap streaming, compass events); see [apk-recon](spikes/apk-recon.md). The Even app itself routes with Mapbox and streams the arrow + bitmaps to the glasses, confirming the approach. Nobody has confirmed it live on our side yet; fallback: our own `nav` screen in containers.
   - Even's nav supports walking and cycling only; driving would need our own screen.
 - **Heading:** the native nav screen uses the glasses' compass (it sends compass events back). Outside native nav: phone compass.
 - **Battery:** navigation is location-heavy. Measure it when navigation is built.
@@ -293,4 +295,4 @@ docs/           vision, architecture, roadmap
 | D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
 | D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ proposed (pending S8)              |
 | D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
-| D12 | A second display layer for popups, the way the Even app has one. Unknown whether the firmware exposes it to us: check MentraOS/g2-kit and one BLE capture of the official app first       | ⏳ open                               |
+| D12 | A second display layer for popups. The firmware's service table splits background (content) from foreground (popup), confirmed via `g2.service_id_def.SID`. What's left is the EvenHub `Cmd` that spawns a foreground page ([apk-recon](spikes/apk-recon.md)) | ⏳ open (spawn Cmd)              |
