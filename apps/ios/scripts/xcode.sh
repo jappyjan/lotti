@@ -3,7 +3,8 @@
 #   xcode.sh build        build for the iOS Simulator, unsigned
 #   xcode.sh test         run unit tests on an available iPhone simulator
 #   xcode.sh run-device   build, install and launch on a connected iPhone, streaming its console
-#                         (set LOTTI_DEVICE to a device id to pick one; default: first paired iPhone)
+#                         (set LOTTI_DEVICE to a device id to pick one; default: first paired iPhone;
+#                         extra arguments go to the app, e.g. `run-device --eval apple`)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,7 +25,7 @@ case "${1:-}" in
     [[ -n "$device" ]] || { echo "No paired iPhone found. Connect it and trust this Mac." >&2; exit 1; }
     xcodebuild build "${COMMON[@]}" -configuration Debug -destination "id=$device" -allowProvisioningUpdates -quiet
     xcrun devicectl device install app --device "$device" "$DERIVED/Build/Products/Debug-iphoneos/Lotti.app"
-    xcrun devicectl device process launch --device "$device" --console --terminate-existing de.janjaap.lotti
+    xcrun devicectl device process launch --device "$device" --console --terminate-existing de.janjaap.lotti "${@:2}"
     ;;
   *)
     echo "usage: $0 build|test|run-device" >&2

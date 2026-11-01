@@ -1,0 +1,3 @@
+[Eval] pcc availability=available
+Fatal error: Missing entitlement: com.apple.developer.private-cloud-compute
+To develop with PCC you must meet certain eligibility requirements. To learn more and request access to the managed entitlement, sign into your Developer account and complete the entitlement request form.

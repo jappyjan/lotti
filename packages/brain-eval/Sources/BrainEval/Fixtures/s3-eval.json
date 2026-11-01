@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "about": "Spike S3 eval set: real-looking notifications and requests for Lotti's everyday brain tasks. People, messages and style samples are made up. Expectations are deliberately loose; outputs are also graded by hand.",
+  "user": {
+    "name": "Jan",
+    "city": "Berlin",
+    "style": {
+      "Mara": [
+        "bin in 10 min da",
+        "klar, bring ich mit",
+        "oh nee 😅 sorry, schaffs heute nicht",
+        "jaa gerne! wann?"
+      ],
+      "Mama": [
+        "Hallo Mama, ja passt gut. Ich ruf dich morgen an. Hab dich lieb",
+        "Alles gut hier, viel Arbeit. Kuss",
+        "Klar hol ich euch ab, sagt Bescheid wann der Zug da ist"
+      ],
+      "Ben": [
+        "Sounds good, I'll push it to 15:30.",
+        "On it, give me 20 min.",
+        "Can't make it today, tomorrow 10 works?"
+      ],
+      "Lea": [
+        "ja gerne, 12:30 passt",
+        "danke dir! 🙏",
+        "bin gleich da, noch kurz im call"
+      ],
+      "Hausverwaltung": [
+        "Sehr geehrte Damen und Herren, vielen Dank für die Information. Ich bin an dem Tag zu Hause. Mit freundlichen Grüßen, Jan Jaap"
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "triage-01-mara-pizza",
+      "task": "triage",
+      "now": "Fri 19:40",
+      "event": { "app": "WhatsApp", "from": "Mara", "text": "Kommst du noch um 8? Wir bestellen gleich Pizza 🍕" },
+      "memory": ["Mara is a close friend. Jan is invited to her place tonight at 20:00."],
+      "expect": { "priority": "normal", "alsoOK": ["urgent"] }
+    },
+    {
+      "id": "triage-02-newsletter",
+      "task": "triage",
+      "now": "Tue 10:12",
+      "event": { "app": "Mail", "from": "Zalando", "text": "Nur heute: -30 % auf fast alles. Jetzt entdecken!" },
+      "memory": [],
+      "expect": { "priority": "quiet" }
+    },
+    {
+      "id": "triage-03-mum-urgent",
+      "task": "triage",
+      "now": "Wed 14:05",
+      "event": { "app": "Messages", "from": "Mama", "text": "Ruf mich bitte gleich an, es ist wegen Opa." },
+      "memory": ["Always let Mama through."],
+      "expect": { "priority": "urgent" }
+    },
+    {
+      "id": "triage-04-volleyball-muted",
+      "task": "triage",
+      "now": "Sat 11:30",
+      "event": { "app": "WhatsApp", "from": "Volleyball Sonntag (group)", "text": "Tim: Wer bringt morgen den Ball mit?" },
+      "memory": ["Jan said: never bother me with the volleyball group."],
+      "expect": { "priority": "quiet" }
+    },
+    {
+      "id": "triage-05-dhl-packstation",
+      "task": "triage",
+      "now": "Thu 16:20",
+      "event": { "app": "DHL", "from": "DHL", "text": "Ihre Sendung konnte nicht zugestellt werden und liegt bis morgen 18:00 in der Packstation 142 für Sie bereit." },
+      "memory": [],
+      "expect": { "priority": "normal" }
+    },
+    {
+      "id": "triage-06-prod-down-after-hours",
+      "task": "triage",
+      "now": "Tue 21:30",
+      "event": { "app": "Slack", "from": "Ben (#ops)", "text": "@jan prod is down, checkout returns 500s. Can you take a look asap?" },
+      "memory": ["Work chats are quiet after 19:00 unless it's urgent.", "Ben is Jan's teammate."],
+      "expect": { "priority": "urgent" }
+    },
+    {
+      "id": "triage-07-work-chitchat-evening",
+      "task": "triage",
+      "now": "Tue 20:15",
+      "event": { "app": "Slack", "from": "Lea", "text": "nice slides today 👍" },
+      "memory": ["Work chats are quiet after 19:00 unless it's urgent."],
+      "expect": { "priority": "quiet" }
+    },
+    {
+      "id": "triage-08-card-payment",
+      "task": "triage",
+      "now": "Mon 03:12",
+      "event": { "app": "N26", "from": "N26", "text": "Kartenzahlung über 1.249,00 € bei ELECTRO-SHOP-ONLINE genehmigt." },
+      "memory": [],
+      "expect": { "priority": "urgent", "alsoOK": ["normal"] }
+    },
+    {
+      "id": "triage-09-news-push",
+      "task": "triage",
+      "now": "Thu 08:40",
+      "event": { "app": "Telegram", "from": "Tagesschau (channel)", "text": "Bundestag beschließt Haushalt 2027 – die wichtigsten Punkte im Überblick" },
+      "memory": [],
+      "expect": { "priority": "quiet", "alsoOK": ["normal"] }
+    },
+    {
+      "id": "triage-10-calendar-soon",
+      "task": "triage",
+      "now": "Wed 09:45",
+      "event": { "app": "Calendar", "from": "Calendar", "text": "Zahnarzt Dr. Kühn in 15 Minuten, Kastanienallee 30" },
+      "memory": [],
+      "expect": { "priority": "normal", "alsoOK": ["urgent"] }
+    },
+    {
+      "id": "summary-01-de-address",
+      "task": "summary",
+      "language": "de",
+      "now": "Fri 19:10",
+      "event": { "app": "WhatsApp", "from": "Mara", "text": "Hey! Planänderung: wir sind jetzt bei Lisa statt bei mir, Schönhauser Allee 12, 3. Stock, klingel bei Weber. Bring gern was zu trinken mit, Pizza ist bestellt 🍕" },
+      "expect": { "mentions": ["Lisa", "Schönhauser", "trink|Getränk"], "maxWords": 25 }
+    },
+    {
+      "id": "summary-02-de-mum-train",
+      "task": "summary",
+      "language": "de",
+      "now": "Thu 12:30",
+      "event": { "app": "Messages", "from": "Mama", "text": "Hallo mein Schatz, Papa und ich kommen am Samstag doch erst um 15 Uhr an, der Zug wurde verschoben. Kannst du uns am Hauptbahnhof abholen? Kuss Mama" },
+      "expect": { "mentions": ["Samstag", "15", "abhol|Hauptbahnhof"], "maxWords": 25 }
+    },
+    {
+      "id": "summary-03-en-deck",
+      "task": "summary",
+      "language": "en",
+      "now": "Mon 11:05",
+      "event": { "app": "Slack", "from": "Ben", "text": "Hey, the client moved the review to Thursday 10am. I need the deck by Wednesday EOD – can you add the Q3 numbers?" },
+      "expect": { "mentions": ["Thursday", "deck", "Wednesday", "Q3"], "maxWords": 25 }
+    },
+    {
+      "id": "summary-04-en-flight",
+      "task": "summary",
+      "language": "en",
+      "now": "Fri 15:50",
+      "event": { "app": "Lufthansa", "from": "Lufthansa", "text": "Your flight LH 2034 to Munich on 14 Nov is delayed. New departure 18:45 from gate B12. We apologise for the inconvenience." },
+      "expect": { "mentions": ["delay", "18:45", "B12"], "maxWords": 25 }
+    },
+    {
+      "id": "summary-05-de-to-en-training",
+      "task": "summary",
+      "language": "en",
+      "now": "Sat 18:00",
+      "event": { "app": "WhatsApp", "from": "Kai (Lauftreff)", "text": "Leute, das Training am Sonntag fällt aus, die Halle ist gesperrt. Nächste Woche wieder ganz normal!" },
+      "expect": { "mentions": ["Sunday", "cancel|off|not happening|called off"], "maxWords": 25 }
+    },
+    {
+      "id": "summary-06-en-to-de-pr",
+      "task": "summary",
+      "language": "de",
+      "now": "Tue 16:40",
+      "event": { "app": "GitHub", "from": "GitHub", "text": "lea-schmidt approved your pull request #42 \"Retry BLE reconnect\" and left 2 comments." },
+      "expect": { "mentions": ["Lea", "42|Pull|PR", "Kommentar"], "maxWords": 25 }
+    },
+    {
+      "id": "rail-01-mara-coming",
+      "task": "rail",
+      "language": "de",
+      "now": "Fri 19:40",
+      "event": { "app": "WhatsApp", "from": "Mara", "text": "Kommst du noch um 8? Wir bestellen gleich Pizza 🍕" },
+      "expect": { "mentionsAny": ["unterwegs|komme|bin gleich|bin da|ja", "spät|später|verspät|schaff"] }
+    },
+    {
+      "id": "rail-02-ben-move-1on1",
+      "task": "rail",
+      "language": "en",
+      "now": "Mon 13:10",
+      "event": { "app": "Slack", "from": "Ben", "text": "Can we move our 1:1 to 16:00 today?" },
+      "expect": { "mentionsAny": ["yes|sure|works|ok|fine|sounds good|agree|confirm", "no|can't|cannot|other|later|tomorrow"] }
+    },
+    {
+      "id": "rail-03-mum-call",
+      "task": "rail",
+      "language": "de",
+      "now": "Sun 17:00",
+      "event": { "app": "Messages", "from": "Mama", "text": "Ruf mich an, wenn du Zeit hast 😘" },
+      "expect": { "mentionsAny": ["ruf|anruf|call|mach ich", "später|abend|morgen|gleich"] }
+    },
+    {
+      "id": "rail-04-dhl-no-reply",
+      "task": "rail",
+      "language": "de",
+      "now": "Thu 16:20",
+      "event": { "app": "DHL", "from": "DHL", "text": "Ihre Sendung konnte nicht zugestellt werden und liegt bis morgen 18:00 in der Packstation 142 für Sie bereit." },
+      "expect": { "mentionsAny": ["erinner|später|weg|route|hin|navig|merk"] }
+    },
+    {
+      "id": "reply-01-mara-late-margherita",
+      "task": "reply",
+      "language": "de",
+      "now": "Fri 19:52",
+      "event": { "app": "WhatsApp", "from": "Mara", "text": "Kommst du noch um 8? Wir bestellen gleich Pizza 🍕" },
+      "intent": "tell her I'm ten minutes late, and I want a margherita",
+      "expect": { "mentions": ["10|zehn", "margherita"], "avoid": ["Lotti", "🦝", "Liebe Mara", "Mit freundlichen"], "maxWords": 20 }
+    },
+    {
+      "id": "reply-02-mum-pickup",
+      "task": "reply",
+      "language": "de",
+      "now": "Thu 12:35",
+      "event": { "app": "Messages", "from": "Mama", "text": "Hallo mein Schatz, Papa und ich kommen am Samstag doch erst um 15 Uhr an. Kannst du uns am Hauptbahnhof abholen? Kuss Mama" },
+      "intent": "yes, I'll pick them up at 3 at the main station",
+      "expect": { "mentions": ["15|drei", "abhol|hol"], "avoid": ["Lotti", "🦝", "Sie "], "maxWords": 30 }
+    },
+    {
+      "id": "reply-03-ben-deck",
+      "task": "reply",
+      "language": "en",
+      "now": "Mon 11:10",
+      "event": { "app": "Slack", "from": "Ben", "text": "Hey, the client moved the review to Thursday 10am. I need the deck by Wednesday EOD – can you add the Q3 numbers?" },
+      "intent": "sure, deck by Wednesday is fine and I'll add Q3",
+      "expect": { "mentions": ["Wednesday", "Q3"], "avoid": ["Lotti", "🦝", "Dear Ben"], "maxWords": 25 }
+    },
+    {
+      "id": "reply-04-mara-cancel",
+      "task": "reply",
+      "language": "de",
+      "now": "Wed 17:30",
+      "event": { "app": "WhatsApp", "from": "Mara", "text": "Kino heute um 20:30? 🎬" },
+      "intent": "can't today, sorry, how about next week",
+      "expect": { "mentions": ["nächste Woche|nächster Woche|naechste"], "avoid": ["Lotti", "🦝", "Liebe Mara"], "maxWords": 20 }
+    },
+    {
+      "id": "reply-05-landlord-formal",
+      "task": "reply",
+      "language": "de",
+      "now": "Mon 09:15",
+      "event": { "app": "Mail", "from": "Hausverwaltung", "text": "Sehr geehrter Herr Jaap, am 12.11. wird zwischen 8 und 12 Uhr der Wasserzähler in Ihrer Wohnung getauscht. Bitte ermöglichen Sie dem Techniker den Zugang." },
+      "intent": "ok, I'm home that morning",
+      "expect": { "mentions": ["12.11|zu Hause|zuhause|da"], "avoid": ["Lotti", "🦝", " du ", "dir "], "maxWords": 60 }
+    },
+    {
+      "id": "screen-01-weather",
+      "task": "screen",
+      "now": "Fri 17:00",
+      "utterance": "What's the weather like tonight?",
+      "context": ["Weather Berlin: now 14°C, cloudy. Rain from 21:00, 8°C at midnight."],
+      "expect": { "templates": ["card", "lottiSays"], "mentions": ["21|rain|Regen"] }
+    },
+    {
+      "id": "screen-02-three-new",
+      "task": "screen",
+      "now": "Fri 19:41",
+      "utterance": "(three notifications arrived while Jan was cycling)",
+      "context": [
+        "WhatsApp, Mara: Kommst du noch um 8? Wir bestellen gleich Pizza",
+        "Messages, Mama: Denk an Omas Geburtstag morgen!",
+        "Mail, Zalando: Nur heute -30 %"
+      ],
+      "expect": { "templates": ["lottiSays", "list"], "mentions": ["Mara"] }
+    },
+    {
+      "id": "screen-03-propose-reply",
+      "task": "screen",
+      "now": "Fri 19:42",
+      "utterance": "tell Mara I'm on my way",
+      "context": ["Last message from Mara (WhatsApp): Kommst du noch um 8?", "Jan writes to Mara in short lowercase German."],
+      "expect": { "templates": ["proposal"], "mentions": ["Mara"] }
+    },
+    {
+      "id": "screen-04-original",
+      "task": "screen",
+      "now": "Thu 12:33",
+      "utterance": "what did she write exactly?",
+      "context": ["On screen: Lotti's summary of a message from Mama, 12:30: Hallo mein Schatz, Papa und ich kommen am Samstag doch erst um 15 Uhr an. Kannst du uns am Hauptbahnhof abholen? Kuss Mama"],
+      "expect": { "templates": ["original"], "mentions": ["Hauptbahnhof"] }
+    },
+    {
+      "id": "screen-05-rest-of-today",
+      "task": "screen",
+      "now": "Wed 13:00",
+      "utterance": "what's left today?",
+      "context": ["Calendar today: 15:30 Standup with Ben (Room 2); 17:00 Dentist, Kastanienallee 30; 20:00 Dinner at Mara's"],
+      "expect": { "templates": ["list"], "mentions": ["15:30", "17:00|Dentist|Zahnarzt", "20:00|Mara"] }
+    },
+    {
+      "id": "tool-01-timer",
+      "task": "tool",
+      "now": "Sun 18:30",
+      "utterance": "Set a timer for ten minutes for the pasta",
+      "expect": { "tool": { "name": "set_timer", "args": { "minutes": "10" } } }
+    },
+    {
+      "id": "tool-02-walk-home",
+      "task": "tool",
+      "now": "Fri 23:40",
+      "utterance": "Hey Lotti, walk me home",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "home|zuhause|Home|Kastanienallee", "mode": "walk" } } }
+    },
+    {
+      "id": "tool-03-next-meeting-de",
+      "task": "tool",
+      "now": "Wed 13:00",
+      "utterance": "Wann ist mein nächstes Meeting?",
+      "expect": { "tool": { "name": "next_meeting", "args": {} }, "mentions": ["15:30"] }
+    },
+    {
+      "id": "tool-04-bike-mauerpark",
+      "task": "tool",
+      "now": "Sat 10:15",
+      "utterance": "Bring mich mit dem Rad zum Mauerpark",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "Mauerpark", "mode": "bike" } } }
+    },
+    {
+      "id": "tool-05-no-tool-smalltalk",
+      "task": "tool",
+      "now": "Sat 10:20",
+      "utterance": "How are you today, Lotti?",
+      "expect": { "noTool": true }
+    }
+  ]
+}

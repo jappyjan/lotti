@@ -10,6 +10,7 @@ struct LottiApp: App {
             ContentView(model: model)
                 .task { await model.launch() }
                 .task { await model.receiveInputs() }
+                .task { await BrainProbe.logAvailability() }
         }
     }
 }
