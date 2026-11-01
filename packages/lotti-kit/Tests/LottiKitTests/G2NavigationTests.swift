@@ -66,21 +66,23 @@ struct G2NavigationTests {
 
     // MARK: Map bitmaps
 
-    @Test func miniMapCarriesTheBitmapAndRotation() {
+    @Test func miniMapFragmentSharesTheMaxMapShape() {
         let data: [UInt8] = [0xF0, 0x0F, 0xFF]
-        let payload = G2Navigation.miniMap(magic: 5, data: data, rotationAngle: 90, border: 1)
+        let payload = G2Navigation.miniMapFragment(
+            magic: 5, sessionID: 3, totalSize: 100, compressMode: 1,
+            index: 2, packetSize: 40, data: data)
         var expected = ProtoWriter()
         expected.varint(1, 8)
         expected.varint(2, 5)
         expected.message(6) {
             $0.varint(1, 3)
-            $0.varint(2, 0)
-            $0.bytes(3, data)
-            $0.varint(5, 90)
-            $0.varint(6, 1)
+            $0.varint(2, 100)
+            $0.varint(3, 1)
+            $0.varint(4, 2)
+            $0.varint(5, 40)
+            $0.bytes(6, data)
         }
         #expect(payload == expected.bytes)
-        #expect(G2Navigation.miniMap(magic: 5, data: data) == G2Navigation.miniMap(magic: 5, data: data, size: 3))
     }
 
     @Test func maxMapFragmentsShareTheSession() {

@@ -56,7 +56,7 @@ Rough order, to be re-sorted by what real use shows:
 2. **Put it on** `ios` `design` `brain`: wear detection. When the glasses are picked up, Lotti greets and says what happened and what's coming, instead of waiting for a look-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
-5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app. **Built: arrow + text** (START, heartbeat, BASIC_INFO cards, rerouting, arrival, walk↔bike switch, exit handling; `NavigationSession` + `StepTracker` in LottiKit, `start_navigation` action in the app). Still open: confirming the session live on the glasses, mini/full map bitmaps (planned: `MKMapSnapshotter` — no HERE), launching from the glasses' menu, the share-sheet entry point.
+5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app. **Built: arrow + text** (START, heartbeat, BASIC_INFO cards, rerouting, arrival, walk↔bike switch, exit handling; `NavigationSession` + `StepTracker` in LottiKit, `start_navigation` action in the app) **and map streaming to the Even app's format** (4 bpp BMP road network, LZ4/raw, fragmented `mini_map_msg`/`max_map_msg`; `NavMapBmp` + `NavMapRenderer`). Still open: confirming the maps live on the glasses, drawing the road network (needs a road source — the route alone renders for now), launching from the glasses' menu, the share-sheet entry point.
 6. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
 7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
 8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
@@ -66,7 +66,7 @@ Rough order, to be re-sorted by what real use shows:
 
 - Full Telegram (TDLib) and Matrix API integrations: history, hands-free sending
 - Relay server so Hermes can push to the glasses unprompted (decision D8)
-- Mini map image on the navigation screen; offline routing (Valhalla)
+- Road network on the navigation map (OSM vector tiles or similar); offline routing (Valhalla)
 - Live captions and translation
 - Media controls from the ring. iOS has no public way for an app to control other apps' playback (iOS 27's `NowPlaying` covers only the app's own media; no EU accessory feature for media; the G2 firmware has no media service). Possible: Apple Music (`MPMusicPlayerController.systemMusicPlayer`), Spotify (App Remote SDK), and play/pause for any app by briefly taking the audio session. Shortcuts can't be run from the background. See design.md, Media
 - Proactive briefings: morning, before meetings, on arrival

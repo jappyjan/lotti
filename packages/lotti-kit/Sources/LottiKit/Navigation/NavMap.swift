@@ -35,19 +35,20 @@ public struct NavMapRequest: Equatable, Sendable {
     }
 }
 
-/// A map rendered for the navigation screen: the G2 lens' native image format — 4 bpp
-/// grayscale, row-major, two pixels per byte (high nibble first), 0 = off, 15 = brightest
-/// (g2-kit `ble/docs/images.md`).
+/// A map rendered for the navigation screen, as RGBA (`width * height * 4` bytes, row-major,
+/// top row first). `NavMapBmp.encode` turns it into the lens' native format: a 4 bpp BMP of the
+/// road network — green roads, the active route red, everything else transparent (the Even
+/// app's `encodeRoadNetworkBmp4`).
 public struct NavMapBitmap: Sendable {
     public var width: Int
     public var height: Int
-    /// `(width * height + 1) / 2` bytes.
-    public var pixels: [UInt8]
+    /// `width * height * 4` bytes, RGBA, row-major, top row first.
+    public var rgba: [UInt8]
 
-    public init(width: Int, height: Int, pixels: [UInt8]) {
+    public init(width: Int, height: Int, rgba: [UInt8]) {
         self.width = width
         self.height = height
-        self.pixels = pixels
+        self.rgba = rgba
     }
 }
 

@@ -135,20 +135,22 @@ public enum G2Navigation {
         }
     }
 
-    /// MINI_MAP (cmd 8): the small map next to the arrow. One message carries the whole bitmap.
-    /// `{1: 8, 2: magic, 6: {1 mapSize, 2 compressMode, 3 mapRawData, 5 rotationAngle, 6 border}}`.
-    /// The bitmap is 4 bpp grayscale, row-major, two pixels per byte (see `NavMapBitmap`);
-    /// `rotationAngle` is the heading the firmware rotates the north-up map by.
-    public static func miniMap(
-        magic: UInt64, data: [UInt8], size: UInt64? = nil,
-        compressMode: UInt64 = 0, rotationAngle: UInt64 = 0, border: UInt64 = 0
+    /// MINI_MAP (cmd 8): the small map next to the arrow. One message per fragment; the whole
+    /// image streams like the max map. `{1: 8, 2: magic, 6: {1 mapSessionId, 2 mapTotalSize,
+    /// 3 compressMode, 4 mapFragmentIndex, 5 mapFragmentPacketSize, 6 mapRawData, 7 errorCode}}`
+    /// (the Even app's `mini_map_msg`; same shape as `max_map_msg`, from the app's generated
+    /// protobuf code, not g2-kit's stale proto).
+    public static func miniMapFragment(
+        magic: UInt64, sessionID: UInt64, totalSize: UInt64,
+        compressMode: UInt64 = 0, index: UInt64, packetSize: UInt64, data: [UInt8]
     ) -> [UInt8] {
         package(cmd: cmdMiniMap, magic: magic, field: 6) { w in
-            w.varint(1, size ?? UInt64(data.count))
-            w.varint(2, compressMode)
-            w.bytes(3, data)
-            if rotationAngle > 0 { w.varint(5, rotationAngle) }
-            if border > 0 { w.varint(6, border) }
+            w.varint(1, sessionID)
+            w.varint(2, totalSize)
+            w.varint(3, compressMode)
+            w.varint(4, index)
+            w.varint(5, packetSize)
+            w.bytes(6, data)
         }
     }
 

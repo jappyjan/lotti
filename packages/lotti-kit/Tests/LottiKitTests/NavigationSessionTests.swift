@@ -174,7 +174,7 @@ struct NavigationSessionTests {
 
     struct FakeMapProvider: NavMapProviding {
         func bitmap(for request: NavMapRequest) async -> NavMapBitmap? {
-            NavMapBitmap(width: 4, height: 4, pixels: [UInt8](repeating: 0x0F, count: 8))
+            NavMapBitmap(width: 4, height: 4, rgba: [UInt8](repeating: 0, count: 64))
         }
     }
 

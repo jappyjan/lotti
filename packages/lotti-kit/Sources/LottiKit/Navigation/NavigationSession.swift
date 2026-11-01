@@ -37,8 +37,10 @@ public final class NavigationSession {
     private var mapView: NavMapRequest.Kind?
     private var lastMapSent: Date = .distantPast
     private var mapSending = false
-    /// Each full-map frame gets a new session id; bump by more than 1 after trouble (g2-kit).
-    private var mapSessionID: UInt64 = 1
+    /// Each frame (mini and full separately) gets a new session id for its fragments.
+    private var mapSessionIDs: [NavMapRequest.Kind: UInt64] = [:]
+    /// Byte size of one `mapRawData` chunk; the transport splits each message further on BLE.
+    public var mapFragmentSize = 4096
 
     /// Seconds between heartbeats; the screen ends the session if none lands for 30 s.
     public var heartbeatInterval: Duration = .seconds(5)
@@ -219,28 +221,30 @@ public final class NavigationSession {
             print("[Nav] no \(kind) map bitmap")
             return
         }
-        switch kind {
-        case .mini:
-            let rotation = request.heading.map { UInt64($0.rounded()) } ?? 0
-            let payload = G2Navigation.miniMap(magic: nextMagic(), data: bitmap.pixels,
-                                               rotationAngle: rotation, border: 1)
-            await link.sendNavigation(payload)
-            print("[Nav] mini map sent (\(bitmap.width)×\(bitmap.height), \(bitmap.pixels.count) bytes)")
-        case .full:
-            let chunkSize = 4096
-            let chunks = stride(from: 0, to: bitmap.pixels.count, by: chunkSize).map {
-                Array(bitmap.pixels[$0..<min($0 + chunkSize, bitmap.pixels.count)])
-            }
-            let sessionID = mapSessionID
-            mapSessionID += 2  // g2-kit: larger steps keep a failed session from sticking
-            for (index, chunk) in chunks.enumerated() {
-                let payload = G2Navigation.maxMapFragment(
-                    magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(bitmap.pixels.count),
-                    index: UInt64(index), packetSize: UInt64(chunk.count), data: chunk)
-                await link.sendNavigation(payload)
-            }
-            print("[Nav] full map sent (\(bitmap.width)×\(bitmap.height), \(chunks.count) fragments)")
+        // RGBA → 4 bpp BMP (green roads, red route) → LZ4, or raw when that doesn't shrink it.
+        guard let frame = NavMapBmp.encode(rgba: bitmap.rgba, width: bitmap.width, height: bitmap.height) else {
+            print("[Nav] couldn't encode the \(kind) map bitmap")
+            return
         }
+        let chunks = stride(from: 0, to: frame.data.count, by: mapFragmentSize).map {
+            Array(frame.data[$0..<min($0 + mapFragmentSize, frame.data.count)])
+        }
+        let sessionID = (mapSessionIDs[kind] ?? 0) + 1
+        mapSessionIDs[kind] = sessionID
+        for (index, chunk) in chunks.enumerated() {
+            let payload = kind == .full
+                ? G2Navigation.maxMapFragment(
+                    magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(frame.data.count),
+                    compressMode: frame.mode.rawValue, index: UInt64(index),
+                    packetSize: UInt64(chunk.count), data: chunk)
+                : G2Navigation.miniMapFragment(
+                    magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(frame.data.count),
+                    compressMode: frame.mode.rawValue, index: UInt64(index),
+                    packetSize: UInt64(chunk.count), data: chunk)
+            await link.sendNavigation(payload)
+        }
+        print("[Nav] \(kind) map sent (\(bitmap.width)×\(bitmap.height), \(frame.data.count) bytes, "
+              + "\(frame.mode == .lz4 ? "lz4" : "raw"), \(chunks.count) fragments)")
     }
 
     private func sendCardIfNeeded() {
