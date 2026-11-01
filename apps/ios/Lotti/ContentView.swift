@@ -16,6 +16,8 @@ struct ContentView: View {
                     }
                 }
 
+                inputSection
+
                 if link.status.isConnected {
                     Section {
                         Button("Send hello") { Task { await model.sendHello() } }
@@ -27,6 +29,22 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Lotti")
+        }
+    }
+
+    @ViewBuilder private var inputSection: some View {
+        Section("Last input") {
+            if model.inputs.isEmpty {
+                Text("Tap a touchpad or use the ring.").foregroundStyle(.secondary)
+            }
+            ForEach(model.inputs) { input in
+                LabeledContent {
+                    Text(input.time, format: .dateTime.hour().minute().second())
+                } label: {
+                    Text(input.event.gesture.rawValue).font(input.id == model.inputs.first?.id ? .headline : .body)
+                    Text(input.event.source.rawValue)
+                }
+            }
         }
     }
 

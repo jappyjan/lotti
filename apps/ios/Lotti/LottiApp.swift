@@ -9,6 +9,7 @@ struct LottiApp: App {
         WindowGroup {
             ContentView(model: model)
                 .task { await model.launch() }
+                .task { await model.receiveInputs() }
         }
     }
 }

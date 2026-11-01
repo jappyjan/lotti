@@ -135,7 +135,7 @@ struct G2ProtocolTests {
     }
 }
 
-private func bytes(_ hex: String) -> [UInt8] {
+func bytes(_ hex: String) -> [UInt8] {
     stride(from: 0, to: hex.count, by: 2).map {
         let start = hex.index(hex.startIndex, offsetBy: $0)
         return UInt8(hex[start..<hex.index(start, offsetBy: 2)], radix: 16)!

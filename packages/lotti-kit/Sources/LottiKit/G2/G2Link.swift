@@ -50,6 +50,8 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
     @ObservationIgnored private var pageCreated = false
+    @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
+    @ObservationIgnored private var deduplicator = InputDeduplicator()
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -146,6 +148,10 @@ public final class G2Link: NSObject, GlassesLink {
         pageCreated = true
         _ = try await request(payload, sid: G2Service.evenHub, flag: G2Flag.request, magic: m, to: right,
                               step: creating ? "creating the text page" : "updating the text")
+    }
+
+    public func inputs() -> AsyncStream<InputEvent> {
+        inputBroadcast.stream()
     }
 
     // MARK: - Connection steps
@@ -456,9 +462,21 @@ extension G2Link: @MainActor CBPeripheralDelegate {
               let data = characteristic.value else { return }
         let bytes = [UInt8](data)
         log("rx \(arm.side) \(hex(bytes))")
-        guard let message = arm.assembler.feed(bytes), let magic = message.magic else { return }
-        let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
-        replyWaiters.removeValue(forKey: key)?.resume(.success(message))
+        guard let message = arm.assembler.feed(bytes) else { return }
+        if let magic = message.magic {
+            let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
+            replyWaiters.removeValue(forKey: key)?.resume(.success(message))
+        }
+        switch G2Events.decode(message) {
+        case .input(let input):
+            let isNew = deduplicator.accept(input, at: ProcessInfo.processInfo.systemUptime)
+            log("input \(input) from \(arm.side) arm\(isNew ? "" : " (repeat, dropped)")")
+            if isNew { inputBroadcast.send(input) }
+        case .info(let text):
+            log("\(arm.side) arm: \(text)")
+        case nil:
+            break
+        }
     }
 
     public func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {

@@ -70,6 +70,9 @@ public protocol GlassesLink: AnyObject, Observable {
     func disconnect()
     /// Show plain text on the glasses' display.
     func showText(_ text: String) async throws
+    /// Gestures from the touchpads and from the ring. The ring is linked to the glasses, which
+    /// relay its gestures. Each call returns a new stream; repeats are already filtered out.
+    func inputs() -> AsyncStream<InputEvent>
 }
 
 extension GlassesLink {

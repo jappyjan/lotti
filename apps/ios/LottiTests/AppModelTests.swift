@@ -34,6 +34,30 @@ struct AppModelTests {
         await model.sendHello()
         #expect(model.lastError == GlassesLinkError.notConnected.localizedDescription)
     }
+
+    @Test func inputsShowNewestFirst() async {
+        let link = FakeLink(last: nil)
+        link.pendingInputs = [InputEvent(.tap, from: .rightTouchpad), InputEvent(.scrollUp, from: .ring)]
+        let model = AppModel(link: link)
+        await model.receiveInputs()
+        #expect(model.inputs.map(\.event) == [InputEvent(.scrollUp, from: .ring), InputEvent(.tap, from: .rightTouchpad)])
+    }
+
+    @Test func keepsOnlyTheLatestInputs() async {
+        let link = FakeLink(last: nil)
+        link.pendingInputs = Array(repeating: InputEvent(.tap, from: .leftTouchpad), count: 15)
+        let model = AppModel(link: link)
+        await model.receiveInputs()
+        #expect(model.inputs.count == AppModel.maxInputs)
+    }
+}
+
+/// A finished stream holding `events`.
+private func finished(_ events: [InputEvent]) -> AsyncStream<InputEvent> {
+    AsyncStream { continuation in
+        events.forEach { continuation.yield($0) }
+        continuation.finish()
+    }
 }
 
 @MainActor
@@ -46,6 +70,7 @@ private final class FakeLink: GlassesLink {
     var connected: [String] = []
     var shown: [String] = []
     var showError: Error?
+    var pendingInputs: [InputEvent] = []
 
     init(last: DiscoveredGlasses?) { lastGlasses = last }
 
@@ -57,4 +82,5 @@ private final class FakeLink: GlassesLink {
         if let showError { throw showError }
         shown.append(text)
     }
+    func inputs() -> AsyncStream<InputEvent> { finished(pendingInputs) }
 }
