@@ -12,6 +12,7 @@ import Observation
 /// 2. auth on sid 0x80 (both arms), make the right arm the command arm, sync the clock
 /// 3. session prelude on sid 0x01, then an EvenHub heartbeat every 4 s
 /// 4. text: create a text page once (Cmd 0), then update its text (Cmd 5)
+/// 5. mic (on demand): Cmd 15 on, LC3 packets on `…6402`, decoded to 16 kHz PCM
 @MainActor
 @Observable
 public final class G2Link: NSObject, GlassesLink {
@@ -22,6 +23,8 @@ public final class G2Link: NSObject, GlassesLink {
     // GATT layout. All G2 characteristics share one UUID base.
     static let controlWrite = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E5401")
     static let controlNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E5402")
+    /// Microphone: raw LC3 packets, no frame header (see `G2Microphone`).
+    static let micNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E6402")
     /// Services to look for among peripherals that are already connected to the phone, e.g. by the
     /// Even app (they don't advertise). Any match is then filtered by name.
     static let connectedServices = [
@@ -52,6 +55,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var pageCreated = false
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
+    @ObservationIgnored private var microphone: Microphone?
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -160,11 +164,51 @@ public final class G2Link: NSObject, GlassesLink {
     }
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
-        // TODO(mic): Cmd 15 audio control + LC3 on …6402.
-        throw GlassesLinkError.notConnected
+        guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
+        guard let characteristic = right.mic else { throw GlassesLinkError.missingCharacteristics }
+        guard let decoder = LC3Decoder() else { throw GlassesLinkError.missingCharacteristics }
+        endMicrophone()
+        let (stream, continuation) = AsyncStream<[Int16]>.makeStream(bufferingPolicy: .bufferingNewest(100))
+        microphone = Microphone(decoder: decoder, continuation: continuation)
+        right.peripheral.setNotifyValue(true, for: characteristic)
+        let m = nextMagic()
+        do {
+            _ = try await request(G2Payload.audioControl(magic: m, enabled: true), sid: G2Service.evenHub,
+                                  flag: G2Flag.request, magic: m, to: right, step: "turning the mic on")
+            log("[Mic] on (acked)")
+        } catch {
+            // What counts is audio arriving; the ack is only a hint.
+            log("[Mic] on, no ack: \(error.localizedDescription)")
+        }
+        return stream
     }
 
-    public func stopMicrophone() async {}
+    public func stopMicrophone() async {
+        guard let mic = microphone else { return }
+        log("[Mic] off after \(mic.packets) packets")
+        endMicrophone()
+        guard let right = arms[.right] else { return }
+        if let characteristic = right.mic { right.peripheral.setNotifyValue(false, for: characteristic) }
+        let m = nextMagic()
+        _ = try? await request(G2Payload.audioControl(magic: m, enabled: false), sid: G2Service.evenHub,
+                               flag: G2Flag.request, magic: m, to: right, step: "turning the mic off", seconds: 2)
+    }
+
+    /// Finishes the mic stream without talking to the glasses (also used when the link drops).
+    private func endMicrophone() {
+        microphone?.continuation.finish()
+        microphone = nil
+    }
+
+    private func receiveMicPacket(_ bytes: [UInt8]) {
+        guard let mic = microphone else { return }
+        if mic.packets == 0 {
+            log("[Mic] first packet: \(bytes.count) bytes, starts \(hex(Array(bytes.prefix(12))))")
+        }
+        mic.packets += 1
+        if mic.packets % 200 == 0 { log("[Mic] \(mic.packets) packets") }
+        mic.continuation.yield(mic.decoder.decode(packet: bytes))
+    }
 
     public func setHeadTracking(_ enabled: Bool) async {
         // TODO(imu): Cmd 19 IMU control + head-up detector.
@@ -248,6 +292,7 @@ public final class G2Link: NSObject, GlassesLink {
         heartbeat?.cancel()
         heartbeat = nil
         pageCreated = false
+        endMicrophone()
         let current = arms.values
         arms = [:]
         for arm in current {
@@ -451,6 +496,7 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == Self.controlWrite { arm.write = characteristic }
             if characteristic.uuid == Self.controlNotify { arm.notify = characteristic }
+            if characteristic.uuid == Self.micNotify { arm.mic = characteristic }
         }
         arm.pendingServices -= 1
         guard arm.pendingServices == 0 else { return }
@@ -463,6 +509,10 @@ extension G2Link: @MainActor CBPeripheralDelegate {
     public func peripheral(
         _ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?
     ) {
+        if characteristic.uuid == Self.micNotify {
+            log("[Mic] notify \(characteristic.isNotifying ? "on" : "off")\(error.map { ", error: \($0.localizedDescription)" } ?? "")")
+            return
+        }
         guard characteristic.uuid == Self.controlNotify else { return }
         if let error {
             fail(peripheral.identifier, error)
@@ -474,6 +524,9 @@ extension G2Link: @MainActor CBPeripheralDelegate {
     public func peripheral(
         _ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?
     ) {
+        if characteristic.uuid == Self.micNotify, let data = characteristic.value {
+            return receiveMicPacket([UInt8](data))
+        }
         guard characteristic.uuid == Self.controlNotify, let arm = arm(for: peripheral),
               let data = characteristic.value else { return }
         let bytes = [UInt8](data)
@@ -520,6 +573,7 @@ private final class Arm {
     let peripheral: CBPeripheral
     var write: CBCharacteristic?
     var notify: CBCharacteristic?
+    var mic: CBCharacteristic?
     var assembler = G2FrameAssembler()
     var pendingServices = 0
     var writeTail: Task<Void, Never>?
@@ -544,6 +598,19 @@ private final class Arm {
     func failPendingWrites() {
         writeTail?.cancel()
         resumeWriters()
+    }
+}
+
+/// An open mic stream: the LC3 decoder and where the PCM goes.
+@MainActor
+private final class Microphone {
+    let decoder: LC3Decoder
+    let continuation: AsyncStream<[Int16]>.Continuation
+    var packets = 0
+
+    init(decoder: LC3Decoder, continuation: AsyncStream<[Int16]>.Continuation) {
+        self.decoder = decoder
+        self.continuation = continuation
     }
 }
 
