@@ -122,6 +122,14 @@ public enum G2Payload {
         evenHub(command: 12, magic: magic, field: 14) { $0.varint(1, 0) }
     }
 
+    /// Cmd 15, audio control: turn the microphone on or off. Goes to the right arm, which acks
+    /// with the magic. Audio then streams on `…6402` (see `G2Microphone`).
+    /// `{1: 15, 2: magic, 18: {1: 1 on / 0 off}}` (MentraOS `audioControlMessage`,
+    /// even-g2-protocol `build_audio_control`).
+    public static func audioControl(magic: UInt64, enabled: Bool) -> [UInt8] {
+        evenHub(command: 15, magic: magic, field: 18) { $0.bool(1, enabled) }
+    }
+
     private static func evenHub(
         command: Int, magic: UInt64, field: Int, _ build: (inout ProtoWriter) -> Void
     ) -> [UInt8] {
