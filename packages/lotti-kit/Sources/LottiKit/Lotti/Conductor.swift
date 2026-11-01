@@ -17,7 +17,7 @@ public final class Conductor {
         public var idle: Duration
         /// A "Done"-style line goes away after this.
         public var done: Duration
-        /// Give up on the model after this (S3 saw rare 20–60 s stalls).
+        /// Give up on the on-device brain after this: several model steps plus tools (S3 saw rare 20–60 s stalls).
         public var answer: Duration
         /// Wait this long for the final transcript after you let go.
         public var finalTranscript: Duration
@@ -27,7 +27,7 @@ public final class Conductor {
         public var remote: Duration
 
         public init(
-            idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(15),
+            idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
             remote: Duration = .seconds(120)
         ) {
@@ -391,15 +391,19 @@ public final class Conductor {
             endConversation()
         }
         lastAsked = now()
-        let info = await todayProvider.today(at: now())
-        today = info
+        // Only the clock goes in; calendar, weather and location come from tools when needed.
+        let info = TodayInfo(now: now())
         if toHermes || onHermes { return await askHermes(question, info: info) }
         if let explicit = HermesRoute.explicitQuestion(question) { return await askHermes(explicit, info: info) }
 
-        let context = composer.promptSummary(info)
+        let context = composer.nowLine(info)
         let brain = self.brain
-        let result: Result<Answer, Error>? = await withTimeout(timing.answer) {
-            do { return .success(try await brain.answer(question, context: context)) } catch { return .failure(error) }
+        let result: Result<Answer, Error>? = await withTimeout(timing.answer) { [weak self] in
+            do {
+                return .success(try await brain.answer(question, context: context) { status in self?.working(status) })
+            } catch {
+                return .failure(error)
+            }
         }
         guard !Task.isCancelled, mode == .working else { return }
         switch result {

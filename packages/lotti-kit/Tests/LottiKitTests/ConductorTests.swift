@@ -70,7 +70,8 @@ struct ConductorTests {
         #expect(conductor.screen?.kind == .working)
         try await eventually { conductor.screen?.text == "No rain today." }
         #expect(conductor.screen?.rail?.items.map(\.title) == ["Tomorrow?", "Wind?"])
-        #expect(brain.contexts.first?.contains("Weather now: 12°C, cloudy") == true)
+        #expect(brain.contexts.first?.hasPrefix("Now: ") == true)
+        #expect(brain.contexts.first?.contains("Weather") == false)  // facts come from tools
 
         brain.answers["Wind?"] = Answer(sentence: "A light breeze.")
         press(.scrollDown)
@@ -263,7 +264,7 @@ final class FakeBrain: Brain {
     private(set) var ended = 0
 
     func prewarm() {}
-    func answer(_ message: String, context: String) async throws -> Answer {
+    func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         asked.append(message)
         contexts.append(context)
         if let delay { try await Task.sleep(for: delay) }

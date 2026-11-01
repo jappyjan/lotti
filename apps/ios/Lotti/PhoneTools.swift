@@ -14,9 +14,8 @@ enum PhoneTools {
          SetTimerTool(), CreateReminderTool()]
     }
 
-    /// The few the on-device model gets: its 4K context can't take all of them, and today's
-    /// calendar and weather are already in its prompt.
-    static let onDevice: Set<String> = ["calendar", "set_timer", "create_reminder"]
+    /// The tools the on-device brain may pick from (all of them; its planner sees only names).
+    static let onDevice: Set<String> = ["calendar", "weather", "location", "reminders", "set_timer", "create_reminder"]
 
     /// Ask for alarm and reminder access while the app is open; a locked phone can't show the prompt.
     static func requestAccess() async {
@@ -36,7 +35,7 @@ struct CalendarTool: PhoneTool {
     let spec = PhoneToolSpec(
         name: "calendar", description: "Jan's calendar events for one or more days.",
         parameters: [
-            ToolParameter("from", .string, "first day, YYYY-MM-DD or \"tomorrow\"; default today", optional: true),
+            ToolParameter("from", .string, "first day: today, tomorrow, a weekday like monday, or YYYY-MM-DD", optional: true),
             ToolParameter("days", .integer, "how many days, 1 to 14; default 1", optional: true),
         ],
         effect: .read, progress: "Checking your calendar…")
@@ -62,8 +61,7 @@ struct WeatherTool: PhoneTool {
     func run(_ arguments: ToolArguments) async throws -> String {
         let now = Date()
         guard let weather = await today.currentWeather(now: now) else { throw ToolError("No weather right now.") }
-        let summary = TodayComposer().promptSummary(TodayInfo(now: now, weather: weather))
-        return summary.split(separator: "\n").filter { $0.hasPrefix("Weather") }.joined(separator: "\n")
+        return ToolText().weather(weather, now: now)
     }
 }
 
@@ -153,7 +151,7 @@ struct CreateReminderTool: PhoneTool {
         name: "create_reminder", description: "Add a reminder to Jan's default reminders list.",
         parameters: [
             ToolParameter("text", .string, "what to remember, short"),
-            ToolParameter("due", .string, "when, YYYY-MM-DD HH:mm", optional: true),
+            ToolParameter("due", .string, "when: a day and time like \"tomorrow 09:00\" or \"monday 18:30\"", optional: true),
         ],
         effect: .action, progress: "Adding the reminder…")
 
@@ -176,7 +174,9 @@ struct CreateReminderTool: PhoneTool {
         reminder.calendar = list
         var when = ""
         if let dueText = arguments.string("due") {
-            guard let due = text.moment(dueText) else { throw ToolError("create_reminder: due should be YYYY-MM-DD HH:mm") }
+            guard let due = text.moment(dueText, now: Date()) else {
+                throw ToolError("create_reminder: due should be a day and time like \"tomorrow 09:00\"")
+            }
             reminder.dueDateComponents = text.calendar.dateComponents([.year, .month, .day, .hour, .minute], from: due)
             reminder.addAlarm(EKAlarm(absoluteDate: due))
             when = ", " + text.dayAndTime(due)

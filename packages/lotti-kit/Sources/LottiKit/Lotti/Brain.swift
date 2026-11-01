@@ -23,8 +23,9 @@ public struct Answer: Equatable, Sendable {
 public protocol Brain: AnyObject {
     /// Load the model ahead of the first question, so the first answer is faster.
     func prewarm()
-    /// Answer `message`. `context` is a short description of now (time, calendar, weather).
-    func answer(_ message: String, context: String) async throws -> Answer
+    /// Answer `message`. `context` is the current date and time; everything else comes from
+    /// tools. `status` gets short lines for the glasses while it works.
+    func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer
     func endConversation()
 }
 

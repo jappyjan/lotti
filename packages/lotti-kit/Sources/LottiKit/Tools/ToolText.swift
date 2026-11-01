@@ -9,15 +9,40 @@ public struct ToolText: Sendable {
         self.calendar = calendar
     }
 
-    /// A day from a tool argument: `YYYY-MM-DD`, "today" or "tomorrow". Start of that day.
+    /// A day from a tool argument: "today", "tomorrow", "day after tomorrow", a weekday (the next
+    /// one, today included), English or German, or `YYYY-MM-DD`. Start of that day. Small models
+    /// get dates wrong, so they name the day and the code counts.
     public func day(_ text: String?, now: Date) -> Date? {
         let today = calendar.startOfDay(for: now)
         guard let text = text?.trimmingCharacters(in: .whitespaces).lowercased(), !text.isEmpty else { return today }
         switch text {
         case "today", "heute": return today
         case "tomorrow", "morgen": return calendar.date(byAdding: .day, value: 1, to: today)
-        default: return moment(text).map { calendar.startOfDay(for: $0) }
+        case "day after tomorrow", "the day after tomorrow", "übermorgen": return calendar.date(byAdding: .day, value: 2, to: today)
+        default: break
         }
+        let weekdays = [["sunday", "sonntag"], ["monday", "montag"], ["tuesday", "dienstag"], ["wednesday", "mittwoch"],
+                        ["thursday", "donnerstag"], ["friday", "freitag"], ["saturday", "samstag", "sonnabend"]]
+        let name = text.hasPrefix("next ") ? String(text.dropFirst(5)) : text
+        if let index = weekdays.firstIndex(where: { $0.contains(name) }) {
+            let ahead = (index + 1 - calendar.component(.weekday, from: today) + 7) % 7
+            return calendar.date(byAdding: .day, value: ahead, to: today)
+        }
+        return moment(text).map { calendar.startOfDay(for: $0) }
+    }
+
+    /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, or a day as in `day(_:now:)` followed by
+    /// a time ("tomorrow 09:00", "montag 18 uhr", "9:30" for today).
+    public func moment(_ text: String, now: Date) -> Date? {
+        if let date = moment(text) { return date }
+        let lower = text.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let match = lower.firstMatch(of: /(?:um |at )?(\d{1,2})(?:[:.](\d{2}))?\s*(?:uhr|h)?$/),
+              let hour = Int(match.1), hour < 24
+        else { return nil }
+        let minute = match.2.flatMap { Int($0) } ?? 0
+        let dayText = String(lower[..<match.range.lowerBound]).trimmingCharacters(in: .whitespaces)
+        guard let day = day(dayText.isEmpty ? nil : dayText, now: now) else { return nil }
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
     }
 
     /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]`, or a bare
@@ -36,6 +61,21 @@ public struct ToolText: Sendable {
               calendar.component(.day, from: date) == n[2]  // rejects 2026-02-31
         else { return nil }
         return date
+    }
+
+    /// Weather spelled out so a small model can't misread it: "Rain today: yes, from 15:00".
+    public func weather(_ w: Weather, now: Date) -> String {
+        var lines = ["Now: \(w.temperature)°C, \(w.condition)"]
+        var today = "Today"
+        if let low = w.low, let high = w.high { today += ": \(low) to \(high)°C" }
+        lines.append(today)
+        if let rain = w.rainFrom {
+            lines.append(rain <= now ? "Rain today: yes, raining now" : "Rain today: yes, from \(time(rain))")
+        } else {
+            lines.append("Rain today: no")
+        }
+        if let t = w.tomorrow { lines.append("Tomorrow: \(t.condition), \(t.low) to \(t.high)°C") }
+        return lines.joined(separator: "\n")
     }
 
     /// One line per day from `from` for `days` days.

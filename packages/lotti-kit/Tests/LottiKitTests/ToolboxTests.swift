@@ -163,3 +163,58 @@ struct ToolTextTests {
             """)
     }
 }
+
+struct LocalPipelineTests {
+    let specs = ["location", "calendar", "weather", "reminders", "set_timer", "create_reminder"].map {
+        PhoneToolSpec(name: $0, description: "", effect: .read, progress: "")
+    }
+
+    @Test(arguments: [
+        ("Wo bin ich?", ["location"]),
+        ("Where am I right now?", ["location"]),
+        ("Was steht morgen an?", ["calendar"]),
+        ("What's on tomorrow?", ["calendar"]),
+        ("Hab ich heute noch Termine?", ["calendar"]),
+        ("Brauche ich heute einen Schirm?", ["weather"]),
+        ("Erinner mich morgen um 9 an die Wäsche", ["create_reminder"]),
+        ("Remind me to call Mara", ["create_reminder"]),
+        ("Was steht auf meinen Erinnerungen?", ["reminders"]),
+        ("Stell einen Timer auf 10 Minuten", ["set_timer"]),
+        ("Termine und Wetter morgen?", ["calendar", "weather"]),
+    ])
+    func rulesPickTools(_ message: String, _ tools: [String]) {
+        #expect(LocalPipeline.ruleTools(message, tools: specs) == tools)
+    }
+
+    @Test func noRuleLeavesItToTheModel() {
+        #expect(LocalPipeline.ruleTools("How are you?", tools: specs) == nil)
+        #expect(LocalPipeline.ruleTools("What's new in the Bundestag?", tools: specs) == nil)
+        #expect(LocalPipeline.ruleTools("Wo bin ich?", tools: []) == nil)
+    }
+
+    @Test func detectsTheLanguage() {
+        #expect(LocalPipeline.language(of: "Wie spät ist es?") == "German")
+        #expect(LocalPipeline.language(of: "How are you?") == "English")
+        #expect(LocalPipeline.language(of: "Wo bin ich?") == "German")
+    }
+
+    @Test func parsesTheChoiceFromLabels() {
+        let json: JSONValue = ["intent": "remind", "tools": ["remind_me_later", "weather", "weather", "nonsense"]]
+        #expect(LocalPipeline.parseChoice(json, tools: specs).tools == ["create_reminder", "weather"])
+        #expect(LocalPipeline.parseChoice(["tools": ["hermes_web_news_research"]], tools: specs).tools == ["hermes"])
+    }
+
+    @Test func fixedSentencesForActions() {
+        let timer = ProposedAction(tool: "set_timer", arguments: ToolArguments(), title: "Timer 10 min")
+        #expect(LocalPipeline.preparedSentence([timer], language: "German") == "Bereit: Timer 10 min. Tipp zum Starten.")
+        #expect(LocalPipeline.preparedSentence([timer], language: "English") == "Ready: Timer 10 min. Tap to start.")
+    }
+
+    @Test func historyCarriesFacts() {
+        let turn = LocalPipeline.Turn(jan: "What's on tomorrow?", lotti: "Standup at 9:30.",
+                                      facts: [LocalPipeline.Fact(tool: "calendar", text: "11:00 Ben (Café)")])
+        let prompt = LocalPipeline.answerPrompt("Where is Ben?", now: "Now: Sunday", history: [turn], facts: [])
+        #expect(prompt.contains("(Jan's calendar: 11:00 Ben (Café))"))
+        #expect(!prompt.contains("Berlin"))
+    }
+}

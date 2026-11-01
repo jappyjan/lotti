@@ -8,9 +8,7 @@ actor DeviceToday: TodayProvider {
     private let store = EKEventStore()
     private var calendarAccess: Task<Bool, Never>?
     private var weather: (value: Weather, fetched: Date)?
-    private var location: CLLocationCoordinate2D?
-    /// Berlin, until the phone knows where it is.
-    private static let fallback = CLLocationCoordinate2D(latitude: 52.52, longitude: 13.405)
+    private var location: (coordinate: CLLocationCoordinate2D, found: Date)?
 
     func today(at now: Date) async -> TodayInfo {
         async let events = events(on: now)
@@ -47,7 +45,8 @@ actor DeviceToday: TodayProvider {
 
     func currentWeather(now: Date) async -> Weather? {
         if let weather, now.timeIntervalSince(weather.fetched) < 20 * 60 { return weather.value }
-        let place = await coordinate()
+        // No location, no weather: better nothing than another city's.
+        guard let place = await coordinate() else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: OpenMeteo.url(latitude: place.latitude, longitude: place.longitude))
             let value = try OpenMeteo.weather(from: data, now: now)
@@ -61,18 +60,22 @@ actor DeviceToday: TodayProvider {
 
     /// A fresh location fix, falling back to the last known one. Nil if there never was one.
     func freshLocation() async -> CLLocationCoordinate2D? {
+        if let location, Date().timeIntervalSince(location.found) < 60 { return location.coordinate }
         if let found = await Self.findLocation() {
-            location = found
+            location = (found, Date())
             return found
         }
-        return location
+        return location?.coordinate
     }
 
-    private func coordinate() async -> CLLocationCoordinate2D {
-        if let location { return location }
-        let found = await Self.findLocation()
-        location = found
-        return found ?? Self.fallback
+    /// Where the phone is, at most 15 minutes old if a new fix can be had. Nil if never known.
+    private func coordinate() async -> CLLocationCoordinate2D? {
+        if let location, Date().timeIntervalSince(location.found) < 15 * 60 { return location.coordinate }
+        if let found = await Self.findLocation() {
+            location = (found, Date())
+            return found
+        }
+        return location?.coordinate
     }
 
     /// One location fix, or nil after a few seconds or without permission.

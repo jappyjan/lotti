@@ -38,6 +38,13 @@ struct DebugView: View {
                 }
             }
 
+            Section("On-device brain, last answer") {
+                if brain.trace.isEmpty { Text("Nothing asked yet.").foregroundStyle(.secondary) }
+                ForEach(Array(brain.trace.enumerated()), id: \.offset) { _, line in
+                    Text(line).font(.caption.monospaced())
+                }
+            }
+
             Section("Hermes") {
                 if hermes.trace.isEmpty {
                     Text(hermes.isConfigured ? "No conversation yet." : "Not set up.").foregroundStyle(.secondary)

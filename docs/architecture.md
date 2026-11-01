@@ -109,8 +109,8 @@ Known limits (from S3):
 **Router tiers:**
 
 1. **Rules** (0 ms): deterministic stuff. Ring "back", known apps muted, do-not-disturb.
-2. **On-device model** (first token ~1.3 s, full screen ~2.4 s; Apple FM): triage, quick replies, screen generation, simple tools, starting navigation.
-3. **Hermes connector** (seconds): anything the on-device model hands over with `ask_hermes`, or you ask for explicitly ("Hermes, …", "Dig into…", "Ask Hermes" in the rail).
+2. **On-device model** (0.4–1.7 s for an answer with tools; Apple FM, as a pipeline of small steps, see below): everyday questions, phone tools, quick replies, starting navigation.
+3. **Hermes connector** (seconds): anything the on-device chooser hands over, or you ask for explicitly ("Hermes, …", "Dig into…", "Ask Hermes" in the rail).
 
 ## Phone tools
 
@@ -119,19 +119,34 @@ One set of tools on the phone, used by the on-device brain, by Hermes and later 
 | Tool              | Kind   | Backed by                        | On-device brain | Hermes            |
 | ----------------- | ------ | -------------------------------- | --------------- | ----------------- |
 | `calendar`        | read   | EventKit (your chosen calendars) | ✅              | ✅ if shared      |
-| `weather`         | read   | Open-Meteo at your location      | in the prompt   | ✅ if shared      |
-| `location`        | read   | CoreLocation + MapKit address    | –               | ✅ if shared      |
-| `reminders`       | read   | EventKit reminders               | –               | ✅ if shared      |
+| `weather`         | read   | Open-Meteo at your location      | ✅              | ✅ if shared      |
+| `location`        | read   | CoreLocation + MapKit address    | ✅              | ✅ if shared      |
+| `reminders`       | read   | EventKit reminders               | ✅              | ✅ if shared      |
 | `set_timer`       | action | AlarmKit (rings in silent mode)  | ✅              | ✅ (suggest only) |
 | `create_reminder` | action | EventKit reminders               | ✅              | ✅ (suggest only) |
-| `ask_hermes`      | –      | hands the question to Hermes     | ✅              | –                 |
 
 Rules (enforced by `Toolbox`, not by prompts):
 
 - **Reads** run as soon as a brain asks, several at once, each with a 10 s limit. Arguments are checked against the tool's parameters first.
 - **Actions never run on a brain's say-so.** A brain can only _prepare_ one: it becomes a choice in the rail ("Timer 10 min"), and runs when you tap it. A wrong transcript or a confused model can't set anything.
 - **You choose what Hermes may read** (Lotti app → Hermes). Unshared reads are left out of Hermes's prompt and refused if asked for anyway.
-- The on-device brain gets only `calendar`, the two actions and `ask_hermes`: every tool costs prompt tokens in its 4K context, and today's calendar and weather are already in its prompt.
+- **No fixed facts in any prompt.** Brains get the date and time; everything about Jan (where he is, his calendar, the weather there) comes from a tool in that turn. Weather needs a location fix (at most 15 minutes old); without one there is no weather rather than another city's.
+- Tool results are written for small models: days by name ("tomorrow", "monday"; the code works out the date), weather spelled out ("Rain today: yes, from 15:00").
+
+## On-device brain: a pipeline of small steps
+
+A single session with tool calling failed on the ~3B model: it made up a free calendar instead of calling the tool, answered as if it were Jan, claimed a timer was set, and broke its output format. One step per job works far better (`LocalPipeline`, `AppleBrain`):
+
+1. **Choose tools.** Rules first: clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", …) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
+2. **Fill in arguments,** one small step per chosen tool, with only that tool's parameters and no date in the prompt (the model copies a date instead of writing "tomorrow").
+3. **Actions are only prepared** and get a fixed sentence ("Bereit: Timer 10 min. Tipp zum Starten."), so the model can't claim they're done. A hand-off gets "Ich frag Hermes."
+4. **Run the reads** in parallel; the glasses show what's being checked.
+5. **Shorten** results longer than ~280 characters to what the question needs.
+6. **Answer** from the facts only, in a fresh session: the answer's language is detected in code (`NLLanguageRecognizer`, German or English), Jan is addressed as du/you, 24-hour times. Facts are labelled by meaning ("where Jan is right now: …") so they don't get mixed up.
+
+Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
+
+Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Still seen: an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
 
 ## Hermes connector
 
@@ -140,7 +155,7 @@ Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's AP
 **When Lotti asks Hermes:**
 
 1. You say so: "Hermes, …", "Frag Hermes …", "Dig into …" (rules, no model).
-2. The on-device brain calls `ask_hermes` (news, the web, prices, opening hours, research).
+2. The on-device chooser picks Hermes (news, the web, prices, opening hours, research).
 3. You pick "Ask Hermes" in the rail under any on-device answer.
 
 Once a conversation is with Hermes, its follow-ups stay there until the conversation ends (double tap, or 5 minutes).
