@@ -1,6 +1,6 @@
 # Spike S1: talk to the G2 over BLE from iOS
 
-Status: code done, unit tests green, **hardware test pending**.
+Status: ✅ done. "Hello from Lotti" showed on a real G2 on 2026-11-01.
 Goal: "Hello from Lotti" on the G2 from our own app, and decisions D6 (BLE layer) and D7 (Xcode project).
 
 ## Result
@@ -76,4 +76,11 @@ Known gotchas (from g2-kit and even-g2-protocol): container names ≤ 14 charact
 
 ## Hardware log
 
-To fill in during the hardware test: firmware version, which services the arms expose, whether iOS asked to pair, what the auth reply looked like.
+2026-11-01, iPhone 16 (iOS 27), G2 pair `32`, Even app force-quit.
+
+- **Advertising:** the arms advertise intermittently, and a scan often sees only one of them. Fix: LottiKit remembers each arm's Bluetooth id as soon as it's seen, and Connect starts with whichever arm is known, then scans up to 30 s for the other. iOS can connect to a known id directly.
+- **Services** (same on both arms): `180A`, `…1001`, `…5450`, `…6450`, `…7450` (base `00002760-08C2-11E1-9073-0E8AC72E`), Nordic UART `6E400001-…`. Max write without response: 244 bytes.
+- **No iOS pairing prompt.** Nothing asked to pair (this phone already had the glasses paired through the Even app).
+- **Every handshake step is acked:** auth on both arms (`08 04 10 <magic> 1a 00`), role change, time sync, prelude (`08 01 10 9c 01 1a 00`). The left arm answers auth too.
+- **Text:** Cmd 0 acked as Cmd 1, followed by a sid `0x0D` event saying the active app is now EvenHub (`0xE0`). Cmd 5 (text update) acked as Cmd 6. Heartbeats acked as Cmd 12. Magics above 127 (two-byte varints) were acked fine.
+- **Left arm chatter:** about every 4 s the left arm sends sid `0x80` flag `0x01` messages with Cmd 6 and a counting magic. We don't answer them, and the session stayed up. Look into this before long sessions.

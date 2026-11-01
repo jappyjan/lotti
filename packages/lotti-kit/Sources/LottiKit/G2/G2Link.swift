@@ -22,14 +22,18 @@ public final class G2Link: NSObject, GlassesLink {
     // GATT layout. All G2 characteristics share one UUID base.
     static let controlWrite = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E5401")
     static let controlNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E5402")
-    /// Services to look for among peripherals that are already connected to the phone (they don't
-    /// advertise): the EvenHub service and Nordic UART, which the G2 also exposes.
+    /// Services to look for among peripherals that are already connected to the phone, e.g. by the
+    /// Even app (they don't advertise). Any match is then filtered by name.
     static let connectedServices = [
-        CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E0000"),
-        CBUUID(string: "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"),
-    ]
+        "00002760-08C2-11E1-9073-0E8AC72E0000", "00002760-08C2-11E1-9073-0E8AC72E5450",
+        "00002760-08C2-11E1-9073-0E8AC72E6450", "00002760-08C2-11E1-9073-0E8AC72E7450",
+        "6E400001-B5A3-F393-E0A9-E50E24DCCA9E", "180A", "180F",
+    ].map { CBUUID(string: $0) }
 
     private static let lastGlassesKey = "LottiKit.G2Link.lastGlasses"
+    /// Arm ids seen per pair. The arms advertise intermittently, often not both in one scan, but
+    /// iOS can connect to a known id directly and waits until that arm shows up.
+    private static let knownArmsKey = "LottiKit.G2Link.knownArms"
     private static let containerID = 1
     private static let containerName = "lotti"  // max 14 characters
 
@@ -41,6 +45,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var connectWaiters: [UUID: Waiter<Void>] = [:]
     @ObservationIgnored private var setupWaiters: [UUID: Waiter<Void>] = [:]
     @ObservationIgnored private var replyWaiters: [ReplyKey: Waiter<G2Message>] = [:]
+    @ObservationIgnored private var armWaiter: (pairID: String, side: G2Side, waiter: Waiter<UUID>)?
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
@@ -64,6 +69,7 @@ public final class G2Link: NSObject, GlassesLink {
             guard !isBusy else { return }
             status = .scanning
             for peripheral in central.retrieveConnectedPeripherals(withServices: Self.connectedServices) {
+                log("already connected to phone: \(peripheral.name ?? "?") (\(peripheral.identifier))")
                 record(peripheral, name: peripheral.name, rssi: nil)
             }
             central.scanForPeripherals(withServices: nil)
@@ -77,7 +83,7 @@ public final class G2Link: NSObject, GlassesLink {
 
     public func connect(_ glasses: DiscoveredGlasses) async {
         guard !isBusy else { return }
-        guard let leftID = glasses.leftArm, let rightID = glasses.rightArm else {
+        guard glasses.leftArm != nil || glasses.rightArm != nil else {
             status = .failed(GlassesLinkError.incompleteGlasses.localizedDescription)
             return
         }
@@ -85,20 +91,43 @@ public final class G2Link: NSObject, GlassesLink {
         status = .connecting("Waiting for Bluetooth…")
         await poweredOn()
         do {
-            status = .connecting("Connecting right arm…")
-            let right = try await connectArm(rightID, side: .right)
-            status = .connecting("Connecting left arm…")
-            let left = try await connectArm(leftID, side: .left)
+            // Connect the arm we know first; the other one may only show up after that.
+            var glasses = glasses
+            var connected: [G2Side: Arm] = [:]
+            let order: [G2Side] = glasses.rightArm == nil ? [.left, .right] : [.right, .left]
+            for side in order {
+                if glasses.armID(side) == nil {
+                    status = .connecting("Looking for the \(side) arm…")
+                    glasses.setArmID(try await findArm(pairID: glasses.id, side: side), side)
+                }
+                status = .connecting("Connecting \(side) arm…")
+                connected[side] = try await connectArm(glasses.armID(side)!, side: side)
+            }
             status = .connecting("Authenticating…")
-            try await handshake(right: right, left: left)
+            try await handshake(right: connected[.right]!, left: connected[.left]!)
             remember(glasses)
             status = .connected(glasses)
             log("connected to \(glasses.name)")
         } catch {
             log("connect failed: \(error)")
+            stopArmScan()
             tearDown()
             status = .failed(error.localizedDescription)
         }
+    }
+
+    /// Scans until the given arm of a pair advertises.
+    private func findArm(pairID: String, side: G2Side, seconds: Double = 30) async throws -> UUID {
+        defer { stopArmScan() }
+        return try await wait("looking for the \(side) arm", seconds: seconds) { waiter in
+            armWaiter = (pairID, side, waiter)
+            central.scanForPeripherals(withServices: nil)
+        }
+    }
+
+    private func stopArmScan() {
+        armWaiter = nil
+        if central.isScanning, status != .scanning { central.stopScan() }
     }
 
     public func disconnect() {
@@ -136,7 +165,7 @@ public final class G2Link: NSObject, GlassesLink {
         arms[side] = arm
 
         if peripheral.state != .connected {
-            try await wait("connecting the \(side) arm", seconds: 20) { waiter in
+            try await wait("connecting the \(side) arm", seconds: 45) { waiter in
                 connectWaiters[id] = waiter
                 central.connect(peripheral)
             }
@@ -295,11 +324,23 @@ public final class G2Link: NSObject, GlassesLink {
     private func record(_ peripheral: CBPeripheral, name: String?, rssi: Int?) {
         guard let parsed = G2Name.parse(name ?? peripheral.name) else { return }
         peripherals[peripheral.identifier] = peripheral
+        var known = (defaults.data(forKey: Self.knownArmsKey))
+            .flatMap { try? JSONDecoder().decode([String: DiscoveredGlasses].self, from: $0) } ?? [:]
         var glasses = discovered.first { $0.id == parsed.pairID }
+            ?? known[parsed.pairID]
             ?? DiscoveredGlasses(id: parsed.pairID, name: "Even G2 · \(parsed.pairID)")
+        glasses.rssi = nil
         switch parsed.side {
         case .left: glasses.leftArm = peripheral.identifier
         case .right: glasses.rightArm = peripheral.identifier
+        }
+        if known[parsed.pairID] != glasses {
+            known[parsed.pairID] = glasses
+            defaults.set(try? JSONEncoder().encode(known), forKey: Self.knownArmsKey)
+        }
+        if let w = armWaiter, w.pairID == parsed.pairID, w.side == parsed.side {
+            armWaiter = nil
+            w.waiter.resume(.success(peripheral.identifier))
         }
         if let rssi { glasses.rssi = max(glasses.rssi ?? rssi, rssi) }
         if let index = discovered.firstIndex(where: { $0.id == glasses.id }) {
@@ -430,6 +471,14 @@ extension G2Link: @MainActor CBPeripheralDelegate {
 }
 
 // MARK: - Helpers
+
+extension DiscoveredGlasses {
+    func armID(_ side: G2Side) -> UUID? { side == .left ? leftArm : rightArm }
+
+    mutating func setArmID(_ id: UUID, _ side: G2Side) {
+        if side == .left { leftArm = id } else { rightArm = id }
+    }
+}
 
 @MainActor
 private final class Arm {

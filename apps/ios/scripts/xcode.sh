@@ -7,7 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DERIVED=../../tmp/DerivedData/ios
+# One build folder per action: Nx runs build and test in parallel, and xcodebuild locks its folder.
+DERIVED=../../tmp/DerivedData/ios-${1:-none}
 COMMON=(-project Lotti.xcodeproj -scheme Lotti -derivedDataPath "$DERIVED")
 
 case "${1:-}" in

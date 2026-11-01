@@ -36,9 +36,9 @@ struct ContentView: View {
                 Button {
                     Task { await link.connect(glasses) }
                 } label: {
-                    LabeledContent(glasses.name, value: glasses.isComplete ? "Connect" : "One arm found…")
+                    LabeledContent(glasses.name, value: "Connect")
                 }
-                .disabled(!glasses.isComplete || isConnecting)
+                .disabled(isConnecting)
             }
             if let last = link.lastGlasses, !link.discovered.contains(where: { $0.id == last.id }) {
                 Button("Reconnect to \(last.name)") { Task { await link.connect(last) } }
