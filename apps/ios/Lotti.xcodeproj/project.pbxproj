@@ -224,7 +224,7 @@
 					"DEBUG=1",
 					"$(inherited)",
 				);
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -246,7 +246,7 @@
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_VERSION = 6.0;
@@ -262,7 +262,12 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Lotti;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lotti connects to your smart glasses over Bluetooth.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens while you hold to talk.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -286,7 +291,12 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Lotti;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lotti connects to your smart glasses over Bluetooth.";
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens while you hold to talk.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

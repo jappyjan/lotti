@@ -5,8 +5,6 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
-    static let hello = "Hello from Lotti"
-
     /// A gesture as it arrived, for the "last input" readout.
     struct ReceivedInput: Identifiable, Equatable {
         let id = UUID()
@@ -15,14 +13,20 @@ final class AppModel {
     }
 
     let link: any GlassesLink
-    private(set) var isSending = false
-    private(set) var lastError: String?
+    let conductor: Conductor
     /// Newest first, at most `maxInputs`.
     private(set) var inputs: [ReceivedInput] = []
     static let maxInputs = 10
+    /// How many times the link came back on its own since launch.
+    private(set) var reconnects = 0
 
-    init(link: any GlassesLink) {
+    /// You pressed Disconnect: don't reconnect until you connect again.
+    private var stayDisconnected = false
+    private var wasConnected = false
+
+    init(link: any GlassesLink, conductor: Conductor) {
         self.link = link
+        self.conductor = conductor
     }
 
     /// Reconnect to the glasses from last time, or start looking for some.
@@ -34,8 +38,51 @@ final class AppModel {
         }
     }
 
-    /// Collects touchpad and ring gestures (the ring's arrive through the glasses) until the
-    /// stream ends.
+    /// Notices connects and drops: redraws after a connect, and reconnects after a drop, with a
+    /// growing pause between attempts. Runs until cancelled.
+    func keepConnected(pollEvery: Duration = .seconds(2)) async {
+        var attempt = 0
+        while !Task.isCancelled {
+            let connected = link.status.isConnected
+            if connected && !wasConnected {
+                print("[App] glasses connected")
+                attempt = 0
+                await conductor.glassesConnected()
+            }
+            wasConnected = connected
+            if shouldReconnect {
+                attempt += 1
+                let pause = min(30, 2 * attempt)
+                print("[App] reconnecting (attempt \(attempt))")
+                reconnects += 1
+                await link.reconnectToLast()
+                if !link.status.isConnected { try? await Task.sleep(for: .seconds(pause)) }
+                continue
+            }
+            try? await Task.sleep(for: pollEvery)
+        }
+    }
+
+    var shouldReconnect: Bool {
+        guard !stayDisconnected, link.lastGlasses != nil else { return false }
+        switch link.status {
+        case .disconnected, .failed: return true
+        default: return false
+        }
+    }
+
+    func connect(_ glasses: DiscoveredGlasses) async {
+        stayDisconnected = false
+        await link.connect(glasses)
+    }
+
+    func disconnect() {
+        stayDisconnected = true
+        link.disconnect()
+    }
+
+    /// Collects gestures for the phone's readout until the stream ends. The conductor reads its
+    /// own copy of the stream.
     func receiveInputs() async {
         for await event in link.inputs() {
             print("[Input] \(event)")
@@ -44,14 +91,19 @@ final class AppModel {
         }
     }
 
-    func sendHello() async {
-        isSending = true
-        defer { isSending = false }
-        do {
-            try await link.showText(Self.hello)
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription
+    /// Debug launch arguments, so a run can be checked from the log without touching the glasses:
+    /// `--ask "question"` asks Lotti once connected, `--today` opens the today view.
+    func runLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) async {
+        let wantsToday = arguments.contains("--today")
+        let question = arguments.firstIndex(of: "--ask").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+        guard wantsToday || question != nil else { return }
+        while !link.status.isConnected { try? await Task.sleep(for: .milliseconds(500)) }
+        try? await Task.sleep(for: .seconds(1))
+        if wantsToday { conductor.handle(InputEvent(.tap, from: .unknown)) }
+        if let question {
+            if wantsToday { try? await Task.sleep(for: .seconds(4)) }
+            print("[App] asking: \(question)")
+            conductor.ask(question)
         }
     }
 }

@@ -3,32 +3,78 @@ import SwiftUI
 
 struct ContentView: View {
     let model: AppModel
+    let speech: AppleSpeechRecognizer
+    let brain: AppleBrain
+    @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
+
     private var link: any GlassesLink { model.link }
+    private var conductor: Conductor { model.conductor }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Status") {
+                Section("Glasses") {
                     Label(statusText, systemImage: statusIcon)
                         .foregroundStyle(link.status.isConnected ? .green : .primary)
-                    if let error = model.lastError {
-                        Text(error).foregroundStyle(.red)
+                    if model.reconnects > 0 {
+                        LabeledContent("Reconnects", value: "\(model.reconnects)")
                     }
                 }
 
-                inputSection
+                glassesScreen
+
+                Section("Lotti") {
+                    LabeledContent("Brain", value: brain.unavailableReason ?? "Ready")
+                    LabeledContent("Microphone", value: conductor.microphoneSource ?? "Not used yet")
+                    if let heard = conductor.lastHeard {
+                        LabeledContent("Last heard", value: heard.isEmpty ? "(nothing)" : heard)
+                    }
+                    if let error = conductor.lastError {
+                        Text(error).foregroundStyle(.red)
+                    }
+                    Picker("I speak", selection: $speechLanguage) {
+                        ForEach(Settings.languages, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .onChange(of: speechLanguage) { _, new in
+                        speech.locale = Locale(identifier: new)
+                        Task { await speech.prepare() }
+                    }
+                }
 
                 if link.status.isConnected {
                     Section {
-                        Button("Send hello") { Task { await model.sendHello() } }
-                            .disabled(model.isSending)
-                        Button("Disconnect", role: .destructive) { link.disconnect() }
+                        Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
+                        Button("Ask \"What's on today?\"") { conductor.ask("What's on today?") }
+                        Button("Disconnect", role: .destructive) { model.disconnect() }
+                    } footer: {
+                        Text("On the glasses: tap or look up for today, hold to talk, scroll and tap to pick, double tap to go back.")
                     }
                 } else {
-                    glassesSection
+                    connectSection
                 }
+
+                inputSection
             }
             .navigationTitle("Lotti")
+        }
+        .tint(.green)
+    }
+
+    /// What the glasses show right now, so you can check without wearing them.
+    @ViewBuilder private var glassesScreen: some View {
+        Section("On the glasses") {
+            if let screen = conductor.screen {
+                Text(screen.text).font(.headline)
+                ForEach(screen.details, id: \.self) { Text($0).foregroundStyle(.secondary) }
+                if let rail = screen.rail {
+                    ForEach(Array(rail.items.enumerated()), id: \.offset) { index, item in
+                        Label(item.title, systemImage: index == rail.highlighted ? "chevron.right.circle.fill" : "circle")
+                            .foregroundStyle(index == rail.highlighted ? .green : .secondary)
+                    }
+                }
+            } else {
+                Text("Display off").foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -41,25 +87,25 @@ struct ContentView: View {
                 LabeledContent {
                     Text(input.time, format: .dateTime.hour().minute().second())
                 } label: {
-                    Text(input.event.gesture.rawValue).font(input.id == model.inputs.first?.id ? .headline : .body)
+                    Text(input.event.gesture.rawValue)
                     Text(input.event.source.rawValue)
                 }
             }
         }
     }
 
-    @ViewBuilder private var glassesSection: some View {
+    @ViewBuilder private var connectSection: some View {
         Section {
             ForEach(link.discovered) { glasses in
                 Button {
-                    Task { await link.connect(glasses) }
+                    Task { await model.connect(glasses) }
                 } label: {
                     LabeledContent(glasses.name, value: "Connect")
                 }
                 .disabled(isConnecting)
             }
             if let last = link.lastGlasses, !link.discovered.contains(where: { $0.id == last.id }) {
-                Button("Reconnect to \(last.name)") { Task { await link.connect(last) } }
+                Button("Reconnect to \(last.name)") { Task { await model.connect(last) } }
                     .disabled(isConnecting)
             }
             if link.status == .scanning {
@@ -69,7 +115,7 @@ struct ContentView: View {
                     .disabled(isConnecting)
             }
         } header: {
-            Text("Glasses")
+            Text("Connect")
         } footer: {
             Text("Force-quit the Even app first. Lotti replaces it while connected.")
         }
