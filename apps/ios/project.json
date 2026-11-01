@@ -1,0 +1,27 @@
+{
+  "name": "ios",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/ios/Lotti",
+  "implicitDependencies": ["lotti-kit"],
+  "tags": ["platform:ios"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": { "command": "apps/ios/scripts/xcode.sh build" },
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "apps/ios/scripts/xcode.sh test" },
+      "inputs": ["default", "^default"],
+      "cache": true
+    },
+    "run-device": {
+      "executor": "nx:run-commands",
+      "options": { "command": "apps/ios/scripts/xcode.sh run-device" },
+      "continuous": true
+    }
+  }
+}
