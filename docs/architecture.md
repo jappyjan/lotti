@@ -8,8 +8,9 @@ Status: draft for discussion. Nothing here is built yet.
  ┌──────────── Even G2 glasses ────────────┐     ┌──── R1 ring ────┐
  │ display 576×288 · mic (LC3) · touchpads │     │ tap/scroll/hold │
  └───────────────────┬─────────────────────┘     └────────┬────────┘
-                     │ BLE (reverse-engineered protocol)  │ BLE
- ┌───────────────────┴────────────────────────────────────┴────────┐
+                     │ BLE ◄──── ring gestures ───────────┘ BLE (glasses ↔ ring)
+                     │ (reverse-engineered protocol)
+ ┌───────────────────┴─────────────────────────────────────────────┐
  │                       iPhone: Lotti app                         │
  │  Glasses link · Ring input · Renderer (schema → G2 containers)  │
  │  Voice (push-to-talk, dictation, "Hey Lotti")                   │
@@ -34,7 +35,7 @@ The **phone is the hub.** It owns the glasses and ring connection, gathers signa
 | Component        | Where  | Job                                                                                                                               |
 | ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | Glasses link     | iOS    | BLE connection, auth handshake, display commands, mic stream, touchpad events                                                     |
-| Ring input       | iOS    | R1 auth and gesture events                                                                                                        |
+| Ring input       | iOS    | R1 gestures. The ring is linked to the glasses, which relay its gestures through the glasses link ([S2](spikes/s2-ring.md))       |
 | Renderer         | iOS    | Turns a schema screen into G2 containers; pagination, focus, gesture → action mapping                                             |
 | Voice            | iOS    | Push-to-talk, on-device speech-to-text (`SpeechAnalyzer`), wake word spotter                                                      |
 | Signals          | iOS    | Notifications (`AccessoryNotifications`, EU), location, calendar, battery and connection state                                    |
