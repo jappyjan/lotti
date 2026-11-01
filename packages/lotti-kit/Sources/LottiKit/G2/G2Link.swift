@@ -168,6 +168,23 @@ public final class G2Link: NSObject, GlassesLink {
     public func show(_ frame: GlassesFrame) async throws {
         guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
         lastFrame = frame
+        do {
+            try await draw(frame, on: right)
+        } catch PageError.gone {
+            // The firmware closed our page (its own dashboard, or a reset). Start the session
+            // again and create the page from scratch.
+            print("[Glasses] page is gone, creating it again")
+            page.reset()
+            let prelude = try? await request(G2Payload.prelude(), sid: G2Service.appLaunch, flag: G2Flag.request,
+                                             magic: G2Payload.preludeMagic, to: right, step: "session prelude", seconds: 3)
+            log("prelude reply: \(prelude.map { hex($0.payload) } ?? "none")")
+            try await draw(frame, on: right)
+        }
+    }
+
+    private enum PageError: Error { case gone }
+
+    private func draw(_ frame: GlassesFrame, on right: Arm) async throws {
         var pageChanged = false
         for command in page.plan(frame) {
             let m = nextMagic()
@@ -187,6 +204,7 @@ public final class G2Link: NSObject, GlassesLink {
                     let result = reply.flatMap { G2Payload.rebuildResult($0.payload) }
                     let outcome = result.map { $0 == 6 ? "ok" : "result \($0)" } ?? "no ack"
                     print("[Glasses] rebuild \(boxes.map(\.name)): \(outcome)")
+                    if result == 7 { throw PageError.gone }
                     if let result, result != 6 {
                         throw GlassesLinkError.timeout("rebuilding the page (result \(result))")
                     }
