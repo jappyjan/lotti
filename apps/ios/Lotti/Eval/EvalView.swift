@@ -37,5 +37,11 @@ struct EvalView: View {
             }
         }
         .navigationTitle("Brain eval")
+        .onAppear {
+            // Keep the phone awake while the eval screen is open, so runs aren't cut off by auto-lock.
+            UIApplication.shared.isIdleTimerDisabled = true
+            controller.runFromLaunchArguments()
+        }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
     }
 }

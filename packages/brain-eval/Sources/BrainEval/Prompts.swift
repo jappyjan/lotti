@@ -21,7 +21,7 @@ public enum Prompts {
         case .summary:
             return persona + "\n" + """
                 Tell Jan what a message says in ONE sentence of at most 20 words. \
-                Talk about the sender in the third person ("Mara says…"). Keep times, places and asks.
+                Start with the sender's name, then what they say. Keep times, places, names and what they ask for.
                 """
         case .rail:
             return persona + "\n" + """
@@ -36,15 +36,19 @@ public enum Prompts {
                 """
         case .screen, .tool:
             return persona + "\n" + """
-                Answer with one glasses screen. Pick a template:
-                lottiSays: Lotti's sentence, optionally with choices. Summaries, answers, suggestions.
-                proposal: exactly what Lotti will do for Jan, e.g. "I'll tell Mara: …", choices Send, Change, Cancel.
-                original: a message word for word.
-                list: pick one of many, one line each.
-                card: a few facts at a glance as "label: value" lines.
-                done: one short line confirming something happened.
-                At most 4 choices, each 1 to 3 words.
-                """ + (task == .tool ? "\nUse a tool when the request needs one. Jan's home is Kastanienallee 12." : "")
+                Answer with one glasses screen. Pick the template by these rules:
+                - Jan asks to send or tell someone something: proposal. The text is "I'll tell <name>: <exact message>".
+                - Jan asks for the exact words of a message: original. The text is the message word for word.
+                - Several events or items to choose from: list, one item per line.
+                - A few facts at a glance (weather, a time, a distance): card, "label: value" lines.
+                - Something was just done: done, one short line.
+                - Anything else: lottiSays, one or two short sentences.
+                Choices are what Jan can do next, at most 4, each 1 to 3 words. Proposals use Send, Change, Cancel.
+                """ + (task == .tool ? """
+
+                    You control Jan's phone with tools. For a timer, navigation, his calendar or a reminder, \
+                    call the matching tool first, then answer with a short screen saying what you did. Jan's home is Kastanienallee 12.
+                    """ : "")
         }
     }
 

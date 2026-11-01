@@ -22,14 +22,32 @@ final class EvalController {
         UIDevice.current.isBatteryMonitoringEnabled = true
     }
 
+    /// Starts a run from launch arguments, so runs can be started from the Mac:
+    /// `--eval apple|pcc|gemma4-e2b|gemma4-e4b [--tasks triage,tool] [--soak 30] [--background 10]`.
+    func runFromLaunchArguments() {
+        let args = ProcessInfo.processInfo.arguments
+        func value(_ flag: String) -> String? {
+            args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+        }
+        guard let label = value("--eval"), let choice = EvalModelChoice.allCases.first(where: { $0.label == label })
+        else { return }
+        if let minutes = value("--soak").flatMap(Int.init) {
+            runSoak(choice, minutes: minutes)
+        } else if let minutes = value("--background").flatMap(Int.init) {
+            runBackgroundProbe(choice, minutes: minutes)
+        } else {
+            runEval(choice, tasks: value("--tasks").map { Set($0.split(separator: ",").compactMap { EvalTask(rawValue: String($0)) }) })
+        }
+    }
+
     func cancel() {
         task?.cancel()
         status = "Cancelling…"
     }
 
-    func runEval(_ choice: EvalModelChoice, task evalTask: EvalTask? = nil) {
+    func runEval(_ choice: EvalModelChoice, tasks: Set<EvalTask>? = nil) {
         start("Eval \(choice.label)") { [self] runner in
-            let cases = runner.set.cases.filter { evalTask == nil || $0.task == evalTask }
+            let cases = runner.set.cases.filter { tasks?.contains($0.task) ?? true }
             let results = await self.withModel(choice) { model in
                 await runner.run(model, label: choice.label, cases: cases)
             }

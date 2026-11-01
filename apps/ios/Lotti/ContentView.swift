@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ContentView: View {
     let model: AppModel
+    /// Spike S3: open the eval screen straight away when launched with `--eval`.
+    @State private var showEval = ProcessInfo.processInfo.arguments.contains("--eval")
     private var link: any GlassesLink { model.link }
 
     var body: some View {
@@ -35,6 +37,9 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Lotti")
+            .navigationDestination(isPresented: $showEval) {
+                if #available(iOS 27.0, *) { EvalView() }
+            }
         }
     }
 

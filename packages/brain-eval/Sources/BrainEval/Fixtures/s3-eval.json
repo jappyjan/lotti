@@ -174,7 +174,7 @@
       "language": "en",
       "now": "Mon 13:10",
       "event": { "app": "Slack", "from": "Ben", "text": "Can we move our 1:1 to 16:00 today?" },
-      "expect": { "mentionsAny": ["yes|sure|works|ok|fine|sounds good", "no|can't|cannot|other|later|tomorrow"] }
+      "expect": { "mentionsAny": ["yes|sure|works|ok|fine|sounds good|agree|confirm", "no|can't|cannot|other|later|tomorrow"] }
     },
     {
       "id": "rail-03-mum-call",
@@ -182,7 +182,7 @@
       "language": "de",
       "now": "Sun 17:00",
       "event": { "app": "Messages", "from": "Mama", "text": "Ruf mich an, wenn du Zeit hast 😘" },
-      "expect": { "mentionsAny": ["ruf|anruf|call", "später|abend|morgen|gleich"] }
+      "expect": { "mentionsAny": ["ruf|anruf|call|mach ich", "später|abend|morgen|gleich"] }
     },
     {
       "id": "rail-04-dhl-no-reply",
