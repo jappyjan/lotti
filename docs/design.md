@@ -57,10 +57,12 @@ The same on the R1 ring and both temple touchpads.
 Often you can't speak: in a meeting, on a full train, somewhere loud. Voice is a shortcut, never the only way.
 
 - **Answering:** pick one of Lotti's suggested replies. "Change" in a Proposal offers more ready-made replies (the ones you use most with this person) instead of dictation. Free text means taking out the phone.
-- **Starting something:** tap on the look-up view opens **Actions**, a List of things to do, with what you most likely need right now first: reply to the last message, media, timer (5 / 10 / 25 min), navigate home or to a favourite place, quiet for an hour, read the last summary again.
+- **Starting something:** tap on the look-up view opens **Actions**, a List of things to do, with what you most likely need right now first: reply to the last message, media, timer (5 / 10 / 25 min), navigate home or to a favourite place, quiet for an hour, read the last summary again (later also media).
 - **Rule:** every voice command people use often gets an entry in Actions.
 
 ## Media
+
+Not planned yet (see roadmap, Later): iOS only allows full control of Apple Music and Spotify, and play/pause for other apps.
 
 - **Now playing** is a quiet line in the look-up view while something plays.
 - Actions → **Media** opens a Card: title and artist, with Play/Pause, Next, Previous and Volume in the rail. On Volume, scroll changes the volume.
