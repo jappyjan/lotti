@@ -9,6 +9,8 @@ enum LogFile {
     static let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appending(path: "lotti.log")
     /// Start over above this size.
     static let limit = 4_000_000
+    /// Kept for the app's lifetime: freeing it would close stdout's new end.
+    nonisolated(unsafe) private static var pipe: Pipe?
 
     static func start() {
         // Not under unit tests: the test runner owns stdout.
@@ -27,6 +29,7 @@ enum LogFile {
         setvbuf(stdout, nil, _IOLBF, 0)
         let console = FileHandle(fileDescriptor: dup(STDOUT_FILENO), closeOnDealloc: true)
         let pipe = Pipe()
+        Self.pipe = pipe
         dup2(pipe.fileHandleForWriting.fileDescriptor, STDOUT_FILENO)
         let stamp = DateFormatter()
         stamp.dateFormat = "HH:mm:ss.SSS"
