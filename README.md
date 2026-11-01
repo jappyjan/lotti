@@ -8,6 +8,7 @@ Status: planning. The Nx workspace is empty; projects are added per milestone.
 - [Design language](docs/design.md)
 - [Architecture (draft)](docs/architecture.md)
 - [Roadmap](docs/roadmap.md): milestones map to Linear projects, items to issues
+- [Ideas](docs/ideas.md): wanted soon, not on the roadmap yet
 
 ## Workspace
 

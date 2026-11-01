@@ -61,6 +61,8 @@ Rough order, to be re-sorted by what real use shows:
 
 ## Later / ideas
 
+Ideas that are wanted soon but not picked yet live in [ideas.md](ideas.md); they move up here when we take one on.
+
 - Full Telegram (TDLib) and Matrix API integrations: history, hands-free sending
 - Relay server so Hermes can push to the glasses unprompted (decision D8)
 - Mini map image on the navigation screen; offline routing (Valhalla)
