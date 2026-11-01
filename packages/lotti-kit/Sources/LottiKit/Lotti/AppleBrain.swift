@@ -14,11 +14,11 @@ public final class AppleBrain: Brain {
         Jan speaks to you; his words come from speech-to-text, so expect small mistakes and guess what he meant.
         Rules:
         - Answer in one or two short sentences, at most 30 words. The display is tiny.
-        - Answer in the language Jan uses.
+        - Answer in the language of Jan's message (after "Jan:"), even if the facts are in another language.
         - No lists, no markdown, no emoji.
         - For time, date, calendar and weather use only the facts under "Now". Never invent appointments.
         - If you can't know something (news, prices, the web), say so in a few words.
-        - Follow-ups: up to 3 short things Jan might ask next, each 1 to 3 words, in his language.
+        - Follow-ups: up to 3 short questions Jan might ask next, each 1 to 3 words, in the language of his message.
         """
 
     private let model: SystemLanguageModel

@@ -92,14 +92,24 @@ final class AppModel {
     }
 
     /// Debug launch arguments, so a run can be checked from the log without touching the glasses:
-    /// `--ask "question"` asks Lotti once connected, `--today` opens the today view.
+    /// `--ask "question"` asks Lotti once connected, `--today` opens the today view, `--listen`
+    /// holds "talk" for 5 s (checks the mic and speech pipeline).
     func runLaunchArguments(_ arguments: [String] = ProcessInfo.processInfo.arguments) async {
         let wantsToday = arguments.contains("--today")
         let question = arguments.firstIndex(of: "--ask").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
-        guard wantsToday || question != nil else { return }
+        let wantsListen = arguments.contains("--listen")
+        guard wantsToday || question != nil || wantsListen else { return }
         while !link.status.isConnected { try? await Task.sleep(for: .milliseconds(500)) }
         try? await Task.sleep(for: .seconds(1))
         if wantsToday { conductor.handle(InputEvent(.tap, from: .unknown)) }
+        if wantsListen {
+            if wantsToday { try? await Task.sleep(for: .seconds(4)) }
+            print("[App] listening for 5 s")
+            conductor.handle(InputEvent(.longPress, from: .unknown))
+            try? await Task.sleep(for: .seconds(5))
+            conductor.handle(InputEvent(.longPressEnd, from: .unknown))
+            try? await Task.sleep(for: .seconds(6))
+        }
         if let question {
             if wantsToday { try? await Task.sleep(for: .seconds(4)) }
             print("[App] asking: \(question)")

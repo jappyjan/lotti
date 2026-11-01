@@ -6,7 +6,7 @@ import LottiKit
 /// Today's calendar (EventKit) and weather (Open-Meteo at the phone's location).
 actor DeviceToday: TodayProvider {
     private let store = EKEventStore()
-    private var calendarAllowed: Bool?
+    private var calendarAccess: Task<Bool, Never>?
     private var weather: (value: Weather, fetched: Date)?
     private var location: CLLocationCoordinate2D?
     /// Berlin, until the phone knows where it is.
@@ -19,11 +19,10 @@ actor DeviceToday: TodayProvider {
     }
 
     private func events(on now: Date) async -> [CalendarEntry] {
-        if calendarAllowed == nil {
-            calendarAllowed = (try? await store.requestFullAccessToEvents()) ?? false
-            print("[Today] calendar access: \(calendarAllowed!)")
+        if calendarAccess == nil {
+            calendarAccess = Task { await self.requestCalendarAccess() }
         }
-        guard calendarAllowed == true else { return [] }
+        guard await calendarAccess?.value == true else { return [] }
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: now)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
@@ -32,6 +31,12 @@ actor DeviceToday: TodayProvider {
             CalendarEntry(title: $0.title ?? "Event", start: $0.startDate, end: $0.endDate, isAllDay: $0.isAllDay,
                           location: $0.location?.isEmpty == false ? $0.location : nil)
         }
+    }
+
+    private func requestCalendarAccess() async -> Bool {
+        let allowed = (try? await store.requestFullAccessToEvents()) ?? false
+        print("[Today] calendar access: \(allowed)")
+        return allowed
     }
 
     private func currentWeather(now: Date) async -> Weather? {
