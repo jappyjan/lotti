@@ -12,6 +12,7 @@ struct LottiApp: App {
     private let toolbox: Toolbox
 
     init() {
+        LogFile.start()
         let link = G2Link()
         if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
         link.headUpSettings = Settings.headUp

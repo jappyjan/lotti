@@ -181,6 +181,11 @@ struct LocalPipelineTests {
         ("Was steht auf meinen Erinnerungen?", ["reminders"]),
         ("Stell einen Timer auf 10 Minuten", ["set_timer"]),
         ("Termine und Wetter morgen?", ["calendar", "weather"]),
+        ("Wann macht der Edeka hier zu?", ["hermes"]),
+        ("Gibt es was Neues?", ["hermes"]),
+        ("Was kostet gerade ein Bitcoin?", ["hermes"]),
+        ("Who won the game yesterday?", ["hermes"]),
+        ("Hat die Apotheke noch offen?", ["hermes"]),
     ])
     func rulesPickTools(_ message: String, _ tools: [String]) {
         #expect(LocalPipeline.ruleTools(message, tools: specs) == tools)
@@ -188,7 +193,7 @@ struct LocalPipelineTests {
 
     @Test func noRuleLeavesItToTheModel() {
         #expect(LocalPipeline.ruleTools("How are you?", tools: specs) == nil)
-        #expect(LocalPipeline.ruleTools("What's new in the Bundestag?", tools: specs) == nil)
+        #expect(LocalPipeline.ruleTools("Wie hoch ist der Eiffelturm?", tools: specs) == nil)
         #expect(LocalPipeline.ruleTools("Wo bin ich?", tools: []) == nil)
     }
 

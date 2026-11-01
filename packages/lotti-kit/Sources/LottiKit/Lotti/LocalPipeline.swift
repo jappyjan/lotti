@@ -71,6 +71,8 @@ public enum LocalPipeline {
     /// Phrases that clearly ask for a tool, German and English. Checked before the model chooses:
     /// deterministic and instant. The model only chooses when no rule matches.
     static let rules: [(tool: String, pattern: String)] = [
+        // Things only Hermes can know. The phone can't look up the web, and the model invents answers.
+        ("hermes", #"\b(nachrichten|news|neues|neuigkeiten|schlagzeilen|headlines|kostet|kosten|preise?|prices?|costs?|öffnungszeit(en)?|opening hours|geöffnet|offen|open|macht .*\b(zu|auf)\b|schlie(ß|ss)t|closes?|wer hat .*gewonnen|who won|ergebnis(se)?|scores?|such(e)? (mir|nach)|search|look up|recherch\w*|google)\b"#),
         ("create_reminder", #"\b(erinner(e|n)? mich|remind me|vergiss nicht|don'?t let me forget)\b"#),
         ("reminders", #"\b(erinnerungen|reminders|to-?dos?|aufgaben(liste)?)\b"#),
         ("set_timer", #"\b(timer|countdown|stoppuhr)\b"#),
@@ -79,14 +81,15 @@ public enum LocalPipeline {
         ("weather", #"\b(wetter|weather|regen|regnet|rain(ing)?|schirm|umbrella|temperatur(e)?|kalt|cold|warm|grad|sonnig|sunny|schnee|snow|wind(ig|y)?)\b"#),
     ]
 
-    /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. A new reminder
-    /// wins over reading the reminder list.
+    /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. Hermes wins
+    /// over everything; a new reminder wins over reading the reminder list.
     public static func ruleTools(_ message: String, tools: [PhoneToolSpec]) -> [String]? {
         let text = message.lowercased()
-        let available = Set(tools.map(\.name))
+        let available = Set(tools.map(\.name) + ["hermes"])
         var picked = rules.filter { rule in
             available.contains(rule.tool) && (try? Regex(rule.pattern)).map { text.contains($0) } == true
         }.map(\.tool)
+        if picked.contains("hermes") { return ["hermes"] }
         if picked.contains("create_reminder") { picked.removeAll { $0 == "reminders" } }
         return picked.isEmpty ? nil : Array(picked.prefix(3))
     }

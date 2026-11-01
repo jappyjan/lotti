@@ -161,6 +161,11 @@ public final class AppleBrain: Brain {
         let response = try await session.respond(to: prompt, generating: ChatOutput.self,
                                                  options: GenerationOptions(temperature: 0.3, maximumResponseTokens: 160))
         let output = response.content
+        if !output.canAnswer {
+            // The facts don't hold the answer: Hermes may know. The conductor says so if Hermes isn't set up.
+            note("can't answer (\(output.sentence)) → Hermes")
+            return Answer(sentence: LocalPipeline.handoffSentence(language: language), handoff: message)
+        }
         let followUps = output.followUps.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return Answer(sentence: output.sentence.trimmingCharacters(in: .whitespacesAndNewlines), followUps: followUps)
     }
@@ -211,6 +216,8 @@ public enum BrainError: Error, LocalizedError {
 @available(iOS 26.0, macOS 26.0, *)
 @Generable
 struct ChatOutput {
+    @Guide(description: "true if the facts, the conversation or the date and time answer Jan, or it is small talk; false if they don't (you would have to guess or say you don't know)")
+    var canAnswer: Bool
     @Guide(description: "Lotti's answer: one or two short sentences, at most 30 words")
     var sentence: String
     @Guide(description: "Up to 3 things Jan might ask next, each 1 to 3 words", .maximumCount(3))

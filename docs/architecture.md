@@ -137,12 +137,12 @@ Rules (enforced by `Toolbox`, not by prompts):
 
 A single session with tool calling failed on the ~3B model: it made up a free calendar instead of calling the tool, answered as if it were Jan, claimed a timer was set, and broke its output format. One step per job works far better (`LocalPipeline`, `AppleBrain`):
 
-1. **Choose tools.** Rules first: clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", …) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
+1. **Choose tools.** Rules first. Questions only Hermes can answer (news, prices, opening hours, "who won", search) go straight to Hermes; Hermes asks the phone for the location itself when "here" matters. Then clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", …) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
 2. **Fill in arguments,** one small step per chosen tool, with only that tool's parameters and no date in the prompt (the model copies a date instead of writing "tomorrow").
 3. **Actions are only prepared** and get a fixed sentence ("Bereit: Timer 10 min. Tipp zum Starten."), so the model can't claim they're done. A hand-off gets "Ich frag Hermes."
 4. **Run the reads** in parallel; the glasses show what's being checked.
 5. **Shorten** results longer than ~280 characters to what the question needs.
-6. **Answer** from the facts only, in a fresh session: the answer's language is detected in code (`NLLanguageRecognizer`, German or English), Jan is addressed as du/you, 24-hour times. Facts are labelled by meaning ("where Jan is right now: …") so they don't get mixed up.
+6. **Answer** from the facts only. The answer step also says whether the facts really answer the question; if not, the question goes to Hermes instead of "I don't know". Answer, in a fresh session: the answer's language is detected in code (`NLLanguageRecognizer`, German or English), Jan is addressed as du/you, 24-hour times. Facts are labelled by meaning ("where Jan is right now: …") so they don't get mixed up.
 
 Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
 
