@@ -23,13 +23,20 @@ struct ConductorTests {
 
     // MARK: Today view
 
-    @Test func tapOpensTheTodayViewAndDoubleTapClosesIt() async throws {
-        press(.tap)
+    @Test func doubleTapOpensTheTodayViewAndDoubleTapClosesIt() async throws {
+        press(.doubleTap)
         #expect(conductor.mode == .today(byHead: false))
         try await eventually { link.frames.last?.main.contains("Your calendar is free today.") == true }
         press(.doubleTap)
         #expect(conductor.mode == .off)
         try await eventually { link.frames.last == .dark }
+    }
+
+    @Test func aSingleTapDoesNotWakeTheDisplay() {
+        press(.tap)
+        #expect(conductor.mode == .off)
+        press(.tap)
+        #expect(conductor.mode == .off)
     }
 
     @Test func lookingUpOpensAndLookingDownCloses() async throws {
@@ -40,18 +47,18 @@ struct ConductorTests {
     }
 
     @Test func lookingDownKeepsATouchedTodayView() {
-        press(.tap)
+        press(.doubleTap)
         press(.headDown)
         #expect(conductor.mode == .today(byHead: false))
     }
 
     @Test func touchedTodayViewGoesDarkWhenIdle() async throws {
-        press(.tap)
+        press(.doubleTap)
         try await eventually(timeout: 2) { conductor.mode == .off }
     }
 
     @Test func railOpensWeatherAndDoubleTapGoesBack() async throws {
-        press(.tap)
+        press(.doubleTap)
         try await eventually { conductor.screen?.rail?.items.map(\.title) == ["Weather"] }
         press(.tap)
         #expect(conductor.mode == .showing)
@@ -161,13 +168,24 @@ struct ConductorTests {
         #expect(conductor.lastError?.contains("Hermes") == true)
     }
 
-    @Test func whenHermesIsSlowThePhoneAnswers() async throws {
+    @Test func whenHermesGoesQuietThePhoneAnswers() async throws {
         let hermes = FakeHermes()
         hermes.delay = .seconds(5)
         let conductor = conductorWithHermes(hermes)
         brain.answers = ["Tell me a joke": Answer(sentence: "A short one.")]
         conductor.ask("Tell me a joke")
         try await eventually { conductor.screen?.text == "A short one." }
+    }
+
+    @Test func whenHermesKeepsWorkingThePhoneWaits() async throws {
+        let hermes = FakeHermes()
+        hermes.delay = .milliseconds(500)
+        hermes.progressEvery = .milliseconds(50)
+        hermes.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
+        let conductor = conductorWithHermes(hermes)
+        conductor.ask("Tell me a joke")
+        try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
+        #expect(brain.asked.isEmpty)  // the phone never had to stand in
     }
 
     @Test func standingInThePhoneDoesntBounceBackToHermes() async throws {
@@ -236,6 +254,16 @@ struct ConductorTests {
         conductor.ask("Hermes, plan my week")
         try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
         #expect(conductor.screen?.rail?.current?.action == .askHermes("plan my week"))
+    }
+
+    @Test func askingForHermesStillTimesOutEvenWhileWorking() async throws {
+        let hermes = FakeHermes()
+        hermes.delay = .seconds(5)
+        hermes.progressEvery = .milliseconds(50)  // progress doesn't extend an explicit ask
+        let conductor = conductorWithHermes(hermes)
+        conductor.ask("Hermes, plan my week")
+        try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
+        #expect(brain.asked.isEmpty)
     }
 
     @Test func withoutHermesTheHandoffSaysSo() async throws {
@@ -326,29 +354,13 @@ struct ConductorTests {
 
     @Test func withTheDisplayOffDoubleTapThenHoldTalks() {
         press(.doubleTap)
-        #expect(conductor.mode == .off)  // nothing lights up
+        #expect(conductor.mode == .today(byHead: false))  // the double tap opens today
         press(.longPress)
         #expect(conductor.mode == .listening)
     }
 
-    @Test func theDoubleTapIsOnlyGoodForAFewSeconds() async throws {
-        let conductor = Conductor(link: link, brain: brain, speech: speech, today: FixedToday(info: TodayInfo(now: Date())),
-                                  timing: .init(talkWindow: .milliseconds(100)))
-        conductor.handle(InputEvent(.doubleTap, from: .ring))
-        try await Task.sleep(for: .milliseconds(200))
-        conductor.handle(InputEvent(.longPress, from: .ring))
-        #expect(conductor.mode == .off)
-    }
-
-    @Test func anotherGestureInBetweenCancelsTheDoubleTap() {
-        press(.doubleTap)
-        press(.scrollDown)
-        press(.longPress)
-        #expect(conductor.mode == .off)
-    }
-
     @Test func longPressIsOnlyTalk() async throws {
-        press(.tap)
+        press(.doubleTap)
         press(.longPress)
         #expect(conductor.mode == .listening)
     }
@@ -380,6 +392,8 @@ final class FakeHermes: RemoteBrain {
     var answers: [String: Answer] = [:]
     var statuses: [String] = []
     var delay: Duration?
+    /// Emits one status line this often while waiting, like Hermes's progress events.
+    var progressEvery: Duration?
     var error: Error?
     private(set) var asked: [String] = []
     private(set) var contexts: [String] = []
@@ -389,7 +403,15 @@ final class FakeHermes: RemoteBrain {
         asked.append(message)
         contexts.append(context)
         for line in statuses { status(line) }
-        if let delay { try await Task.sleep(for: delay) }
+        if let progressEvery, let delay {
+            let end = ContinuousClock.now.advanced(by: delay)
+            while ContinuousClock.now < end {
+                try await Task.sleep(for: progressEvery)
+                status("Working…")
+            }
+        } else if let delay {
+            try await Task.sleep(for: delay)
+        }
         if let error { throw error }
         return answers[message] ?? Answer(sentence: "?")
     }

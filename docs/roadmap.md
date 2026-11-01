@@ -20,8 +20,8 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
   - **Phone tools** for both brains: calendar, weather, location, directions (MapKit), reminders; timer (AlarmKit) and new reminder as tap-to-confirm actions. See [architecture.md](architecture.md#phone-tools).
   - **Hermes connector** with Lotti's reply format, which lets Hermes call several phone tools at once. Tried with the real Hermes over Tailscale: answers in 2–4 s.
   - **On-device brain rebuilt as a pipeline of small steps** (rules → choose → fill in → tools → answer) after the single-session version made things up. No fixed facts in any prompt. See [architecture.md](architecture.md#on-device-brain-a-pipeline-of-small-steps).
-  - **Talk gesture with the display off:** double tap, then hold within 3 s. Hold alone still talks while something is shown.
-  - **Routing** (PR #9): Hermes by default, the phone for simple tasks its rules recognise (weather, timer, reminders, calendar, location, directions) and as the fallback when Hermes fails or takes over 20 s.
+  - **Talk gesture with the display off:** double tap (today opens), then hold. Hold alone still talks while something is shown.
+  - **Routing** (PR #9): Hermes by default, the phone for simple tasks its rules recognise (weather, timer, reminders, calendar, location, directions) and as the fallback when Hermes fails or goes quiet 20 s (status lines and tool calls restart the clock).
   - **`Documents/lotti.log`** on the phone, readable with `devicectl`, for checking runs afterwards.
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 

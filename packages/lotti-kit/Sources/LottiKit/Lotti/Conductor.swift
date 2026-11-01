@@ -4,12 +4,12 @@ import Observation
 /// Runs Lotti on the glasses: turns gestures, head movement, speech and answers into screens.
 ///
 /// Gestures (same on the ring and both touchpads):
-/// - display off: tap or look up → today view
+/// - display off: double tap or look up → today view
 /// - scroll moves the rail highlight, tap picks it
 /// - double tap: back (from a screen opened from the rail), otherwise display off, which also
 ///   ends the conversation
 /// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
-///   off, talking needs a double tap first, then the hold within a few seconds, so a stray hold
+///   off, talking needs a double tap first (the today view opens), then the hold, so a stray hold
 ///   in your pocket or hair doesn't start listening.
 @MainActor
 @Observable
@@ -27,15 +27,14 @@ public final class Conductor {
         public var conversation: Duration
         /// Give up on Hermes after this when you asked for it. It may research the web; double tap cancels sooner.
         public var remote: Duration
-        /// For questions Hermes gets by default: after this, the phone answers instead.
+        /// For questions Hermes gets by default: the phone answers if Hermes is silent for this long.
+        /// Progress (status lines, tool calls) restarts the clock, so a slow answer isn't cut off.
         public var remoteFallback: Duration
-        /// With the display off, a hold starts talking only this soon after a double tap.
-        public var talkWindow: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20), talkWindow: Duration = .seconds(3)
+            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20)
         ) {
             self.idle = idle
             self.done = done
@@ -44,7 +43,6 @@ public final class Conductor {
             self.conversation = conversation
             self.remote = remote
             self.remoteFallback = remoteFallback
-            self.talkWindow = talkWindow
         }
     }
 
@@ -89,8 +87,8 @@ public final class Conductor {
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
-    /// Set by a double tap with the display off: a hold before this starts talking.
-    @ObservationIgnored private var talkArmedUntil: Date?
+    /// When Hermes last made progress, so the fallback waits for silence, not a fixed total time.
+    @ObservationIgnored private var hermesActivity = ContinuousClock.now
 
     public init(
         link: any GlassesLink, brain: any Brain, hermes: (any RemoteBrain)? = nil, toolbox: Toolbox = Toolbox(),
@@ -139,19 +137,16 @@ public final class Conductor {
 
     public func handle(_ event: InputEvent) {
         log("\(event) in \(mode)")
-        let armed = talkArmedUntil.map { now() <= $0 } ?? false
-        if event.gesture != .longPressEnd { talkArmedUntil = nil }
         switch event.gesture {
         case .longPress:
-            // Display off: only "double tap, pause, hold" talks.
-            guard mode != .off || armed else { return log("hold ignored: display off, no double tap first") }
+            // Display off: only "double tap, then hold" talks (the double tap opens today first).
+            guard mode != .off else { return log("hold ignored: display off, no double tap first") }
             startListening()
         case .longPressEnd: if mode == .listening { stopListening() }
-        case .doubleTap where mode == .off:
-            talkArmedUntil = now().addingTimeInterval(timing.talkWindow / .seconds(1))
         case .headUp: if mode == .off { showToday(byHead: true) }
         case .headDown: if mode == .today(byHead: true) { turnOff() }
         case .tap: tap()
+        case .doubleTap where mode == .off: showToday(byHead: false)
         case .doubleTap: back()
         case .scrollDown: moveHighlight(down: true)
         case .scrollUp: moveHighlight(down: false)
@@ -160,7 +155,7 @@ public final class Conductor {
 
     private func tap() {
         switch mode {
-        case .off, .done: showToday(byHead: false)
+        case .off, .done: break  // a single tap alone does nothing; a double tap opens today
         case .today, .showing:
             guard let item = screen?.rail?.current else { return restartIdleTimer() }
             pick(item.action)
@@ -460,8 +455,10 @@ public final class Conductor {
         }
     }
 
-    /// Hermes. `fallback`: the question for the on-device brain if Hermes fails or takes longer
-    /// than `timing.remoteFallback`; nil to wait up to `timing.remote` and report errors.
+    /// Hermes. `fallback`: the question for the on-device brain if Hermes fails or goes quiet
+    /// for `timing.remoteFallback`; nil to wait up to `timing.remote` and report errors. Status
+    /// lines and tool calls mean Hermes is still working and restart the quiet clock, so a long
+    /// answer isn't handed over as long as it keeps making progress.
     private func askHermes(_ question: String, info: TodayInfo, fallback: String?) async {
         guard let hermes, hermes.isConfigured else {
             if let fallback { return await askLocal(fallback, info: info, mayHandOff: false) }
@@ -470,10 +467,21 @@ public final class Conductor {
         }
         if mode == .working { show(Screen(.working, "Asking Hermes…"), timeout: false) }
         let context = composer.nowLine(info)
-        let result: Result<Answer, Error>? = await withTimeout(fallback == nil ? timing.remote : timing.remoteFallback) { [weak self] in
+        hermesActivity = ContinuousClock.now
+        let timeout: Duration
+        let activity: (@MainActor @Sendable () -> ContinuousClock.Instant)?
+        if fallback == nil {
+            timeout = timing.remote
+            activity = nil
+        } else {
+            timeout = timing.remoteFallback
+            activity = { [weak self] in self?.hermesActivity ?? ContinuousClock.now }
+        }
+        let result: Result<Answer, Error>? = await withTimeout(timeout, activity: activity) { [weak self] in
             do {
                 return .success(try await hermes.answer(question, context: context) { [weak self] status in
                     self?.working(status)
+                    self?.hermesActivity = ContinuousClock.now
                 })
             } catch {
                 return .failure(error)
@@ -483,7 +491,7 @@ public final class Conductor {
         if let fallback {
             let problem: String? = switch result {
             case .failure(let error): error.localizedDescription
-            case nil: "too slow"
+            case nil: "went quiet"
             case .success: nil
             }
             if let problem {

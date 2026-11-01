@@ -118,7 +118,7 @@ Known limits (from S3):
 
 **Routing (`Router`): Hermes by default, the phone for simple tasks and as the fallback.**
 
-| Question                                                                                                         | Who answers                                  | If Hermes fails or takes over 20 s |
+| Question                                                                                                         | Who answers                                  | If Hermes fails or goes quiet 20 s |
 | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------- |
 | A rule recognises a simple task: weather, timer, new reminder, reminder list, calendar, "where am I", directions | the phone                                    | –                                  |
 | … weather or directions for another place ("in Lissabon", "from Berlin")                                         | Hermes (it can still call the phone's tools) | the phone                          |
@@ -127,7 +127,7 @@ Known limits (from S3):
 | You ask for Hermes: "Hermes, …", "Dig into …", "Ask Hermes" in the rail                                          | Hermes, waits up to 2 minutes                | an error with "Try again"          |
 | Hermes isn't set up                                                                                              | the phone, for everything                    | –                                  |
 
-The local set is the tasks the on-device eval passes reliably (`Router.localTools`). When the phone stands in for Hermes and can't answer, it says so instead of handing back to Hermes. When the phone answers a simple task and finds it can't (an "I don't know"), it hands the question to Hermes. Deterministic rules come before all of this: ring "back", gestures, the today view.
+The local set is the tasks the on-device eval passes reliably (`Router.localTools`). When the phone stands in for Hermes and can't answer, it says so instead of handing back to Hermes. When the phone answers a simple task and finds it can't (an "I don't know"), it hands the question to Hermes. The fallback only kicks in when Hermes has actually stopped: an error, or 20 s of silence — status lines and tool calls restart that clock, so a long answer keeps working. Deterministic rules come before all of this: ring "back", gestures, the today view.
 
 ## Phone tools
 
