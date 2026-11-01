@@ -47,28 +47,53 @@ struct ProtoWriter {
     }
 }
 
-/// Reads the top-level varint fields of a protobuf message. Enough to pull the command id
-/// (field 1) and magic (field 2) out of a reply.
+/// Reads the fields of a protobuf message: enough to pull the command id (field 1) and magic
+/// (field 2) out of a reply, and to walk into the nested messages of an event.
 enum ProtoReader {
+    /// First value of each varint field. Zero values are usually left out on the wire, so a
+    /// missing field means 0.
     static func varintFields(_ bytes: [UInt8]) -> [Int: UInt64] {
         var result: [Int: UInt64] = [:]
+        walk(bytes) { field, varint, _ in
+            if let varint, result[field] == nil { result[field] = varint }
+        }
+        return result
+    }
+
+    /// First length-delimited field `field` (a nested message, string or bytes), or nil.
+    static func message(_ bytes: [UInt8], _ field: Int) -> [UInt8]? {
+        var found: [UInt8]?
+        walk(bytes) { f, _, data in
+            if found == nil, f == field, let data { found = data }
+        }
+        return found
+    }
+
+    static func string(_ bytes: [UInt8], _ field: Int) -> String? {
+        message(bytes, field).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// Calls `visit` for every field: varints with their value, length-delimited fields with
+    /// their bytes. Fixed-width fields are skipped. Stops at the first malformed byte.
+    private static func walk(_ bytes: [UInt8], _ visit: (Int, UInt64?, [UInt8]?) -> Void) {
         var i = 0
         while i < bytes.count {
-            guard let key = readVarint(bytes, &i) else { break }
+            guard let key = readVarint(bytes, &i) else { return }
             let field = Int(key >> 3)
             switch key & 7 {
             case 0:
-                guard let v = readVarint(bytes, &i) else { return result }
-                if result[field] == nil { result[field] = v }
+                guard let v = readVarint(bytes, &i) else { return }
+                visit(field, v, nil)
             case 1: i += 8
             case 2:
-                guard let len = readVarint(bytes, &i) else { return result }
-                i += Int(len)
+                guard let len = readVarint(bytes, &i).flatMap({ Int(exactly: $0) }), len <= bytes.count - i
+                else { return }
+                visit(field, nil, Array(bytes[i..<i + len]))
+                i += len
             case 5: i += 4
-            default: return result
+            default: return
             }
         }
-        return result
     }
 
     static func readVarint(_ bytes: [UInt8], _ i: inout Int) -> UInt64? {

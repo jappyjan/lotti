@@ -3,12 +3,13 @@ import SwiftUI
 
 @main
 struct LottiApp: App {
-    @State private var model = AppModel(link: G2Link())
+    @State private var model = AppModel(link: G2Link(), ring: R1Link())
 
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
                 .task { await model.launch() }
+                .task { await model.receiveInputs() }
         }
     }
 }

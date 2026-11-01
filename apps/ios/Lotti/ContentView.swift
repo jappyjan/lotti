@@ -16,6 +16,9 @@ struct ContentView: View {
                     }
                 }
 
+                inputSection
+                ringSection
+
                 if link.status.isConnected {
                     Section {
                         Button("Send hello") { Task { await model.sendHello() } }
@@ -27,6 +30,46 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Lotti")
+        }
+    }
+
+    @ViewBuilder private var inputSection: some View {
+        Section("Last input") {
+            if model.inputs.isEmpty {
+                Text("Tap a touchpad or use the ring.").foregroundStyle(.secondary)
+            }
+            ForEach(model.inputs) { input in
+                LabeledContent {
+                    Text(input.time, format: .dateTime.hour().minute().second())
+                } label: {
+                    Text(input.event.gesture.rawValue).font(input.id == model.inputs.first?.id ? .headline : .body)
+                    Text("\(input.event.source.rawValue) · via \(input.path.rawValue)")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var ringSection: some View {
+        Section {
+            LabeledContent("Ring", value: ringStatusText)
+            switch model.ring.status {
+            case .disconnected, .failed:
+                Button("Connect ring directly") { model.ring.connect() }
+            default:
+                Button("Disconnect ring", role: .destructive) { model.ring.disconnect() }
+            }
+        } footer: {
+            Text("Only needed if the ring isn't linked to the glasses.")
+        }
+    }
+
+    private var ringStatusText: String {
+        switch model.ring.status {
+        case .disconnected: "Not connected"
+        case .scanning: "Scanning…"
+        case .connecting: "Connecting…"
+        case .connected(let name): name
+        case .failed(let reason): reason
         }
     }
 
