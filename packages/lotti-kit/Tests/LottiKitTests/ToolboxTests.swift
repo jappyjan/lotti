@@ -13,9 +13,9 @@ final class FakeTool: PhoneTool, @unchecked Sendable {
     var runs: [ToolArguments] { lock.withLock { _runs } }
 
     init(_ name: String, _ effect: PhoneToolSpec.Effect = .read, parameters: [ToolParameter] = [], result: String = "ok",
-         delay: Duration? = nil) {
+         delay: Duration? = nil, timeout: Duration? = nil) {
         spec = PhoneToolSpec(name: name, description: "Fake \(name).", parameters: parameters, effect: effect,
-                             progress: "Checking \(name)…")
+                             progress: "Checking \(name)…", timeout: timeout)
         self.result = result
         self.delay = delay
     }
@@ -96,6 +96,13 @@ struct ToolboxTests {
         #expect(results == [ToolResult(id: "1", ok: false, content: "slow took too long.")])
     }
 
+    @Test func aToolCanTakeLongerThanTheToolboxDefault() async {
+        let toolbox = Toolbox([FakeTool("slow", delay: .milliseconds(300), timeout: .seconds(2))],
+                              callTimeout: .milliseconds(100))
+        let results = await toolbox.run([ToolCall(id: "1", tool: "slow")], allowed: ["slow"])
+        #expect(results == [ToolResult(id: "1", ok: true, content: "ok")])
+    }
+
     @Test func aFailingToolReportsItsError() async {
         let tool = FakeTool("reminders")
         tool.error = ToolError("No access to reminders.")
@@ -165,7 +172,7 @@ struct ToolTextTests {
 }
 
 struct LocalPipelineTests {
-    let specs = ["location", "directions", "calendar", "weather", "reminders", "set_timer", "create_reminder"].map {
+    let specs = ["location", "start_navigation", "calendar", "weather", "reminders", "set_timer", "create_reminder"].map {
         PhoneToolSpec(name: $0, description: "", effect: .read, progress: "")
     }
 
@@ -186,12 +193,33 @@ struct LocalPipelineTests {
         ("Was kostet gerade ein Bitcoin?", ["hermes"]),
         ("Who won the game yesterday?", ["hermes"]),
         ("Hat die Apotheke noch offen?", ["hermes"]),
-        ("Wie komme ich von hier zum Media Markt Altenach?", ["directions"]),
-        ("How far is the main station?", ["directions"]),
-        ("Wie lange brauche ich zum Hauptbahnhof?", ["directions"]),
+        ("Wie komme ich von hier zum Media Markt Altenach?", ["start_navigation"]),
+        ("Walk me home", ["start_navigation"]),
+        ("Bring mich mit dem Rad zum Mauerpark", ["start_navigation"]),
+        ("navigiere mich zur nächsten Apotheke", ["start_navigation"]),
+        ("Navigation zu Media Markt.", ["start_navigation"]),
+        ("starte die Navigation zum nächstengelegenen MediaMarkt", ["start_navigation"]),
+        ("Wo ist der nächste MediaMarkt?", ["start_navigation"]),
+        ("Where is the nearest pharmacy?", ["start_navigation"]),
+        ("We're done, take me to the Hauptbahnhof", ["start_navigation"]),
+        ("lotse mich zum nächsten Späti", ["start_navigation"]),
+        ("Fährst du mich zum Zahnarzt?", ["start_navigation"]),
+        ("Give me directions to the Späti", ["start_navigation"]),
     ])
     func rulesPickTools(_ message: String, _ tools: [String]) {
         #expect(LocalPipeline.ruleTools(message, tools: specs) == tools)
+    }
+
+    @Test(arguments: [
+        "How far is the main station?",
+        "Wie lange brauche ich zum Hauptbahnhof?",
+        "How long does it take to walk to the office?",
+        "Wie weit ist es noch bis zum Mauerpark?",
+        "Walk me through the setup",
+    ])
+    func distanceQuestionsHaveNoRule(_ message: String) {
+        // A distance / duration question is not "start navigating": the rule must not match.
+        #expect(!(LocalPipeline.ruleTools(message, tools: specs) ?? []).contains("start_navigation"))
     }
 
     @Test func noRuleLeavesItToTheModel() {
@@ -227,14 +255,7 @@ struct LocalPipelineTests {
     }
 }
 
-struct DirectionsTextTests {
-    @Test func describesATrip() {
-        let text = ToolText().trip(to: "Media Markt, Ottenser Hauptstraße 10, Hamburg", meters: 2140,
-                                   minutes: ["walk": 26.2, "bike": 9, "transit": 14, "car": 72])
-        #expect(text == "Media Markt, Ottenser Hauptstraße 10, Hamburg: 2.1 km away. On foot 26 min, by bike 9 min, by public transport 14 min, by car 1 h 12 min.")
-        #expect(ToolText().trip(to: "Bäcker", meters: 234, minutes: [:]) == "Bäcker: 230 m away.")
-    }
-
+struct UnsureAnswerTests {
     @Test func noticesUnsureAnswers() {
         #expect(LocalPipeline.soundsUnsure("Ich weiß nicht, wie du zum Media Markt Altenach kommst."))
         #expect(LocalPipeline.soundsUnsure("I don't know that, sorry."))

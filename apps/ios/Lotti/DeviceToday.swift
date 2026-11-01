@@ -68,6 +68,12 @@ actor DeviceToday: TodayProvider {
         return location?.coordinate
     }
 
+    /// The most recent fix without fetching a new one. Good enough to plan from — the
+    /// navigation session's own stream takes over from there. Nil if there never was one.
+    func lastKnownLocation() async -> CLLocationCoordinate2D? {
+        location?.coordinate
+    }
+
     /// Where the phone is, at most 15 minutes old if a new fix can be had. Nil if never known.
     private func coordinate() async -> CLLocationCoordinate2D? {
         if let location, Date().timeIntervalSince(location.found) < 15 * 60 { return location.coordinate }

@@ -116,7 +116,7 @@ struct ConductorTests {
             link: link, brain: brain, hermes: hermes, toolbox: Toolbox(tools), speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date())),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200), remote: .milliseconds(400), remoteFallback: .milliseconds(150)))
+                          finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
     }
 
     @Test func openQuestionsGoToHermesAndSoDoTheirFollowUps() async throws {
@@ -138,43 +138,34 @@ struct ConductorTests {
         #expect(hermes.ended == 1)
     }
 
-    @Test func simpleTasksStayOnThePhone() async throws {
+    @Test func simpleTasksGoToHermesToo() async throws {
         let hermes = FakeHermes()
         let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Brauche ich einen Schirm?": Answer(sentence: "Ja, ab 15 Uhr regnet es.")]
+        hermes.answers = ["Brauche ich einen Schirm?": Answer(sentence: "Ja, ab 15 Uhr regnet es.")]
         conductor.ask("Brauche ich einen Schirm?")
         try await eventually { conductor.screen?.text == "Ja, ab 15 Uhr regnet es." }
-        #expect(hermes.asked.isEmpty)
+        #expect(hermes.asked == ["Brauche ich einen Schirm?"])
+        #expect(brain.asked.isEmpty)
     }
 
-    @Test func thePhoneCanStillHandOverToHermes() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Will it snow this winter?": Answer(sentence: "Ich frag Hermes.", handoff: "Will it snow this winter?")]
-        hermes.answers = ["Will it snow this winter?": Answer(sentence: "Probably in January.")]
-        conductor.ask("Will it snow this winter?")
-        try await eventually { conductor.screen?.text == "Probably in January." }
-        #expect(brain.asked == ["Will it snow this winter?"])
-    }
-
-    @Test func whenHermesFailsThePhoneAnswers() async throws {
+    @Test func whenHermesFailsItSaysSoWithTryAgain() async throws {
         let hermes = FakeHermes()
         hermes.error = HermesError.http(502, "bad gateway")
         let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
         conductor.ask("Tell me a joke")
-        try await eventually { conductor.screen?.text == "Why did the raccoon cross the road?" }
-        #expect(hermes.asked == ["Tell me a joke"])
-        #expect(conductor.lastError?.contains("Hermes") == true)
+        try await eventually { conductor.screen?.text.contains("Hermes error 502") == true }
+        #expect(conductor.screen?.rail?.current?.action == .askHermes("Tell me a joke"))
+        #expect(brain.asked.isEmpty)
     }
 
-    @Test func whenHermesGoesQuietThePhoneAnswers() async throws {
+    @Test func whenHermesGoesQuietItSaysSo() async throws {
         let hermes = FakeHermes()
         hermes.delay = .seconds(5)
         let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Tell me a joke": Answer(sentence: "A short one.")]
         conductor.ask("Tell me a joke")
-        try await eventually { conductor.screen?.text == "A short one." }
+        try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
+        #expect(conductor.screen?.rail?.current?.action == .askHermes("Tell me a joke"))
+        #expect(brain.asked.isEmpty)
     }
 
     @Test func whenHermesKeepsWorkingThePhoneWaits() async throws {
@@ -188,15 +179,17 @@ struct ConductorTests {
         #expect(brain.asked.isEmpty)  // the phone never had to stand in
     }
 
-    @Test func standingInThePhoneDoesntBounceBackToHermes() async throws {
+    @Test func hermesTrafficAloneKeepsThePhoneWaiting() async throws {
+        // Answer tokens and keepalives are activity, not status lines: they must restart the
+        // quiet clock just the same, or a long streaming answer gets cancelled.
         let hermes = FakeHermes()
-        hermes.error = HermesError.empty
+        hermes.delay = .milliseconds(500)
+        hermes.activityEvery = .milliseconds(50)
+        hermes.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
         let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Tell me a joke": Answer(sentence: "Ich frag Hermes.", handoff: "Tell me a joke")]
         conductor.ask("Tell me a joke")
-        try await eventually { conductor.screen?.text == "Hermes isn't answering, and I can't answer that myself." }
-        #expect(hermes.asked.count == 1)
-        #expect(conductor.screen?.rail?.current?.action == .askHermes("Tell me a joke"))
+        try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
+        #expect(brain.asked.isEmpty)
     }
 
     @Test func askingForHermesHasNoFallback() async throws {
@@ -227,16 +220,6 @@ struct ConductorTests {
         #expect(brain.asked.isEmpty)
     }
 
-    @Test func theRailOffersHermesAfterALocalAnswer() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Rain?": Answer(sentence: "No rain.", followUps: ["Tomorrow?", "Wind?", "Snow?"])]
-        conductor.ask("Rain?")
-        try await eventually { conductor.screen?.text == "No rain." }
-        #expect(conductor.screen?.rail?.items.map(\.title) == ["Tomorrow?", "Wind?", "Snow?", "Ask Hermes"])
-        #expect(conductor.screen?.rail?.items.last?.action == .askHermes("Rain?"))
-    }
-
     @Test func showsWhatHermesIsDoing() async throws {
         let hermes = FakeHermes()
         hermes.statuses = ["Checking your calendar"]
@@ -256,13 +239,14 @@ struct ConductorTests {
         #expect(conductor.screen?.rail?.current?.action == .askHermes("plan my week"))
     }
 
-    @Test func askingForHermesStillTimesOutEvenWhileWorking() async throws {
+    @Test func anExplicitAskWithProgressKeepsWorking() async throws {
         let hermes = FakeHermes()
-        hermes.delay = .seconds(5)
-        hermes.progressEvery = .milliseconds(50)  // progress doesn't extend an explicit ask
+        hermes.delay = .milliseconds(500)
+        hermes.progressEvery = .milliseconds(50)
+        hermes.answers = ["plan my week": Answer(sentence: "Monday is wide open.")]
         let conductor = conductorWithHermes(hermes)
         conductor.ask("Hermes, plan my week")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
+        try await eventually(timeout: 2) { conductor.screen?.text == "Monday is wide open." }
         #expect(brain.asked.isEmpty)
     }
 
@@ -281,7 +265,7 @@ struct ConductorTests {
         let hermes = FakeHermes()
         let conductor = conductorWithHermes(hermes, tools: [timer])
         let action = try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a", tool: "set_timer", arguments: ["minutes": 10])))
-        brain.answers = ["Pasta timer": Answer(sentence: "Ten minutes for the pasta?", actions: [action])]
+        hermes.answers = ["Pasta timer": Answer(sentence: "Ten minutes for the pasta?", actions: [action])]
         conductor.ask("Pasta timer")
         try await eventually { conductor.screen?.text == "Ten minutes for the pasta?" }
         #expect(conductor.screen?.rail?.current?.title == "Timer 10 min")
@@ -296,9 +280,10 @@ struct ConductorTests {
     @Test func aFailedActionSaysWhy() async throws {
         let timer = FakeTool.timer()
         timer.error = ToolError("Alarms are off for Lotti.")
-        let conductor = conductorWithHermes(FakeHermes(), tools: [timer])
+        let hermes = FakeHermes()
+        let conductor = conductorWithHermes(hermes, tools: [timer])
         let action = try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a", tool: "set_timer", arguments: ["minutes": 1])))
-        brain.answers = ["Timer": Answer(sentence: "One minute?", actions: [action])]
+        hermes.answers = ["Timer": Answer(sentence: "One minute?", actions: [action])]
         conductor.ask("Timer")
         try await eventually { conductor.screen?.text == "One minute?" }
         conductor.handle(InputEvent(.tap, from: .ring))
@@ -392,27 +377,47 @@ final class FakeHermes: RemoteBrain {
     var answers: [String: Answer] = [:]
     var statuses: [String] = []
     var delay: Duration?
-    /// Emits one status line this often while waiting, like Hermes's progress events.
+    /// Emits one status line and one activity pulse this often while waiting, like Hermes's
+    /// progress events and stream traffic.
     var progressEvery: Duration?
+    /// Pulses activity alone this often while waiting, like answer tokens and keepalives
+    /// (nothing to show on the glasses, but Hermes is clearly alive).
+    var activityEvery: Duration?
     var error: Error?
     private(set) var asked: [String] = []
     private(set) var contexts: [String] = []
     private(set) var ended = 0
+    private(set) var activities = 0
 
-    func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+    func answer(
+        _ message: String, context: String,
+        status: @escaping @MainActor (String) -> Void,
+        activity: @escaping @MainActor () -> Void
+    ) async throws -> Answer {
         asked.append(message)
         contexts.append(context)
-        for line in statuses { status(line) }
+        for line in statuses { status(line); activity() }
         if let progressEvery, let delay {
             let end = ContinuousClock.now.advanced(by: delay)
             while ContinuousClock.now < end {
                 try await Task.sleep(for: progressEvery)
                 status("Working…")
+                activities += 1
+                activity()
+            }
+        } else if let activityEvery, let delay {
+            let end = ContinuousClock.now.advanced(by: delay)
+            while ContinuousClock.now < end {
+                try await Task.sleep(for: activityEvery)
+                activities += 1
+                activity()
             }
         } else if let delay {
             try await Task.sleep(for: delay)
         }
         if let error { throw error }
+        activities += 1
+        activity()
         return answers[message] ?? Answer(sentence: "?")
     }
     func endConversation() { ended += 1 }

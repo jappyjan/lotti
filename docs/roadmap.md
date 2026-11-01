@@ -17,11 +17,11 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
 - **S3 — On-device brain** ([write-up](spikes/s3-brain.md)): Apple's on-device model for every task (D11). Eval set and runner in `packages/brain-eval`.
 
 - **Phone tools, Hermes and a better on-device brain** (2026-11-01, pulled forward from After the MVP, PR #8):
-  - **Phone tools** for both brains: calendar, weather, location, directions (MapKit), reminders; timer (AlarmKit) and new reminder as tap-to-confirm actions. See [architecture.md](architecture.md#phone-tools).
+  - **Phone tools** for both brains: calendar, weather, location, reminders; timer (AlarmKit), new reminder and start-navigation as tap-to-confirm actions. See [architecture.md](architecture.md#phone-tools).
   - **Hermes connector** with Lotti's reply format, which lets Hermes call several phone tools at once. Tried with the real Hermes over Tailscale: answers in 2–4 s.
   - **On-device brain rebuilt as a pipeline of small steps** (rules → choose → fill in → tools → answer) after the single-session version made things up. No fixed facts in any prompt. See [architecture.md](architecture.md#on-device-brain-a-pipeline-of-small-steps).
   - **Talk gesture with the display off:** double tap (today opens), then hold. Hold alone still talks while something is shown.
-  - **Routing** (PR #9): Hermes by default, the phone for simple tasks its rules recognise (weather, timer, reminders, calendar, location, directions) and as the fallback when Hermes fails or goes quiet 20 s (status lines and tool calls restart the clock).
+  - **Routing**: Hermes first — every question goes to Hermes when it's set up; the on-device brain answers only when Hermes isn't set up (D2 flipped 2026-11-02). The Hermes timeout counts silence, not total time: any traffic (tokens, keepalives, tool progress) restarts the clock, and Hermes's own tool steps are logged, not shown on the glasses.
   - **`Documents/lotti.log`** on the phone, readable with `devicectl`, for checking runs afterwards.
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 
@@ -56,7 +56,7 @@ Rough order, to be re-sorted by what real use shows:
 2. **Put it on** `ios` `design` `brain`: wear detection. When the glasses are picked up, Lotti greets and says what happened and what's coming, instead of waiting for a look-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
-5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
+5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app. **Built: arrow + text** (START, heartbeat, BASIC_INFO cards, rerouting, arrival, walk↔bike switch, exit handling; `NavigationSession` + `StepTracker` in LottiKit, `start_navigation` action in the app). Still open: confirming the session live on the glasses, mini/full map bitmaps (planned: `MKMapSnapshotter` — no HERE), launching from the glasses' menu, the share-sheet entry point.
 6. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
 7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
 8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.

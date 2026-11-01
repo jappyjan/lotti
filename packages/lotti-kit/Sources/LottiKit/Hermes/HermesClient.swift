@@ -13,9 +13,15 @@ public struct ChatMessage: Equatable, Sendable, Codable {
 }
 
 /// Sends a whole conversation to Hermes and returns its reply text. `progress` gets Hermes's
-/// own tool activity ("web_search") while it works.
+/// own tool activity ("web_search", a raw command name) while it works; `activity` fires on any
+/// data from Hermes — progress, answer tokens, keepalives — so the caller can tell "working"
+/// from "silent".
 public protocol HermesTransport: Sendable {
-    func complete(_ messages: [ChatMessage], progress: @escaping @Sendable (String) -> Void) async throws -> String
+    func complete(
+        _ messages: [ChatMessage],
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String
 }
 
 /// Where your Hermes is: its API server (`hermes gateway` with `API_SERVER_ENABLED=true`).
@@ -84,7 +90,11 @@ public struct HermesClient: HermesTransport {
         return URLSession(configuration: configuration)
     }()
 
-    public func complete(_ messages: [ChatMessage], progress: @escaping @Sendable (String) -> Void) async throws -> String {
+    public func complete(
+        _ messages: [ChatMessage],
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String {
         guard let config = config() else { throw HermesError.notConfigured }
         var request = URLRequest(url: config.endpoint("chat/completions"))
         request.httpMethod = "POST"
@@ -113,6 +123,7 @@ public struct HermesClient: HermesTransport {
         var parser = ServerSentEvents()
         for try await line in bytes.lines {
             try Task.checkCancellation()
+            activity()  // any data from Hermes — a token, a tool step, a keepalive — means it's alive
             switch parser.feed(line) {
             case .progress(let text): progress(text)
             case .done: return try parser.finish()

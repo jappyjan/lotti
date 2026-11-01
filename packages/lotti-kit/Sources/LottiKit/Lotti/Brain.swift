@@ -35,8 +35,14 @@ public protocol Brain: AnyObject {
 public protocol RemoteBrain: AnyObject {
     /// False until you set it up in the app.
     var isConfigured: Bool { get }
-    /// Answer `message`. `status` gets short lines for the glasses while it works.
-    func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer
+    /// Answer `message`. `status` gets short lines for the glasses while it works; `activity`
+    /// fires on any sign of life from the remote (a token, a keepalive, tool progress), so the
+    /// caller can tell "still working" from "silent".
+    func answer(
+        _ message: String, context: String,
+        status: @escaping @MainActor (String) -> Void,
+        activity: @escaping @MainActor () -> Void
+    ) async throws -> Answer
     func endConversation()
 }
 

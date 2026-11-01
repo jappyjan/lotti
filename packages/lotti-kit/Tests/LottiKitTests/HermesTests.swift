@@ -9,15 +9,30 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     var error: Error?
     var delay: Duration?
     private(set) var requests: [[ChatMessage]] = []
+    private let activityLock = NSLock()
+    private var activityCount = 0
+
+    /// How many times the transport reported activity (any data from Hermes).
+    var activities: Int { activityLock.withLock { activityCount } }
 
     init(_ replies: [String]) { self.replies = replies }
 
-    func complete(_ messages: [ChatMessage], progress report: @escaping @Sendable (String) -> Void) async throws -> String {
+    func complete(
+        _ messages: [ChatMessage],
+        progress report: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String {
         requests.append(messages)
-        for line in progress { report(line) }
+        for line in progress {
+            report(line)
+            activityLock.withLock { activityCount += 1 }
+            activity()
+        }
         if let delay { try await Task.sleep(for: delay) }
         if let error { throw error }
         guard !replies.isEmpty else { throw HermesError.empty }
+        activityLock.withLock { activityCount += 1 }
+        activity()
         return replies.removeFirst()
     }
 }
@@ -210,13 +225,35 @@ struct HermesBrainTests {
         #expect(brain.conversation.isEmpty)
     }
 
-    @Test func passesHermesProgressOn() async throws {
+    @Test func hermesToolProgressIsLoggedNotShown() async throws {
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Hi."}"#])
+        hermes.progress = ["web_search", "curl -s https://example.com/news"]
+        var statuses: [String] = []
+        let brain = brain(hermes)
+        _ = try await brain.answer("What's new?", context: "") { statuses.append($0) }
+        #expect(statuses.isEmpty)  // Hermes's own tool activity never reaches the glasses
+        #expect(brain.trace.contains { $0.hasPrefix("· web_search") })
+        #expect(hermes.activities == 3)  // both progress lines plus the reply itself
+    }
+
+    @Test func progressNotesAreCapped() async throws {
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Hi."}"#])
+        hermes.progress = (0..<50).map { "step \($0)" }
+        let brain = brain(hermes)
+        _ = try await brain.answer("Hi", context: "") { _ in }
+        #expect(brain.trace.filter { $0.hasPrefix("· ") }.count == 10)
+    }
+
+    @Test func activityReachesTheCallerButProgressDoesnt() async throws {
         let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Done."}"#])
         hermes.progress = ["Searching the web"]
         hermes.delay = .milliseconds(50)
         var statuses: [String] = []
-        _ = try await brain(hermes).answer("News?", context: "") { statuses.append($0) }
-        #expect(statuses == ["Searching the web"])
+        var pulses = 0
+        _ = try await brain(hermes).answer("News?", context: "") { statuses.append($0) } activity: { pulses += 1 }
+        try? await Task.sleep(for: .milliseconds(50))  // activity hops to the main actor through a task
+        #expect(statuses.isEmpty)  // tool progress is not a status line
+        #expect(pulses == 2)  // one for the progress line, one for the reply
     }
 }
 
@@ -224,32 +261,21 @@ struct RouterTests {
     @Test(arguments: [
         "Brauche ich heute einen Schirm?", "Wie wird das Wetter?", "Stell einen Timer auf 10 Minuten",
         "Erinner mich morgen an die Wäsche", "Was steht morgen an?", "Wo bin ich?", "Wie komme ich zum Hauptbahnhof?",
+        "Navigation zu Media Markt.", "Walk me home", "Wie geht's dir?", "Wie hoch ist der Eiffelturm?",
+        "Wie ist das Wetter in Lissabon?", "Stell einen Timer für Pasta",
     ])
-    func simpleTasksStayLocal(_ question: String) {
-        #expect(Router.route(question, hermesAvailable: true) == .local)
+    func everythingGoesToHermesWhenItsSetUp(_ question: String) {
+        #expect(Router.route(question, hermesAvailable: true) == .hermes(question))
     }
 
-    @Test func everythingElseGoesToHermesWithTheFallback() {
-        #expect(Router.route("Wie geht's dir?", hermesAvailable: true) == .hermes("Wie geht's dir?", fallback: true))
-        #expect(Router.route("Wie hoch ist der Eiffelturm?", hermesAvailable: true)
-                == .hermes("Wie hoch ist der Eiffelturm?", fallback: true))
-    }
-
-    @Test func anotherPlaceGoesToHermes() {
-        #expect(Router.route("Wie ist das Wetter in Lissabon?", hermesAvailable: true)
-                == .hermes("Wie ist das Wetter in Lissabon?", fallback: true))
-        #expect(Router.route("How far is it to Hamburg Airport from Berlin?", hermesAvailable: true) != .local)
-        #expect(Router.route("Stell einen Timer für Pasta", hermesAvailable: true) == .local)  // actions stay local
-        #expect(Router.route("Wie wird das Wetter morgen?", hermesAvailable: true) == .local)
-    }
-
-    @Test func onlyHermesKnowsSoNoFallback() {
-        #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: true) == .hermes("Was kostet ein Bitcoin?", fallback: false))
-        #expect(Router.route("Hermes, plan my week", hermesAvailable: true) == .hermes("plan my week", fallback: false))
+    @Test func explicitHermesAsksGoToHermesEitherWay() {
+        #expect(Router.route("Hermes, plan my week", hermesAvailable: true) == .hermes("plan my week"))
+        #expect(Router.route("Hermes, plan my week", hermesAvailable: false) == .hermes("plan my week"))
     }
 
     @Test func withoutHermesEverythingIsLocal() {
         #expect(Router.route("Wie geht's dir?", hermesAvailable: false) == .local)
         #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: false) == .local)
+        #expect(Router.route("Brauche ich heute einen Schirm?", hermesAvailable: false) == .local)
     }
 }

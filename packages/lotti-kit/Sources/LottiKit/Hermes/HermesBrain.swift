@@ -16,6 +16,9 @@ public final class HermesBrain: RemoteBrain {
     @ObservationIgnored private let configured: () -> Bool
     @ObservationIgnored private let maxRounds: Int
     @ObservationIgnored private var messages: [ChatMessage] = []
+    /// How many of Hermes's own tool-progress lines were logged this question (the rest are
+    /// dropped: they'd flood the log, and they're never shown on the glasses anyway).
+    @ObservationIgnored private var progressNotes = 0
 
     /// - Parameters:
     ///   - allowedReads: the read tools you share with Hermes (Settings), read at every call.
@@ -34,10 +37,15 @@ public final class HermesBrain: RemoteBrain {
     /// The messages so far (system prompt first), for tests and debugging.
     public var conversation: [ChatMessage] { messages }
 
-    public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+    public func answer(
+        _ message: String, context: String,
+        status: @escaping @MainActor (String) -> Void,
+        activity: @escaping @MainActor () -> Void = {}
+    ) async throws -> Answer {
         let before = messages
+        progressNotes = 0
         do {
-            return try await run(message, context: context, status: status)
+            return try await run(message, context: context, status: status, activity: activity)
         } catch {
             // A failed or cancelled question leaves no trace, so "Try again" starts clean.
             messages = before
@@ -51,7 +59,11 @@ public final class HermesBrain: RemoteBrain {
         trace = []
     }
 
-    private func run(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+    private func run(
+        _ message: String, context: String,
+        status: @escaping @MainActor (String) -> Void,
+        activity: @escaping @MainActor () -> Void
+    ) async throws -> Answer {
         let allowed = allowedReads()
         if messages.isEmpty {
             let reads = toolbox.reads.filter { allowed.contains($0.name) }
@@ -65,8 +77,16 @@ public final class HermesBrain: RemoteBrain {
         var rounds = 0
         while true {
             try Task.checkCancellation()
-            let text = try await transport.complete(messages) { progress in
-                Task { @MainActor in status(progress) }
+            // Hermes's own tool activity ("web_search", a raw command) goes to the log only:
+            // it's noise on the glasses. But every byte restarts the caller's quiet clock.
+            let text = try await transport.complete(messages) { [weak self] progress in
+                Task { @MainActor in
+                    guard let self, self.progressNotes < 10 else { return }
+                    self.progressNotes += 1
+                    self.note("· \(String(progress.prefix(60)))")
+                }
+            } activity: {
+                Task { @MainActor in activity() }
             }
             try Task.checkCancellation()
             messages.append(ChatMessage(.assistant, text))
@@ -90,6 +110,7 @@ public final class HermesBrain: RemoteBrain {
                 }
                 note("← call " + calls.map { "\($0.tool)\(JSONValue.object($0.arguments).json)" }.joined(separator: ", "))
                 status(statusText ?? toolbox.progress(for: calls))
+                activity()
                 let results = await toolbox.run(calls, allowed: allowed)
                 try Task.checkCancellation()
                 note("→ results " + results.map { "\($0.id) \($0.ok ? "ok" : "✕ \($0.content)")" }.joined(separator: ", "))

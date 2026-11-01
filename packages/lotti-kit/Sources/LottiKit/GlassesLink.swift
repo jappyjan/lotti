@@ -106,6 +106,21 @@ public protocol GlassesLink: AnyObject, Observable {
     /// Gestures from the touchpads and from the ring. The ring is linked to the glasses, which
     /// relay its gestures. Each call returns a new stream; repeats are already filtered out.
     func inputs() -> AsyncStream<InputEvent>
+
+    // MARK: Navigation (service 0x08)
+
+    /// While the firmware's own navigation screen is up, Lotti's EvenHub page stays down and
+    /// `show` is a no-op.
+    var displaySuspended: Bool { get set }
+    /// Send one `G2Navigation` payload to the navigation service, fire and forget
+    /// (heartbeat, BASIC_INFO updates).
+    func sendNavigation(_ payload: [UInt8]) async
+    /// Send one `G2Navigation` payload and wait for the reply that echoes its magic (field 2).
+    /// Throws on timeout; an explicit failure shows up as a non-zero `G2Navigation.replyError`.
+    func navigationRequest(_ payload: [UInt8]) async throws -> G2Message
+    /// Glasses-initiated navigation events (user exits, view changes, transport switch, …).
+    /// Reply echoes are filtered out.
+    func navigationEvents() -> AsyncStream<G2NavigationEvent>
 }
 
 extension GlassesLink {
