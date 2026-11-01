@@ -1,86 +1,69 @@
+import Foundation
 import LottiKit
-import Observation
 import Testing
 @testable import Lotti
 
 @MainActor
 struct AppModelTests {
+    func model(_ link: FakeGlassesLink) -> AppModel {
+        AppModel(link: link, conductor: Conductor(link: link, brain: SilentBrain(), speech: SilentSpeech(), today: NoToday()))
+    }
+
+    let glasses = DiscoveredGlasses(id: "32", name: "Even G2 · 32", leftArm: .init(), rightArm: .init())
+
     @Test func launchReconnectsToLastGlasses() async {
-        let link = FakeLink(last: DiscoveredGlasses(id: "32", name: "Even G2 · 32", leftArm: .init(), rightArm: .init()))
-        await AppModel(link: link).launch()
+        let link = FakeGlassesLink(last: glasses)
+        await model(link).launch()
         #expect(link.connected == ["32"])
         #expect(!link.scanned)
     }
 
     @Test func launchScansWhenNothingIsRemembered() async {
-        let link = FakeLink(last: nil)
-        await AppModel(link: link).launch()
+        let link = FakeGlassesLink()
+        await model(link).launch()
         #expect(link.scanned)
         #expect(link.connected.isEmpty)
     }
 
-    @Test func sendHelloShowsHelloFromLotti() async {
-        let link = FakeLink(last: nil)
-        let model = AppModel(link: link)
-        await model.sendHello()
-        #expect(link.shown == ["Hello from Lotti"])
-        #expect(model.lastError == nil)
+    @Test func reconnectsAfterADrop() async throws {
+        let link = FakeGlassesLink(last: glasses)
+        let model = model(link)
+        let keeper = Task { await model.keepConnected(pollEvery: .milliseconds(10)) }
+        defer { keeper.cancel() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(link.status.isConnected)
+        #expect(link.headTracking)
+        link.disconnect()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(link.status.isConnected)
+        #expect(model.reconnects == 2)
     }
 
-    @Test func sendHelloReportsErrors() async {
-        let link = FakeLink(last: nil)
-        link.showError = GlassesLinkError.notConnected
-        let model = AppModel(link: link)
-        await model.sendHello()
-        #expect(model.lastError == GlassesLinkError.notConnected.localizedDescription)
-    }
-
-    @Test func inputsShowNewestFirst() async {
-        let link = FakeLink(last: nil)
-        link.pendingInputs = [InputEvent(.tap, from: .rightTouchpad), InputEvent(.scrollUp, from: .ring)]
-        let model = AppModel(link: link)
-        await model.receiveInputs()
-        #expect(model.inputs.map(\.event) == [InputEvent(.scrollUp, from: .ring), InputEvent(.tap, from: .rightTouchpad)])
-    }
-
-    @Test func keepsOnlyTheLatestInputs() async {
-        let link = FakeLink(last: nil)
-        link.pendingInputs = Array(repeating: InputEvent(.tap, from: .leftTouchpad), count: 15)
-        let model = AppModel(link: link)
-        await model.receiveInputs()
-        #expect(model.inputs.count == AppModel.maxInputs)
+    @Test func staysDisconnectedWhenAsked() async throws {
+        let link = FakeGlassesLink(last: glasses)
+        let model = model(link)
+        await model.connect(glasses)
+        model.disconnect()
+        let keeper = Task { await model.keepConnected(pollEvery: .milliseconds(10)) }
+        defer { keeper.cancel() }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!link.status.isConnected)
     }
 }
 
-/// A finished stream holding `events`.
-private func finished(_ events: [InputEvent]) -> AsyncStream<InputEvent> {
-    AsyncStream { continuation in
-        events.forEach { continuation.yield($0) }
-        continuation.finish()
+@MainActor private final class SilentBrain: Brain {
+    func prewarm() {}
+    func answer(_ message: String, context: String) async throws -> Answer { Answer(sentence: "") }
+    func endConversation() {}
+}
+
+@MainActor private final class SilentSpeech: SpeechRecognizer {
+    func prepare() async {}
+    func transcribe(_ audio: AsyncStream<[Int16]>) -> AsyncThrowingStream<Transcript, Error> {
+        AsyncThrowingStream { $0.finish() }
     }
 }
 
-@MainActor
-@Observable
-private final class FakeLink: GlassesLink {
-    var status: GlassesStatus = .disconnected
-    var discovered: [DiscoveredGlasses] = []
-    var lastGlasses: DiscoveredGlasses?
-    var scanned = false
-    var connected: [String] = []
-    var shown: [String] = []
-    var showError: Error?
-    var pendingInputs: [InputEvent] = []
-
-    init(last: DiscoveredGlasses?) { lastGlasses = last }
-
-    func startScan() { scanned = true }
-    func stopScan() {}
-    func connect(_ glasses: DiscoveredGlasses) async { connected.append(glasses.id) }
-    func disconnect() {}
-    func showText(_ text: String) async throws {
-        if let showError { throw showError }
-        shown.append(text)
-    }
-    func inputs() -> AsyncStream<InputEvent> { finished(pendingInputs) }
+private struct NoToday: TodayProvider {
+    func today(at now: Date) async -> TodayInfo { TodayInfo(now: now) }
 }

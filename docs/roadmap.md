@@ -18,22 +18,24 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
 
 ---
 
-## MVP — "Lotti tells you your messages"
+## MVP — "Talk to Lotti"
 
-Goal: phone in the pocket, glasses on. Messages from the five messengers (iMessage, WhatsApp, Signal, Telegram, Matrix) show up as one sentence from Lotti, unimportant ones stay quiet, and the ring sends a suggested reply.
+Goal: phone in the pocket, glasses on. Look up or tap and Lotti tells you about your day; hold and ask her anything; answer her choices with the ring. No notifications yet: `AccessoryNotifications` needs entitlements a free developer account can't get (checked 2026-11-01, see below).
 
 In this order:
 
-1. **Notifications in** `ios` `messaging` (was spike S5, now a quick check first): receive forwarded notifications with `AccessoryNotifications` (EU, iOS 26.3+). Does it work on the free developer account, or does it need an entitlement only a paid account gets? Check that first; the MVP depends on it. Then find which messengers offer a reply.
-2. **Brain** `ios` `brain`: Apple's on-device model with S3's prompts. Triage (quiet / normal / urgent), a one-sentence summary, and up to three reply choices. Muted apps and senders are plain rules.
-3. **Glasses screen** `ios`: one hand-coded "Lotti says" screen, with the sentence on the left and the choices plus "Original" in the rail on the right. Scroll moves the highlight, tap picks, double tap dismisses (ring and touchpads).
-4. **Reply** `ios` `messaging`: picking a choice shows a Proposal ("I'll tell Mara: On my way"), Send replies through `AccessoryNotifications`, then a short "Done" line.
-5. **Keeps running** `ios`: stays connected with the phone locked (Bluetooth background mode) and reconnects on its own. Fix what breaks while wearing it.
-6. **Basics** `ios`: a status screen and a list of muted apps on the phone. Nothing more.
+1. **Screen and gestures** `ios`: one hand-coded screen: Lotti's sentence on the left, choices in the rail on the right. Scroll moves the highlight, tap picks, double tap goes back or turns the display off, long press is talk (only). The rail is reusable for the Actions list later.
+2. **Today view** `ios` `design`: the look-up view. Time, date, your next appointments and the weather, as one sentence from Lotti plus dim details. Opens on a tap when the display is off, or when you look up (head-up from the glasses' IMU, if the firmware sends it).
+3. **Chat** `ios` `brain`: Apple's on-device model as Lotti, with S3's persona. A conversation keeps context until you dismiss it. Answers are one or two sentences plus up to three follow-ups in the rail. Simple tools: today's calendar, weather, time. Prewarmed, with a timeout (S3 saw rare 20–60 s stalls).
+4. **Voice** `ios` `voice`: hold to talk, the glasses' mic (LC3), on-device speech-to-text (`SpeechAnalyzer`), your words shown while you hold (Listening), then Lotti answers. Phone mic as fallback if the glasses' mic doesn't work.
+5. **Keeps running** `ios`: stays connected with the phone locked (Bluetooth background mode) and reconnects on its own.
+6. **Basics** `ios`: a status screen on the phone. Nothing more.
 
-Not in the MVP: navigation (keep using the Even app for it), voice, wake word, Hermes, memory and learning, the web simulator, the shared UI schema, CI.
+Not in the MVP: notifications and messaging, navigation (keep using the Even app for it), wake word, Hermes, memory and learning, the web simulator, the shared UI schema, CI.
 
-_Done when:_ you wear Lotti for a normal day and answer messages from the glasses.
+_Done when:_ you wear Lotti for a normal day and use the today view and chat from the glasses.
+
+**Notifications (moved out of the MVP):** `AccessoryNotifications` needs three app extensions with the entitlements `accessory-data-provider`, `accessory-transport-security` and `accessory-transport-extension`. Apple's list of capabilities for the Personal Team doesn't include them, and signing fails. With a paid account: try again, then build triage, summaries and replies (the old MVP plan) on top of the screen and chat.
 
 ---
 
@@ -41,14 +43,14 @@ _Done when:_ you wear Lotti for a normal day and answer messages from the glasse
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Look-up view and actions without voice** `ios` `design`: the one most useful sentence when you look up; tap opens a ring-driven list of common actions (reply to the last message, timer, navigate home, quiet for an hour). More ready-made replies behind "Change". See [design.md](design.md#without-voice).
-2. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
-3. **Push-to-talk** `voice`: hold to talk, glasses mic, on-device speech-to-text, "tell Mara I'm late".
+1. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
+2. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
+3. **Navigation** `navigation`: drive the G2's built-in navigation screen (quick check of BLE sid `0x08` first, was S8), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
 4. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
 5. **Hermes connector** `brain` (was S6): escalate "dig into…" requests to your existing Hermes.
 6. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix, prompt and eval harness on top of `packages/brain-eval`.
 7. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed. The S3 eval screen already has `--soak` and `--background` runs.
+8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 
@@ -65,6 +67,6 @@ Rough order, to be re-sorted by what real use shows:
 
 ## Open questions
 
-- Paid Apple developer account: needed if `AccessoryNotifications` (MVP step 1) or Private Cloud Compute require managed entitlements, and to avoid reinstalling every 7 days.
+- Paid Apple developer account: needed for `AccessoryNotifications` (notifications and replies) and Private Cloud Compute, and to avoid reinstalling every 7 days.
 - Besides navigation, are there other Even app features you'd miss while Lotti is connected (Conversate, translate, teleprompter)?
 - Should Lotti have a "personality slider" (more raccoon vs more neutral)?

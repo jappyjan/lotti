@@ -1,89 +1,114 @@
 import LottiKit
 import SwiftUI
 
+/// The phone app: connection, a few settings, and a debug screen. You shouldn't need it day to day.
 struct ContentView: View {
     let model: AppModel
-    /// Spike S3: open the eval screen straight away when launched with `--eval`.
-    @State private var showEval = ProcessInfo.processInfo.arguments.contains("--eval")
+    let speech: AppleSpeechRecognizer
+    let brain: AppleBrain
+    @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
+
     private var link: any GlassesLink { model.link }
+    private var conductor: Conductor { model.conductor }
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Status") {
-                    Label(statusText, systemImage: statusIcon)
-                        .foregroundStyle(link.status.isConnected ? .green : .primary)
-                    if let error = model.lastError {
-                        Text(error).foregroundStyle(.red)
+                glassesSection
+
+                Section("Lotti") {
+                    if let problem = brain.unavailableReason {
+                        Label(problem, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                    }
+                    NavigationLink("Calendars") { CalendarsView() }
+                    Picker("I speak", selection: $speechLanguage) {
+                        ForEach(Settings.languages, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .onChange(of: speechLanguage) { _, new in
+                        speech.locale = Locale(identifier: new)
+                        Task { await speech.prepare() }
                     }
                 }
 
-                inputSection
+                lookUpSection
 
-                if #available(iOS 27.0, *) {
-                    Section("Spike S3") {
-                        NavigationLink("Brain eval") { EvalView() }
-                    }
-                }
-
-                if link.status.isConnected {
-                    Section {
-                        Button("Send hello") { Task { await model.sendHello() } }
-                            .disabled(model.isSending)
-                        Button("Disconnect", role: .destructive) { link.disconnect() }
-                    }
-                } else {
-                    glassesSection
+                Section {
+                    NavigationLink("Debug") { DebugView(model: model, brain: brain) }
                 }
             }
             .navigationTitle("Lotti")
-            .navigationDestination(isPresented: $showEval) {
-                if #available(iOS 27.0, *) { EvalView() }
-            }
         }
-    }
-
-    @ViewBuilder private var inputSection: some View {
-        Section("Last input") {
-            if model.inputs.isEmpty {
-                Text("Tap a touchpad or use the ring.").foregroundStyle(.secondary)
-            }
-            ForEach(model.inputs) { input in
-                LabeledContent {
-                    Text(input.time, format: .dateTime.hour().minute().second())
-                } label: {
-                    Text(input.event.gesture.rawValue).font(input.id == model.inputs.first?.id ? .headline : .body)
-                    Text(input.event.source.rawValue)
-                }
-            }
-        }
+        .tint(.green)
     }
 
     @ViewBuilder private var glassesSection: some View {
         Section {
-            ForEach(link.discovered) { glasses in
-                Button {
-                    Task { await link.connect(glasses) }
-                } label: {
-                    LabeledContent(glasses.name, value: "Connect")
-                }
-                .disabled(isConnecting)
-            }
-            if let last = link.lastGlasses, !link.discovered.contains(where: { $0.id == last.id }) {
-                Button("Reconnect to \(last.name)") { Task { await link.connect(last) } }
-                    .disabled(isConnecting)
-            }
-            if link.status == .scanning {
-                Button("Stop scanning") { link.stopScan() }
+            Label(statusText, systemImage: statusIcon)
+                .foregroundStyle(link.status.isConnected ? .green : .primary)
+            if link.status.isConnected {
+                Button("Disconnect", role: .destructive) { model.disconnect() }
             } else {
-                Button("Scan for glasses") { link.startScan() }
+                ForEach(link.discovered) { glasses in
+                    Button {
+                        Task { await model.connect(glasses) }
+                    } label: {
+                        LabeledContent(glasses.name, value: "Connect")
+                    }
                     .disabled(isConnecting)
+                }
+                if let last = link.lastGlasses, !link.discovered.contains(where: { $0.id == last.id }) {
+                    Button("Reconnect to \(last.name)") { Task { await model.connect(last) } }
+                        .disabled(isConnecting)
+                }
+                if link.status == .scanning {
+                    Button("Stop scanning") { link.stopScan() }
+                } else {
+                    Button("Scan for glasses") { link.startScan() }
+                        .disabled(isConnecting)
+                }
             }
         } header: {
             Text("Glasses")
         } footer: {
-            Text("Force-quit the Even app first. Lotti replaces it while connected.")
+            Text(link.status.isConnected
+                 ? "Tap or look up for today. Hold to talk. Scroll and tap to pick, double tap to go back."
+                 : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
+    }
+
+    @ViewBuilder private var lookUpSection: some View {
+        Section {
+            Toggle("Open today when I look up", isOn: Binding(
+                get: { conductor.headTracking },
+                set: { on in
+                    Settings.headUpEnabled = on
+                    Task { await conductor.setHeadTracking(on) }
+                }))
+            if conductor.headTracking {
+                VStack(alignment: .leading) {
+                    Text(String(format: "Look up by %.0f°", link.headUpSettings.lookUp))
+                    Slider(value: Binding(
+                        get: { link.headUpSettings.lookUp },
+                        set: { value in update { $0.lookUp = value.rounded() } }), in: 5...40, step: 1)
+                }
+                Button("Set straight ahead") {
+                    guard let pitch = link.headPitch else { return }
+                    update { $0.straightAhead = pitch.rounded() }
+                }
+                .disabled(link.headPitch == nil)
+            }
+        } header: {
+            Text("Look up")
+        } footer: {
+            Text("Wear the glasses, look straight ahead and press \"Set straight ahead\".")
+        }
+    }
+
+    private func update(_ change: (inout HeadUpSettings) -> Void) {
+        var settings = link.headUpSettings
+        change(&settings)
+        link.headUpSettings = settings
+        Settings.headUp = settings
     }
 
     private var isConnecting: Bool {
