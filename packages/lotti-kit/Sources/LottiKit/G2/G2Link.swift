@@ -11,7 +11,8 @@ import Observation
 /// 1. connect both arms, subscribe to the control notify characteristic
 /// 2. auth on sid 0x80 (both arms), make the right arm the command arm, sync the clock
 /// 3. session prelude on sid 0x01, then an EvenHub heartbeat every 4 s
-/// 4. text: create a text page once (Cmd 0), then update its text (Cmd 5)
+/// 4. display: create the page once (Cmd 0), then update texts (Cmd 5) or rebuild it (Cmd 7)
+///    when the layout changes (see `G2PagePlanner`)
 @MainActor
 @Observable
 public final class G2Link: NSObject, GlassesLink {
@@ -34,8 +35,6 @@ public final class G2Link: NSObject, GlassesLink {
     /// Arm ids seen per pair. The arms advertise intermittently, often not both in one scan, but
     /// iOS can connect to a known id directly and waits until that arm shows up.
     private static let knownArmsKey = "LottiKit.G2Link.knownArms"
-    private static let containerID = 1
-    private static let containerName = "lotti"  // max 14 characters
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var central: CBCentralManager!
@@ -49,7 +48,14 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
-    @ObservationIgnored private var pageCreated = false
+    @ObservationIgnored private var page = G2PagePlanner()
+    // Head tracking (IMU). `imuField` is the envelope field that produced samples (20 or 22).
+    @ObservationIgnored private var headTrackingWanted = false
+    @ObservationIgnored private var imuArming = false
+    @ObservationIgnored private var imuField: Int?
+    @ObservationIgnored private var lastImuSample: TimeInterval?
+    @ObservationIgnored private var lastImuLog: TimeInterval = 0
+    @ObservationIgnored private var headUp = HeadUpDetector()
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
 
@@ -110,6 +116,7 @@ public final class G2Link: NSObject, GlassesLink {
             remember(glasses)
             status = .connected(glasses)
             log("connected to \(glasses.name)")
+            if headTrackingWanted { Task { await armImu() } }
         } catch {
             log("connect failed: \(error)")
             stopArmScan()
@@ -138,16 +145,7 @@ public final class G2Link: NSObject, GlassesLink {
     }
 
     public func showText(_ text: String) async throws {
-        guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
-        let m = nextMagic()
-        let payload = pageCreated
-            ? G2Payload.textUpdate(magic: m, containerID: Self.containerID, containerName: Self.containerName, text: text)
-            : G2Payload.createTextPage(magic: m, containerID: Self.containerID, containerName: Self.containerName, text: text)
-        // A page can only be created once per session, even if its ack got lost.
-        let creating = !pageCreated
-        pageCreated = true
-        _ = try await request(payload, sid: G2Service.evenHub, flag: G2Flag.request, magic: m, to: right,
-                              step: creating ? "creating the text page" : "updating the text")
+        try await show(GlassesFrame(main: text))
     }
 
     public func inputs() -> AsyncStream<InputEvent> {
@@ -155,8 +153,43 @@ public final class G2Link: NSObject, GlassesLink {
     }
 
     public func show(_ frame: GlassesFrame) async throws {
-        // TODO(layout): two containers (main + rail) with a rebuild when the shape changes.
-        try await showText(frame.rail.map { "\(frame.main)\n\n\($0)" } ?? frame.main)
+        guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
+        var pageChanged = false
+        for command in page.plan(frame) {
+            let m = nextMagic()
+            do {
+                switch command {
+                case .create(let boxes):
+                    pageChanged = true
+                    _ = try await request(G2Payload.createPage(magic: m, boxes: boxes), sid: G2Service.evenHub,
+                                          flag: G2Flag.request, magic: m, to: right, step: "creating the page")
+                case .rebuild(let boxes):
+                    pageChanged = true
+                    // Untested live by the references, and an ack may not come: only an explicit
+                    // failure counts.
+                    let reply = try? await request(G2Payload.rebuildPage(magic: m, boxes: boxes), sid: G2Service.evenHub,
+                                                   flag: G2Flag.request, magic: m, to: right,
+                                                   step: "rebuilding the page", seconds: 2)
+                    let result = reply.flatMap { G2Payload.rebuildResult($0.payload) }
+                    let outcome = result.map { $0 == 6 ? "ok" : "result \($0)" } ?? "no ack"
+                    print("[Glasses] rebuild \(boxes.map(\.name)): \(outcome)")
+                    if let result, result != 6 {
+                        throw GlassesLinkError.timeout("rebuilding the page (result \(result))")
+                    }
+                case .update(let id, let name, let text):
+                    _ = try await request(G2Payload.textUpdate(magic: m, containerID: id, containerName: name, text: text),
+                                          sid: G2Service.evenHub, flag: G2Flag.request, magic: m, to: right,
+                                          step: "updating \(name)")
+                }
+            } catch {
+                // We no longer know what's on the glasses; the next frame rebuilds the page.
+                print("[Glasses] \(command) failed: \(error)")
+                page.markUnknown()
+                throw error
+            }
+        }
+        // IMU reporting lives inside the page: re-arm it after the page was (re)built.
+        if pageChanged, headTrackingWanted, !imuArming { Task { await armImu() } }
     }
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
@@ -166,8 +199,65 @@ public final class G2Link: NSObject, GlassesLink {
 
     public func stopMicrophone() async {}
 
+    /// Tuning for head-up detection; see `HeadUpDetector.Config`.
+    public var headUpConfig: HeadUpDetector.Config {
+        get { headUp.config }
+        set { headUp.config = newValue }
+    }
+
     public func setHeadTracking(_ enabled: Bool) async {
-        // TODO(imu): Cmd 19 IMU control + head-up detector.
+        headTrackingWanted = enabled
+        headUp.reset()
+        if enabled {
+            await armImu()
+        } else if status.isConnected, let right = arms[.right] {
+            await send(G2Payload.imuControl(magic: nextMagic(), enable: false, field: imuField ?? 20),
+                       sid: G2Service.evenHub, flag: G2Flag.request, to: right)
+            print("[IMU] off")
+        }
+    }
+
+    /// Turns IMU reporting on. The field number differs between references (20 in MentraOS, 22 in
+    /// even-g2-protocol), so this tries 20 first and counts it as working once samples arrive.
+    private func armImu() async {
+        guard !imuArming, headTrackingWanted, status.isConnected else { return }
+        imuArming = true
+        defer { imuArming = false }
+        // IMU needs a live EvenHub page; put up a dark one if nothing was shown yet.
+        if !page.hasPage { try? await show(.dark) }
+        for field in imuField.map({ [$0] }) ?? [20, 22] {
+            guard headTrackingWanted, status.isConnected, let right = arms[.right] else { return }
+            let sentAt = ProcessInfo.processInfo.systemUptime
+            let m = nextMagic()
+            let ack = try? await request(G2Payload.imuControl(magic: m, enable: true, pace: 500, field: field),
+                                         sid: G2Service.evenHub, flag: G2Flag.request, magic: m, to: right,
+                                         step: "IMU control", seconds: 1.5)
+            if let ack { print("[IMU] control acked via field \(field): \(hex(ack.payload))") }
+            for _ in 0..<12 {
+                if let last = lastImuSample, last >= sentAt {
+                    imuField = field
+                    print("[IMU] samples arriving via field \(field)")
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            print("[IMU] no samples within 3 s via field \(field)")
+        }
+    }
+
+    private func receiveImu(x: Float, y: Float, z: Float) {
+        let now = ProcessInfo.processInfo.systemUptime
+        lastImuSample = now
+        guard headTrackingWanted else { return }
+        if now - lastImuLog >= 1 {
+            lastImuLog = now
+            let pitch = headUp.pitch(x: x, y: y, z: z).map { String(format: "%.0f°", $0) } ?? "?"
+            print(String(format: "[IMU] x %.2f y %.2f z %.2f", x, y, z) + " pitch(\(headUp.config.axis)) \(pitch)")
+        }
+        if let gesture = headUp.feed(x: x, y: y, z: z, at: now) {
+            print("[IMU] \(gesture.rawValue)")
+            inputBroadcast.send(InputEvent(gesture, from: .imu))
+        }
     }
 
     // MARK: - Connection steps
@@ -228,7 +318,7 @@ public final class G2Link: NSObject, GlassesLink {
                                          magic: G2Payload.preludeMagic, to: right, step: "session prelude", seconds: 3)
         log("prelude reply: \(prelude.map { hex($0.payload) } ?? "none")")
 
-        pageCreated = false
+        page.reset()
         startHeartbeat()
     }
 
@@ -247,7 +337,9 @@ public final class G2Link: NSObject, GlassesLink {
     private func tearDown() {
         heartbeat?.cancel()
         heartbeat = nil
-        pageCreated = false
+        page.reset()
+        lastImuSample = nil
+        headUp.reset()
         let current = arms.values
         arms = [:]
         for arm in current {
@@ -477,17 +569,24 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         guard characteristic.uuid == Self.controlNotify, let arm = arm(for: peripheral),
               let data = characteristic.value else { return }
         let bytes = [UInt8](data)
-        log("rx \(arm.side) \(hex(bytes))")
-        guard let message = arm.assembler.feed(bytes) else { return }
+        guard let message = arm.assembler.feed(bytes) else {
+            log("rx \(arm.side) \(hex(bytes))")
+            return
+        }
+        let event = G2Events.decode(message)
+        // IMU reports come several times a second; receiveImu logs them once a second.
+        if case .imu = event {} else { log("rx \(arm.side) \(hex(bytes))") }
         if let magic = message.magic {
             let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
             replyWaiters.removeValue(forKey: key)?.resume(.success(message))
         }
-        switch G2Events.decode(message) {
+        switch event {
         case .input(let input):
             let isNew = deduplicator.accept(input, at: ProcessInfo.processInfo.systemUptime)
             log("input \(input) from \(arm.side) arm\(isNew ? "" : " (repeat, dropped)")")
             if isNew { inputBroadcast.send(input) }
+        case .imu(let x, let y, let z):
+            receiveImu(x: x, y: y, z: z)
         case .info(let text):
             log("\(arm.side) arm: \(text)")
         case nil:
