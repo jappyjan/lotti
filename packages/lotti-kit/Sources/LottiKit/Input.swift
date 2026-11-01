@@ -4,10 +4,14 @@ import Foundation
 public struct InputEvent: Equatable, Sendable, CustomStringConvertible {
     public enum Gesture: String, Sendable {
         case tap, doubleTap, scrollUp, scrollDown, longPress, longPressEnd
+        /// Head movement from the glasses' IMU (only while head tracking is on).
+        case headUp, headDown
     }
 
     public enum Source: String, Sendable {
         case rightTouchpad, leftTouchpad, ring
+        /// The glasses' motion sensor (head-up / head-down).
+        case imu
         /// The glasses reported the gesture without saying where it came from.
         case unknown
     }

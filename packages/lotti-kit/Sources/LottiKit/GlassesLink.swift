@@ -54,6 +54,23 @@ public enum GlassesLinkError: Error, Equatable, LocalizedError {
     }
 }
 
+/// What the display shows. `main` is Lotti's text on the left; `rail` is the column of choices on
+/// the right, or nil for a full-width `main`. Both are plain text, already laid out by
+/// `ScreenRenderer`; the link only draws them. Black is invisible on the lens, so `.dark` (empty
+/// text, no rail) turns the display off without ending the session.
+public struct GlassesFrame: Equatable, Sendable {
+    public var main: String
+    public var rail: String?
+
+    public init(main: String, rail: String? = nil) {
+        self.main = main
+        self.rail = rail
+    }
+
+    public static let dark = GlassesFrame(main: "")
+    public var isDark: Bool { main.isEmpty && (rail ?? "").isEmpty }
+}
+
 /// The connection to a pair of smart glasses. The app talks only to this, so other glasses can
 /// be added later by writing another implementation.
 @MainActor
@@ -68,8 +85,17 @@ public protocol GlassesLink: AnyObject, Observable {
     func stopScan()
     func connect(_ glasses: DiscoveredGlasses) async
     func disconnect()
-    /// Show plain text on the glasses' display.
+    /// Show plain text on the glasses' display, full width.
     func showText(_ text: String) async throws
+    /// Show a frame. Only what changed is sent; switching between "with rail" and "without rail"
+    /// rebuilds the page.
+    func show(_ frame: GlassesFrame) async throws
+    /// Turn on the glasses' microphone. The stream yields 16 kHz mono PCM chunks until
+    /// `stopMicrophone()` is called or the link drops.
+    func startMicrophone() async throws -> AsyncStream<[Int16]>
+    func stopMicrophone() async
+    /// Report head-up / head-down (from the glasses' IMU) as `.headUp` / `.headDown` inputs.
+    func setHeadTracking(_ enabled: Bool) async
     /// Gestures from the touchpads and from the ring. The ring is linked to the glasses, which
     /// relay its gestures. Each call returns a new stream; repeats are already filtered out.
     func inputs() -> AsyncStream<InputEvent>

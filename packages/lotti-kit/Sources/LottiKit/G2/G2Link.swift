@@ -154,6 +154,22 @@ public final class G2Link: NSObject, GlassesLink {
         inputBroadcast.stream()
     }
 
+    public func show(_ frame: GlassesFrame) async throws {
+        // TODO(layout): two containers (main + rail) with a rebuild when the shape changes.
+        try await showText(frame.rail.map { "\(frame.main)\n\n\($0)" } ?? frame.main)
+    }
+
+    public func startMicrophone() async throws -> AsyncStream<[Int16]> {
+        // TODO(mic): Cmd 15 audio control + LC3 on …6402.
+        throw GlassesLinkError.notConnected
+    }
+
+    public func stopMicrophone() async {}
+
+    public func setHeadTracking(_ enabled: Bool) async {
+        // TODO(imu): Cmd 19 IMU control + head-up detector.
+    }
+
     // MARK: - Connection steps
 
     private var isBusy: Bool {
