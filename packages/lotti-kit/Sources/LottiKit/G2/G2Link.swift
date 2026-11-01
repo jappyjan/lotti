@@ -308,7 +308,7 @@ public final class G2Link: NSObject, GlassesLink {
             guard headTrackingWanted, status.isConnected, let right = arms[.right] else { return }
             let sentAt = ProcessInfo.processInfo.systemUptime
             let m = nextMagic()
-            let ack = try? await request(G2Payload.imuControl(magic: m, enable: true, pace: 500, field: field),
+            let ack = try? await request(G2Payload.imuControl(magic: m, enable: true, pace: 200, field: field),
                                          sid: G2Service.evenHub, flag: G2Flag.request, magic: m, to: right,
                                          step: "IMU control", seconds: 1.5)
             if let ack { print("[IMU] control acked via field \(field): \(hex(ack.payload))") }
@@ -683,7 +683,7 @@ extension G2Link: @MainActor CBPeripheralDelegate {
             receiveImu(x: x, y: y, z: z)
         case .info(let text):
             log("\(arm.side) arm: \(text)")
-            if message.sid == G2Events.stateService, message.payload != G2Events.evenHubActive, arm.side == .right {
+            if message.sid == G2Events.stateService, message.payload == G2Events.dashboardToggled, arm.side == .right {
                 pageTakenOver()
             }
         case nil:

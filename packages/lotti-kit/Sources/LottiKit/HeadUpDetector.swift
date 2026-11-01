@@ -3,7 +3,8 @@ import Foundation
 /// Turns the glasses' gravity samples into head-up / head-down. Pitch is the angle between one
 /// sensor axis and the horizontal plane: 0° with that axis level, positive when it tilts up.
 ///
-/// Which axis points forward, and its sign, isn't confirmed on the G2 yet, so both are settings.
+/// Calibrated on a worn G2 (2026-11-01): the x axis tilts with the head. Straight ahead read 0–25°,
+/// looking at the ceiling about +57°, at the floor about −75°.
 /// Hysteresis (up above `upAngle`, down only below `downAngle`) plus a short hold keeps a nod or
 /// a bump from flipping the state.
 public struct HeadUpDetector: Sendable {
@@ -13,20 +14,20 @@ public struct HeadUpDetector: Sendable {
 
     public struct Config: Equatable, Sendable {
         /// The sensor axis that points forward out of the glasses.
-        public var axis: Axis = .y
+        public var axis: Axis = .x
         /// +1 or −1: flips the axis if looking up gives negative pitch.
         public var sign: Float = 1
         /// Added to the measured pitch, for glasses that sit tilted on the nose.
         public var offset: Double = 0
-        public var upAngle: Double = 20
-        public var downAngle: Double = 10
+        public var upAngle: Double = 40
+        public var downAngle: Double = 30
         /// How long the pitch must stay past the threshold.
-        public var upHold: TimeInterval = 0.3
-        public var downHold: TimeInterval = 0.5
+        public var upHold: TimeInterval = 0.2
+        public var downHold: TimeInterval = 0.6
 
         public init(
-            axis: Axis = .y, sign: Float = 1, offset: Double = 0, upAngle: Double = 20, downAngle: Double = 10,
-            upHold: TimeInterval = 0.3, downHold: TimeInterval = 0.5
+            axis: Axis = .x, sign: Float = 1, offset: Double = 0, upAngle: Double = 40, downAngle: Double = 30,
+            upHold: TimeInterval = 0.2, downHold: TimeInterval = 0.6
         ) {
             self.axis = axis
             self.sign = sign

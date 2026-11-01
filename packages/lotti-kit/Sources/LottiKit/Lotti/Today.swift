@@ -26,13 +26,28 @@ public struct Weather: Equatable, Sendable {
     public var low: Int?
     /// When rain starts later today, if it does.
     public var rainFrom: Date?
+    public var tomorrow: DayForecast?
 
-    public init(temperature: Int, condition: String, high: Int? = nil, low: Int? = nil, rainFrom: Date? = nil) {
+    public init(temperature: Int, condition: String, high: Int? = nil, low: Int? = nil, rainFrom: Date? = nil,
+                tomorrow: DayForecast? = nil) {
         self.temperature = temperature
         self.condition = condition
         self.high = high
         self.low = low
         self.rainFrom = rainFrom
+        self.tomorrow = tomorrow
+    }
+}
+
+public struct DayForecast: Equatable, Sendable {
+    public var condition: String
+    public var high: Int
+    public var low: Int
+
+    public init(condition: String, high: Int, low: Int) {
+        self.condition = condition
+        self.high = high
+        self.low = low
     }
 }
 
@@ -113,6 +128,7 @@ public struct TodayComposer: Sendable {
             if let high = w.high, let low = w.low { weather += ", high \(high)°, low \(low)°" }
             if let rain = w.rainFrom { weather += ", rain from \(time(rain))" }
             lines.append(weather)
+            if let t = w.tomorrow { lines.append("Weather tomorrow: \(t.condition), \(t.low)–\(t.high)°C") }
         }
         return lines.joined(separator: "\n")
     }

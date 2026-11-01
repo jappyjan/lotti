@@ -9,9 +9,9 @@ public enum OpenMeteo {
             .init(name: "longitude", value: String(format: "%.3f", longitude)),
             .init(name: "current", value: "temperature_2m,weather_code"),
             .init(name: "hourly", value: "precipitation,precipitation_probability"),
-            .init(name: "daily", value: "temperature_2m_max,temperature_2m_min"),
+            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min"),
             .init(name: "timezone", value: "auto"),
-            .init(name: "forecast_days", value: "1"),
+            .init(name: "forecast_days", value: "2"),
             .init(name: "timeformat", value: "unixtime"),
         ]
         return components.url!
@@ -28,6 +28,7 @@ public enum OpenMeteo {
             var precipitation_probability: [Int?]
         }
         struct Daily: Decodable {
+            var weather_code: [Int?]?
             var temperature_2m_max: [Double?]
             var temperature_2m_min: [Double?]
         }
@@ -51,12 +52,18 @@ public enum OpenMeteo {
                 }
             }
         }
+        var tomorrow: DayForecast?
+        if let daily = r.daily, let high = daily.temperature_2m_max[safe: 1] ?? nil,
+           let low = daily.temperature_2m_min[safe: 1] ?? nil {
+            let code = (daily.weather_code?[safe: 1] ?? nil) ?? -1
+            tomorrow = DayForecast(condition: condition(code), high: Int(high.rounded()), low: Int(low.rounded()))
+        }
         return Weather(
             temperature: Int(r.current.temperature_2m.rounded()),
             condition: condition(r.current.weather_code),
             high: (r.daily?.temperature_2m_max.first ?? nil).map { Int($0.rounded()) },
             low: (r.daily?.temperature_2m_min.first ?? nil).map { Int($0.rounded()) },
-            rainFrom: rainFrom)
+            rainFrom: rainFrom, tomorrow: tomorrow)
     }
 
     /// WMO weather codes in plain words.

@@ -122,6 +122,9 @@ struct G2ImuTests {
 }
 
 struct HeadUpDetectorTests {
+    /// Thresholds for the synthetic samples below (forward axis = y).
+    static let synthetic = HeadUpDetector.Config(axis: .y, upAngle: 20, downAngle: 10, upHold: 0.3, downHold: 0.5)
+
     /// A gravity sample for a head pitched `degrees` up, with the forward axis = y.
     private func sample(_ degrees: Double) -> (Float, Float, Float) {
         let r = degrees * .pi / 180
@@ -136,35 +139,35 @@ struct HeadUpDetectorTests {
     }
 
     @Test func pitchFollowsTheConfiguredAxis() {
-        let detector = HeadUpDetector()
+        let detector = HeadUpDetector(config: Self.synthetic)
         let (x, y, z) = sample(30)
         #expect(abs(detector.pitch(x: x, y: y, z: z)! - 30) < 0.01)
-        var flipped = HeadUpDetector(config: .init(sign: -1))
+        var flipped = HeadUpDetector(config: .init(axis: .y, sign: -1))
         flipped.config.offset = 5
         #expect(abs(flipped.pitch(x: x, y: y, z: z)! - -25) < 0.01)
         #expect(HeadUpDetector(config: .init(axis: .z)).pitch(x: 0, y: 0, z: 1)! > 89)
     }
 
     @Test func ignoresWeakSamples() {
-        var detector = HeadUpDetector()
+        var detector = HeadUpDetector(config: Self.synthetic)
         #expect(detector.pitch(x: 0, y: 0.1, z: 0) == nil)
         #expect(detector.feed(x: 0, y: 0.1, z: 0, at: 0) == nil)
     }
 
     @Test func headUpNeedsTheHold() {
-        var detector = HeadUpDetector()
+        var detector = HeadUpDetector(config: Self.synthetic)
         #expect(run(&detector, [(30, 0), (30, 0.2)]) == [])
         #expect(run(&detector, [(30, 0.31)]) == [.headUp])
         #expect(detector.isUp)
     }
 
     @Test func aShortNodDoesNothing() {
-        var detector = HeadUpDetector()
+        var detector = HeadUpDetector(config: Self.synthetic)
         #expect(run(&detector, [(30, 0), (30, 0.2), (0, 0.25), (30, 0.3), (30, 0.5)]) == [])
     }
 
     @Test func hysteresisKeepsItUpBetweenThresholds() {
-        var detector = HeadUpDetector()
+        var detector = HeadUpDetector(config: Self.synthetic)
         _ = run(&detector, [(30, 0), (30, 0.4)])
         // 15° is below "up" but above "down": stays up.
         #expect(run(&detector, [(15, 1), (15, 3)]) == [])
@@ -174,11 +177,24 @@ struct HeadUpDetectorTests {
     }
 
     @Test func resetForgetsTheState() {
-        var detector = HeadUpDetector()
+        var detector = HeadUpDetector(config: Self.synthetic)
         _ = run(&detector, [(30, 0), (30, 0.4)])
         detector.reset()
         #expect(!detector.isUp)
         #expect(run(&detector, [(30, 10), (30, 10.4)]) == [.headUp])
+    }
+
+    /// Samples from a worn G2 (2026-11-01, about 1 per second): ahead, ceiling, ahead, floor.
+    @Test func calibratedDefaultsOnRealSamples() {
+        var detector = HeadUpDetector()
+        let samples: [(Float, Float, Float)] = [
+            (0.02, -0.08, 1.05), (-0.09, -0.04, 1.01), (0.88, -0.21, 0.54), (0.82, -0.18, 0.54),
+            (0.41, -0.15, 0.87), (-0.98, 0.07, 0.22), (-0.96, 0.12, 0.27), (0.24, -0.10, 1.00),
+        ]
+        let events = samples.enumerated().compactMap { i, v in detector.feed(x: v.0, y: v.1, z: v.2, at: Double(i)) }
+        #expect(events == [.headUp, .headDown])
+        // Straight ahead with the glasses sitting a bit higher (x 0.45) stays down.
+        #expect(detector.feed(x: 0.45, y: -0.2, z: 0.88, at: 20) == nil)
     }
 }
 

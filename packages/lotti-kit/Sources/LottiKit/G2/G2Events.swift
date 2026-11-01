@@ -27,6 +27,8 @@ public enum G2Events {
     public static let stateService: UInt8 = 0x0D
     /// The sid 0x0D payload saying EvenHub (our page) is the active app again (S1 capture).
     public static let evenHubActive: [UInt8] = [0x08, 0x01, 0x1A, 0x03, 0x08, 0xE0, 0x01]
+    /// Sent when the firmware's own dashboard opens or closes, which shuts our page down (MentraOS).
+    public static let dashboardToggled: [UInt8] = [0x08, 0x01, 0x1A, 0x00]
     /// Device config Cmd 6, RING_CONNECT_INFO: the ring link between glasses and ring.
     public static let ringConnectInfo: UInt64 = 6
 
