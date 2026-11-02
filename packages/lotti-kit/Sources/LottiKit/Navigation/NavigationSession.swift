@@ -37,10 +37,12 @@ public final class NavigationSession {
     private var mapView: NavMapRequest.Kind?
     private var lastMapSent: Date = .distantPast
     private var mapSending = false
+    /// Set once the route is ready: the firmware sets up its map rendering from the overview,
+    /// so the full map is pushed proactively (the Even app does this right after START, not
+    /// only when the user swipes to the map view).
+    private var overviewPushPending = false
     /// Each frame (mini and full separately) gets a new session id for its fragments.
     private var mapSessionIDs: [NavMapRequest.Kind: UInt64] = [:]
-    /// Byte size of one `mapRawData` chunk; the transport splits each message further on BLE.
-    public var mapFragmentSize = 4096
 
     /// Seconds between heartbeats; the screen ends the session if none lands for 30 s.
     public var heartbeatInterval: Duration = .seconds(5)
@@ -99,6 +101,7 @@ public final class NavigationSession {
         lastCardSent = .distantPast
         lastCard = nil
         print("[Nav] route set: \(route.steps.count) steps, \(Int(route.totalDistance)) m")
+        overviewPushPending = true
         if let lastLocation { handleLocation(lastLocation) }
     }
 
@@ -199,17 +202,24 @@ public final class NavigationSession {
 
     // MARK: Maps
 
-    /// Streams the current map view's bitmap when the last frame is older than
+    /// Streams the map: the overview first when one is pending (the firmware's map rendering
+    /// initializes from it), then the current view's map when the last frame is older than
     /// `mapRefreshInterval` (or a view change asked for one right away).
     private func sendMapIfStale() async {
-        guard mapView != nil, !mapSending,
-              Date().timeIntervalSince(lastMapSent) >= Double(mapRefreshInterval.components.seconds) else { return }
-        await sendMap()
+        guard mapView != nil, !mapSending else { return }
+        let overviewDue = overviewPushPending
+        let stale = Date().timeIntervalSince(lastMapSent) >= Double(mapRefreshInterval.components.seconds)
+        guard overviewDue || stale else { return }
+        overviewPushPending = false
+        if overviewDue { await sendMap(kind: .full) }
+        if mapView == .mini { await sendMap(kind: .mini) }
     }
 
-    private func sendMap() async {
-        guard !mapSending, let provider = mapProvider, let kind = mapView, let location = lastLocation,
+    private func sendMap(kind override: NavMapRequest.Kind? = nil) async {
+        guard !mapSending, let provider = mapProvider, let location = lastLocation,
               let tracker else { return }
+        let kind = override ?? mapView
+        guard let kind else { return }
         mapSending = true
         defer { mapSending = false }
         lastMapSent = Date()  // set up front: concurrent stale-checks can't stack sends
@@ -221,30 +231,67 @@ public final class NavigationSession {
             print("[Nav] no \(kind) map bitmap")
             return
         }
-        // RGBA → 4 bpp BMP (green roads, red route) → LZ4, or raw when that doesn't shrink it.
+        // RGBA → 4 bpp BMP (green roads, red route) → LZ4 (mode 4), or raw (mode 0) when that
+        // doesn't shrink it (the app's rule).
         guard let frame = NavMapBmp.encode(rgba: bitmap.rgba, width: bitmap.width, height: bitmap.height) else {
             print("[Nav] couldn't encode the \(kind) map bitmap")
             return
         }
-        let chunks = stride(from: 0, to: frame.data.count, by: mapFragmentSize).map {
-            Array(frame.data[$0..<min($0 + mapFragmentSize, frame.data.count)])
-        }
-        let sessionID = (mapSessionIDs[kind] ?? 0) + 1
-        mapSessionIDs[kind] = sessionID
-        for (index, chunk) in chunks.enumerated() {
-            let payload = kind == .full
-                ? G2Navigation.maxMapFragment(
+        let rotation = request.heading.map { UInt64($0.rounded()) % 360 } ?? 0
+        switch kind {
+        case .mini:
+            // A mini map ≤ 8192 bytes is one message without session fields (the app's rule).
+            if frame.data.count <= 8192 {
+                await sendMapFragment(G2Navigation.miniMapFragment(
+                    magic: nextMagic(), size: UInt64(frame.data.count),
+                    compressMode: frame.mode.rawValue, data: frame.data, rotationAngle: rotation))
+            } else {
+                let chunks = chunks(of: frame.data, size: 8192)
+                let sessionID = nextMapSessionID(for: kind)
+                for (index, chunk) in chunks.enumerated() {
+                    await sendMapFragment(G2Navigation.miniMapFragment(
+                        magic: nextMagic(), size: UInt64(frame.data.count),
+                        compressMode: frame.mode.rawValue, data: chunk, rotationAngle: rotation,
+                        sessionID: sessionID, index: UInt64(index), packetSize: UInt64(chunk.count)))
+                }
+            }
+        case .full:
+            let chunks = chunks(of: frame.data, size: 4096)
+            let sessionID = nextMapSessionID(for: kind)
+            for (index, chunk) in chunks.enumerated() {
+                await sendMapFragment(G2Navigation.maxMapFragment(
                     magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(frame.data.count),
                     compressMode: frame.mode.rawValue, index: UInt64(index),
-                    packetSize: UInt64(chunk.count), data: chunk)
-                : G2Navigation.miniMapFragment(
-                    magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(frame.data.count),
-                    compressMode: frame.mode.rawValue, index: UInt64(index),
-                    packetSize: UInt64(chunk.count), data: chunk)
-            await link.sendNavigation(payload)
+                    packetSize: UInt64(chunk.count), data: chunk))
+            }
         }
         print("[Nav] \(kind) map sent (\(bitmap.width)×\(bitmap.height), \(frame.data.count) bytes, "
-              + "\(frame.mode == .lz4 ? "lz4" : "raw"), \(chunks.count) fragments)")
+              + "\(frame.mode == .lz4 ? "lz4" : "raw"))")
+    }
+
+    /// Sends one map message and checks the firmware's answer: every fragment gets a reply
+    /// carrying an `errorCode`, 0 = success (the Even app retries timeouts up to 4×).
+    private func sendMapFragment(_ payload: [UInt8]) async {
+        let cmd = ProtoReader.varintFields(payload)[1]
+        do {
+            let reply = try await link.navigationRequest(payload)
+            let error = G2Navigation.mapReplyError(reply.payload, mini: cmd == G2Navigation.cmdMiniMap)
+            if error != 0 {
+                print("[Nav] the glasses rejected a map fragment (error \(error))")
+            }
+        } catch {
+            print("[Nav] no answer for a map fragment: \(error.localizedDescription)")
+        }
+    }
+
+    private func chunks(of data: [UInt8], size: Int) -> [[UInt8]] {
+        stride(from: 0, to: data.count, by: size).map { Array(data[$0..<min($0 + size, data.count)]) }
+    }
+
+    private func nextMapSessionID(for kind: NavMapRequest.Kind) -> UInt64 {
+        let next = (mapSessionIDs[kind] ?? 0) + 1
+        mapSessionIDs[kind] = next
+        return next
     }
 
     private func sendCardIfNeeded() {

@@ -4,24 +4,21 @@ import Foundation
 /// The lens' navigation map format, reconstructed from the Even app's `encodeRoadNetworkBmp4`
 /// (see ~/lotti-recon/map-image-push.md): an RGBA drawing is reduced to a 3-entry palette
 /// (0 = off, 1 = green road, 2 = red route), packed 4 bpp into a full BMP file — rows bottom-up,
-/// 16-entry palette, pixel data offset 0x76 — and then LZ4-compressed when that shrinks it,
-/// else sent raw. `compressMode` in the map message reflects the winner (1 = LZ4, 2 = raw;
-/// the app's custom RLE, 0, is not implemented here).
+/// 64-byte palette (only 3 entries used, `biClrUsed = 3`), pixel data offset 0x76 — and then
+/// LZ4-compressed when that shrinks it, else sent raw. `compressMode` in the map message
+/// reflects the winner: 4 = LZ4, 0 = raw.
 public enum NavMapBmp {
     public enum Compression: UInt64, Sendable {
-        /// The app's custom run-length encoding. Format unknown; not implemented.
-        case rle = 0
-        case lz4 = 1
-        /// Uncompressed BMP. The app sends raw whenever compression doesn't shrink the data;
-        /// the "none" mode value is a guess (0 and 1 are taken).
-        case raw = 2
+        /// Uncompressed BMP — the app sends raw whenever LZ4 doesn't shrink the data.
+        case raw = 0
+        case lz4 = 4
     }
 
-    /// Bitmap dimensions the renderer draws at. The firmware scales whatever the BMP header
-    /// says; these match the app's map sizes closely enough (best-guess values).
+    /// Bitmap dimensions the renderer draws at: the Even app's own sizes, read from
+    /// `captureOverviewMap` (576×188) and `captureMiniMap` (170×170).
     public enum Size {
-        public static let mini = (width: 144, height: 144)
-        public static let full = (width: 576, height: 288)
+        public static let mini = (width: 170, height: 170)
+        public static let full = (width: 576, height: 188)
     }
 
     /// Palettes the drawing contracts to, exactly what the app's classifier reads:
@@ -97,10 +94,11 @@ public enum NavMapBmp {
         putLE32(&bmp, 34, UInt32(pixelBytes))
         putLE32(&bmp, 38, 2835)  // 72 dpi in pixels per metre
         putLE32(&bmp, 42, 2835)
-        putLE32(&bmp, 46, 16)  // palette entries used
-        putLE32(&bmp, 50, 0)   // important colors
+        putLE32(&bmp, 46, 3)  // palette entries used (black, green, red)
+        putLE32(&bmp, 50, 3)  // important colors
 
-        // 16-entry palette (BGRA): 0 = black, 1 = green (roads), 2 = red (route), 3–15 = black.
+        // 64-byte palette region (BGRA): 0 = black, 1 = green (roads), 2 = red (route),
+        // 3–15 = zero — the app emits the full region with only 3 non-zero entries.
         putLE32(&bmp, 54 + 1 * 4, 0x0000FF00)
         putLE32(&bmp, 54 + 2 * 4, 0x00FF0000)
 

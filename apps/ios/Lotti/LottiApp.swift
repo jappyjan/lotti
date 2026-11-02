@@ -46,7 +46,7 @@ struct LottiApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, speech: speech, brain: brain, hermes: hermes, hermesClient: hermesClient,
-                        toolbox: toolbox)
+                        toolbox: toolbox, navigation: navigation)
                 .task { await PhoneTools.requestAccess() }
                 .task {
                     await model.conductor.setHeadTracking(Settings.headUpEnabled)

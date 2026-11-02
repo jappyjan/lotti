@@ -14,6 +14,8 @@ final class NavigationController {
     private let link: any GlassesLink
     private let today: DeviceToday
     private let planner = RoutePlanner()
+    /// Renders the nav maps; keeps the last ones for the Debug section.
+    let renderer = NavMapRenderer()
     private var session: NavigationSession?
     private var locationTask: Task<Void, Never>?
     private var planningTask: Task<Void, Never>?
@@ -25,17 +27,15 @@ final class NavigationController {
     }
 
     /// The `start_navigation` tool body: opens the trip on the glasses and plans the route in
-    /// the background. Returns the sentence Lotti says when the action runs.
+    /// the background. Returns the sentence Lotti says when the action runs — never waits for a
+    /// location fix or the route, so the tool can't time out.
     func start(destination name: String, mode: NavigationMode) async throws -> String {
         stop()
-        // Plan from the last known fix (instant); if the route starts a little off, the
-        // session's own stream snaps and reroutes within seconds.
-        var here = await today.lastKnownLocation()
-        if here == nil { here = await today.freshLocation() }
-        guard let here else {
-            throw ToolError("Lotti doesn't know where Jan is.")
-        }
-        let session = NavigationSession(link: link, mapProvider: NavMapRenderer()) { [weak self] location, mode in
+        // The tap opens the screen right away; MapKit planning runs in the background and the
+        // route streams in when ready (`session.setRoute`). Planning starts from the cached fix,
+        // or from the session stream's first live fix when there is none — the stream feeds both
+        // the session and the planner.
+        let session = NavigationSession(link: link, mapProvider: renderer) { [weak self] location, mode in
             guard let self, let place = self.destination else { return nil }
             return try? await self.planner.route(from: location.coordinate, to: place, mode: mode)
         }
@@ -45,9 +45,33 @@ final class NavigationController {
             self?.destination = nil
         }
         self.session = session
-        locationTask = Task { [weak self] in await self?.run(session, destination: name, mode: mode) }
+        let (sessionStream, sessionFeed) = AsyncStream<CLLocation>.makeStream(bufferingPolicy: .bufferingNewest(10))
+        let (plannerStream, plannerFeed) = AsyncStream<CLLocation>.makeStream(bufferingPolicy: .bufferingNewest(10))
+        let updates = Task { [sessionFeed, plannerFeed] in
+            let service = CLServiceSession(authorization: .whenInUse)
+            defer {
+                service.invalidate()
+                sessionFeed.finish()
+                plannerFeed.finish()
+            }
+            do {
+                for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
+                    if let location = update.location {
+                        sessionFeed.yield(location)
+                        plannerFeed.yield(location)
+                    }
+                    if update.authorizationDenied || Task.isCancelled { return }
+                }
+            } catch {
+                print("[Nav] location stream ended: \(error.localizedDescription)")
+            }
+        }
+        let cached = await today.lastKnownLocation()
+        locationTask = Task { [weak self] in
+            await self?.run(session, stream: sessionStream, destination: name, mode: mode, updates: updates)
+        }
         planningTask = Task { [weak self, weak session] in
-            await self?.plan(session: session, name: name, mode: mode, from: here)
+            await self?.plan(session: session, name: name, mode: mode, cached: cached, locations: plannerStream)
         }
         return "Navigating to \(name) \(mode.spoken)."
     }
@@ -65,8 +89,24 @@ final class NavigationController {
 
     /// Resolves the place and plans the route; on success hands it to the session, on failure
     /// closes the screen with an error. Each MapKit call has a deadline: they have no timeout
-    /// of their own and can hang for minutes.
-    private func plan(session: NavigationSession?, name: String, mode: NavigationMode, from here: CLLocationCoordinate2D) async {
+    /// of their own and can hang for minutes. Without a cached fix, waits for the session
+    /// stream's first live fix (the tap already opened the screen, so waiting is fine here).
+    private func plan(
+        session: NavigationSession?, name: String, mode: NavigationMode,
+        cached: CLLocationCoordinate2D?, locations: AsyncStream<CLLocation>
+    ) async {
+        let here: CLLocationCoordinate2D
+        if let cached {
+            here = cached
+        } else {
+            print("[Nav] waiting for the first location fix")
+            var iterator = locations.makeAsyncIterator()
+            guard let first = await iterator.next() else {
+                session?.failPlanning("Lotti couldn't get a location fix.")
+                return
+            }
+            here = first.coordinate
+        }
         do {
             let box = try await withDeadline(10, "finding the place took too long") {
                 let started = Date()
@@ -89,25 +129,12 @@ final class NavigationController {
     }
 
     /// Feeds the session location fixes while it runs, then stops the stream.
-    private func run(_ session: NavigationSession, destination: String, mode: NavigationMode) async {
-        let (stream, continuation) = AsyncStream<CLLocation>.makeStream(bufferingPolicy: .bufferingNewest(10))
-        let updates = Task { [continuation] in
-            let service = CLServiceSession(authorization: .whenInUse)
-            defer {
-                service.invalidate()
-                continuation.finish()
-            }
-            do {
-                for try await update in CLLocationUpdate.liveUpdates(.otherNavigation) {
-                    if let location = update.location { continuation.yield(location) }
-                    if update.authorizationDenied || Task.isCancelled { return }
-                }
-            } catch {
-                print("[Nav] location stream ended: \(error.localizedDescription)")
-            }
-        }
+    private func run(
+        _ session: NavigationSession, stream: AsyncStream<CLLocation>,
+        destination: String, mode: NavigationMode, updates: Task<Void, Never>
+    ) async {
+        defer { updates.cancel() }
         await session.start(locations: stream, destination: destination, mode: mode)
-        updates.cancel()
     }
 
     private static func s(_ seconds: TimeInterval) -> String {

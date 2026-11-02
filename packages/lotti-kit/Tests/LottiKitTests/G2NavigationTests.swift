@@ -66,23 +66,56 @@ struct G2NavigationTests {
 
     // MARK: Map bitmaps
 
-    @Test func miniMapFragmentSharesTheMaxMapShape() {
+    @Test func miniMapUsesItsOwnSchema() {
+        // A small mini map: one message, no session fields; rotation and border are always
+        // written (the app's factory does).
         let data: [UInt8] = [0xF0, 0x0F, 0xFF]
         let payload = G2Navigation.miniMapFragment(
-            magic: 5, sessionID: 3, totalSize: 100, compressMode: 1,
-            index: 2, packetSize: 40, data: data)
+            magic: 5, size: 3, compressMode: 4, data: data, rotationAngle: 90)
         var expected = ProtoWriter()
         expected.varint(1, 8)
         expected.varint(2, 5)
         expected.message(6) {
             $0.varint(1, 3)
-            $0.varint(2, 100)
-            $0.varint(3, 1)
-            $0.varint(4, 2)
-            $0.varint(5, 40)
-            $0.bytes(6, data)
+            $0.varint(2, 4)
+            $0.bytes(3, data)
+            $0.varint(5, 90)
+            $0.varint(6, 0)
         }
         #expect(payload == expected.bytes)
+    }
+
+    @Test func miniMapFragmentsCarrySessionFields() {
+        let payload = G2Navigation.miniMapFragment(
+            magic: 5, size: 9000, compressMode: 4, data: [0x01, 0x02],
+            sessionID: 3, index: 2, packetSize: 40)
+        var expected = ProtoWriter()
+        expected.varint(1, 8)
+        expected.varint(2, 5)
+        expected.message(6) {
+            $0.varint(1, 9000)
+            $0.varint(2, 4)
+            $0.bytes(3, [0x01, 0x02])
+            $0.varint(5, 0)
+            $0.varint(6, 0)
+            $0.varint(7, 3)
+            $0.varint(8, 2)
+            $0.varint(9, 40)
+        }
+        #expect(payload == expected.bytes)
+    }
+
+    @Test func mapRepliesReportTheErrorCode() {
+        // Mini reply: error 5 inside field 6, field 4.
+        var mini = ProtoWriter()
+        mini.message(6) { $0.varint(4, 5) }
+        #expect(G2Navigation.mapReplyError(mini.bytes, mini: true) == 5)
+        // Max reply: error 13 inside field 7, field 7.
+        var max = ProtoWriter()
+        max.message(7) { $0.varint(7, 13) }
+        #expect(G2Navigation.mapReplyError(max.bytes, mini: false) == 13)
+        // No error field: success.
+        #expect(G2Navigation.mapReplyError([], mini: false) == 0)
     }
 
     @Test func maxMapFragmentsShareTheSession() {

@@ -29,11 +29,13 @@ struct NavMapBmpTests {
 
         #expect(bmp[0] == 0x42 && bmp[1] == 0x4D)  // "BM"
         #expect(readLE32(bmp, 2) == UInt32(bmp.count))
-        #expect(readLE32(bmp, 10) == 0x76)  // data offset: 14 + 40 + 16*4
+        #expect(readLE32(bmp, 10) == 0x76)  // data offset: 14 + 40 + 64
         #expect(readLE32(bmp, 18) == 2)  // width
         #expect(readLE32(bmp, 22) == 1)  // height
         #expect(readLE16(bmp, 28) == 4)  // bpp
         #expect(readLE32(bmp, 38) == 2835)  // 72 dpi
+        #expect(readLE32(bmp, 46) == 3)  // biClrUsed: black, green, red
+        #expect(readLE32(bmp, 50) == 3)  // biClrImportant
 
         // Palette: 0 black, 1 green, 2 red.
         #expect(readLE32(bmp, 54) == 0x00000000)
@@ -56,21 +58,37 @@ struct NavMapBmpTests {
     }
 
     @Test func rowPaddingReachesFourBytes() {
-        #expect(NavMapBmp.rowBytes(forWidth: 144) == 72)  // even width: (144+1)/2 = 72, already aligned
-        #expect(NavMapBmp.rowBytes(forWidth: 143) == 72)  // odd: 72 → aligned
-        #expect(NavMapBmp.rowBytes(forWidth: 2) == 4)     // 1 byte of pixels padded to 4
-        #expect(NavMapBmp.rowBytes(forWidth: 6) == 4)     // 3 bytes padded to 4
+        // The app's real map widths.
+        #expect(NavMapBmp.rowBytes(forWidth: 576) == 288)  // max map
+        #expect(NavMapBmp.rowBytes(forWidth: 170) == 88)   // mini map: (85 + 3) & ~3
+        #expect(NavMapBmp.rowBytes(forWidth: 143) == 72)   // odd: 72 → aligned
+        #expect(NavMapBmp.rowBytes(forWidth: 2) == 4)      // 1 byte of pixels padded to 4
+        #expect(NavMapBmp.rowBytes(forWidth: 6) == 4)      // 3 bytes padded to 4
+    }
+
+    @Test func realMapSizesMatchTheApp() {
+        // BMP file totals: 54262 (576×188) and 15078 (170×170), per the app's encoder.
+        let max = NavMapBmp.file(
+            pixels: [UInt8](repeating: 0, count: 576 * 188), width: 576, height: 188)
+        #expect(max.count == 54262)
+        let mini = NavMapBmp.file(
+            pixels: [UInt8](repeating: 0, count: 170 * 170), width: 170, height: 170)
+        #expect(mini.count == 15078)
+        // The fragment budgets apply to the compressed payload: raw sizes don't decide.
+        #expect(max.count > 4096)  // the max map always fragments (4096)
     }
 
     @Test func lz4RoundTrips() {
         // A mostly-empty map compresses well; the payload must decompress back to the BMP.
-        var rgba = [UInt8](repeating: 0, count: 144 * 144 * 4)
-        for pixel in 0..<(144 * 144) where pixel % 7 == 0 {
+        let (width, height) = NavMapBmp.Size.mini
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+        for pixel in 0..<(width * height) where pixel % 7 == 0 {
             rgba[pixel * 4 + 1] = 255  // green speckle
         }
-        let frame = try! #require(NavMapBmp.encode(rgba: rgba, width: 144, height: 144))
+        let frame = try! #require(NavMapBmp.encode(rgba: rgba, width: width, height: height))
         #expect(frame.mode == .lz4)
-        let bmpSize = 118 + NavMapBmp.rowBytes(forWidth: 144) * 144
+        #expect(frame.mode.rawValue == 4)
+        let bmpSize = 118 + NavMapBmp.rowBytes(forWidth: width) * height
         var out = [UInt8](repeating: 0, count: bmpSize + 64)
         let outCount = out.count
         let written = out.withUnsafeMutableBytes { dst -> Int in
@@ -96,6 +114,7 @@ struct NavMapBmpTests {
         }
         let frame = NavMapBmp.compressed(noise)
         #expect(frame.mode == .raw)
+        #expect(frame.mode.rawValue == 0)
         #expect(frame.data == noise)
     }
 
