@@ -98,10 +98,9 @@ struct HermesView: View {
             check = "That address doesn't look right."
             return
         }
-        let newAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         // Another server must not get the old conversation.
-        if newAddress != Settings.hermesAddress { hermes.endConversation() }
-        Settings.hermesAddress = newAddress
+        if HermesConfig(address: address, key: key)?.url != Settings.hermesConfig?.url { hermes.endConversation() }
+        Settings.hermesAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
         Settings.hermesKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         checking = true
         defer { checking = false }

@@ -83,7 +83,7 @@ public final class HermesBrain: RemoteBrain {
         let mine = turn
         do {
             var round = messages
-            let answer = try await run(message, context: context, round: &round, status: status)
+            let answer = try await run(message, context: context, round: &round, turn: mine, status: status)
             // Superseded while waiting: the newer question or the reset owns the state now.
             guard mine == turn else { throw CancellationError() }
             messages = Self.capped(round)
@@ -113,8 +113,14 @@ public final class HermesBrain: RemoteBrain {
         trace = []
     }
 
-    private func run(_ message: String, context: String, round messages: inout [ChatMessage],
+    private func run(_ message: String, context: String, round messages: inout [ChatMessage], turn mine: Int,
                      status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+        // A superseded question stops before its next request: after a reset (say, a new address)
+        // it must not send the old history again.
+        func checkCurrent() throws {
+            try Task.checkCancellation()
+            guard mine == turn else { throw CancellationError() }
+        }
         let allowed = allowedReads()
         // The system prompt (including what Hermes may read) is fixed when a conversation starts; a
         // newly shared read applies from the next fresh conversation (hiding one resets it, see
@@ -129,11 +135,11 @@ public final class HermesBrain: RemoteBrain {
 
         var rounds = 0
         while true {
-            try Task.checkCancellation()
+            try checkCurrent()
             let text = try await transport.complete(messages) { progress in
                 Task { @MainActor in status(progress) }
             }
-            try Task.checkCancellation()
+            try checkCurrent()
             messages.append(ChatMessage(.assistant, text))
 
             guard let reply = HermesFormat.parse(text) else {
@@ -156,7 +162,7 @@ public final class HermesBrain: RemoteBrain {
                 note("← call " + calls.map { "\($0.tool)\(JSONValue.object($0.arguments).json)" }.joined(separator: ", "))
                 status(statusText ?? toolbox.progress(for: calls))
                 let results = await toolbox.run(calls, allowed: allowed)
-                try Task.checkCancellation()
+                try checkCurrent()
                 note("→ results " + results.map { "\($0.id) \($0.ok ? "ok" : "✕ \($0.content)")" }.joined(separator: ", "))
                 messages.append(ChatMessage(.user, HermesFormat.results(results, final: rounds == maxRounds)))
             }

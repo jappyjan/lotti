@@ -537,6 +537,23 @@ struct HermesBrainTests {
         #expect(store.stored?.messages.isEmpty == true)
     }
 
+    @Test func aResetMidRoundStopsBeforeTheNextRequest() async throws {
+        // A tool round is running when the conversation is reset (a new address, a hidden read):
+        // the old history must not go out again.
+        let hermes = ScriptedHermes([
+            #"{"type":"call","calls":[{"id":"c1","tool":"calendar","args":{"from":"2026-11-02"}}]}"#,
+            #"{"type":"answer","sentence":"Standup."}"#,
+        ])
+        let brain = brain(hermes)
+        let question = Task { try await brain.answer("My day?", context: "") { _ in } }
+        try await eventually { hermes.requests.count == 1 && hermes.replies.count == 1 }  // calendar is running
+        brain.endConversation()
+        let result = await question.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(hermes.requests.count == 1)
+        #expect(brain.conversation.isEmpty)
+    }
+
     @Test func aStoredConversationWithoutASystemPromptIsIgnored() {
         let store = FakeHermesHistoryStore(stored: PersistedHermesSession(
             messages: [ChatMessage(.user, "Jan: Hi"), ChatMessage(.assistant, "Hey.")], lastAsked: Date()))
