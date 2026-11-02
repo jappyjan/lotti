@@ -9,13 +9,6 @@ public enum HermesRoute {
     /// Openers that mean "research this", sent to Hermes as they are.
     static let research = ["dig into", "look into", "research", "recherchiere", "find heraus", "finde heraus"]
 
-    /// Phrases that mean "forget this conversation and start fresh". Matched whole and
-    /// case-insensitively, so "reset my timer" still reaches Hermes.
-    static let resets = germanResets + ["new chat", "new conversation", "start over", "reset"]
-
-    /// The German reset phrases, so the confirmation matches what you said.
-    static let germanResets = ["neues gespräch", "neuer chat", "neue unterhaltung", "neu anfangen"]
-
     /// The question to send to Hermes if `text` asks for Hermes explicitly, else nil.
     /// "Hermes, what's new in Swift 7?" → "what's new in Swift 7?"; "Dig into X" → "Dig into X".
     public static func explicitQuestion(_ text: String) -> String? {
@@ -32,21 +25,5 @@ public enum HermesRoute {
             return question.isEmpty ? nil : question
         }
         return nil
-    }
-
-    /// True when `text` is a reset phrase ("Neues Gespräch" / "new chat"), matched whole and
-    /// case-insensitively, ignoring leading/trailing whitespace and punctuation.
-    public static func resetRequest(_ text: String) -> Bool {
-        resetPhrase(text) != nil
-    }
-
-    /// The short confirmation line for a reset phrase, in the phrase's language.
-    public static func resetConfirmation(_ text: String) -> String {
-        germanResets.contains(resetPhrase(text) ?? "") ? "Neues Gespräch." : "New conversation."
-    }
-
-    private static func resetPhrase(_ text: String) -> String? {
-        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
-        return resets.contains(normalized) ? normalized : nil
     }
 }

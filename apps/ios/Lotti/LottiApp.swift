@@ -13,6 +13,9 @@ struct LottiApp: App {
 
     init() {
         LogFile.start()
+        // Earlier builds kept the chat on the phone and had a reset setting; Hermes keeps it now.
+        UserDefaults.standard.removeObject(forKey: "hermesConversation")
+        UserDefaults.standard.removeObject(forKey: "hermesConversationMinutes")
         let link = G2Link()
         if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
         link.headUpSettings = Settings.headUp
@@ -26,8 +29,7 @@ struct LottiApp: App {
             transport: hermesClient, toolbox: toolbox,
             allowedReads: { Set(toolbox.reads.map(\.name)).subtracting(Settings.hermesHiddenReads) },
             isConfigured: { Settings.hermesConfig != nil },
-            store: UserDefaultsHermesHistoryStore(),
-            resetThreshold: { Settings.hermesConversationLimit })
+            store: UserDefaultsHermesSessionStore())
         let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
                                   phoneMicrophone: PhoneMicrophone(), today: today)
         conductor.setDisplayStyle(Settings.displayStyle)

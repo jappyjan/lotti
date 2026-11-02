@@ -83,12 +83,6 @@ public enum HermesFormat {
         return JSONValue.object(object).json
     }
 
-    /// True when `content` is a message built by `results`, the phone's reply inside a round (as
-    /// opposed to a question). Parsed whole, so a question that quotes such JSON is still a question.
-    static func isResults(_ content: String) -> Bool {
-        content.hasPrefix("{") && (try? JSONValue(json: content))?["type"]?.string == "results"
-    }
-
     /// The phone's reply when Hermes didn't use the format.
     public static let formatReminder = #"Lotti couldn't read that. Reply with one JSON object only: {"type":"answer",…} or {"type":"call",…}."#
 

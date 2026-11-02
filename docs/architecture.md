@@ -170,7 +170,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 
 Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's API server (`hermes gateway`, OpenAI-compatible `/v1/chat/completions`), with the address and `API_SERVER_KEY` set in the Lotti app (key in the Keychain). Nothing in Hermes needs configuring.
 
-**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own; the phone keeps one ongoing Hermes conversation (persisted in UserDefaults, so follow-ups work an hour later or after a restart). It resets only after inactivity (a gap since the last question longer than the "Conversation" setting in the Hermes screen, default 2 h) or when you say "Neues Gespräch" / "new chat". Glasses-off and double tap do not end it; they only reset the on-device brain (5 minutes of quiet or glasses-off).
+**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own and goes into one Hermes session that Lotti continues forever, via the `X-Hermes-Session-Id` header. Hermes stores and compacts the history; the phone persists only the session id (`lotti-<uuid>`, made at the first question, kept in UserDefaults). So a follow-up works an hour, a day or a month later, after an app or gateway restart. There is no reset: not on inactivity, not by a phrase, not from settings. Glasses-off and double tap don't end it; they only reset the on-device brain (5 minutes of quiet or glasses-off).
 
 **Phone tools for Hermes: Lotti's reply format.** Hermes runs its own tools on its server and never hands tool calls back to the client, so the phone's tools travel inside the conversation as JSON. Lotti's system message (Hermes layers it on top of its own prompt) lists the tools you share and asks for exactly one JSON object per reply:
 
@@ -185,7 +185,7 @@ Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's AP
 }
 ```
 
-All calls in one reply run at the same time. The phone answers in the same conversation:
+All calls in one reply run at the same time. The phone answers in the same session:
 
 ```json
 {
@@ -219,12 +219,12 @@ Details:
 - **Limits:** at most 4 rounds of phone calls per question; with the last results Hermes is told to answer now. The whole question gives up after 2 minutes; double tap cancels sooner.
 - **Hermes asks for what it needs.** Each question carries only the date and time; calendar, weather and location are sent only when Hermes calls for them.
 - **Forgiving parser:** finds the JSON inside fences or prose, accepts `args` or `arguments`, numbers missing ids. A reply that isn't JSON is shown as plain text. Invalid actions are dropped.
-- **Stateless:** every request carries the whole conversation, so the phone owns the history (Hermes's `X-Hermes-Session-Id` isn't used; mixing it with a full history isn't documented). A failed or cancelled question is removed, so "Try again" starts clean. The history is bounded (system prompt plus about 40 messages, dropping whole question rounds from the oldest; a single long round is kept whole) and only committed states are persisted, never a half-finished round. Double tap or a newer question cancels the one in flight, and it isn't kept. A question that is superseded while it runs (you ask again, or say "new chat") is discarded and can't roll back or revive the newer state. Every question carries a fresh "Now: …" line. The system prompt (what Hermes may read) is fixed per conversation, so a newly shared read applies from the next fresh one; hiding a read, removing Hermes or changing its address starts fresh right away, so nothing already read goes on to be sent.
+- **Session, not history:** `POST /v1/chat/completions` with `X-Hermes-Session-Id: <id>` makes Hermes load the session's history from its own `state.db` and take only the **last** message of the body as the new turn; it applies the body's system message on top at every request and compacts long sessions itself. So each request is exactly `[system prompt, newest message]` (the question, or the phone's `results` reply), with the same id for every round and every question. The system prompt is rebuilt per request, so a changed "Hermes may read" applies at once. Every question carries a fresh "Now: …" line. Double tap or a newer question cancels the one in flight: no further request goes out for it. Trade-offs: a failed or cancelled question may leave a partial turn in Hermes's session (the phone can't roll it back); data read under a since-hidden read stays in Hermes's history; after changing the address the same id simply starts a fresh session on the new server. **Minimum Hermes:** one with session-continuity header support (`session_continuity_header` in `/v1/capabilities`). An older one silently answers without memory of earlier questions; Lotti doesn't check.
 - **Streaming:** Hermes's `hermes.tool.progress` events and the format's `status` show on the glasses' working screen ("Searching the web…", "Checking your calendar…").
 - **Errors:** unreachable, wrong key, busy or too slow each get a short sentence and a "Try again" choice.
 - **Network:** HTTPS (e.g. `tailscale serve`) or plain HTTP on the local network. Hermes binds to localhost by default, so it has to be reachable from the phone.
 
-**Trying it without Hermes:** `python3 packages/lotti-kit/scripts/mock-hermes.py` plays Hermes (two parallel phone calls, then an answer with a timer). `HERMES_URL=… HERMES_KEY=… swift test --filter LiveHermes` runs the connector against it or against your real Hermes. `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel` checks the on-device brain's tool use.
+**Trying it without Hermes:** `python3 packages/lotti-kit/scripts/mock-hermes.py` plays Hermes (two parallel phone calls, then an answer with a timer), keeps per-session history by the header and serves `/v1/capabilities`. `HERMES_URL=… HERMES_KEY=… swift test --filter LiveHermes` runs the connector against it or against your real Hermes (add `HERMES_MOCK=1` against the mock to also check that a follow-up continues the session). `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel` checks the on-device brain's tool use.
 
 Lotti still runs no server of its own. Hermes pushing to the glasses unprompted (a long task finishing later) needs a relay: decision D8, under "Later".
 

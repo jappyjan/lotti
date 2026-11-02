@@ -5,14 +5,23 @@ Speaks /v1/chat/completions with SSE streaming, like Hermes: a tool-progress eve
 comments, content deltas. The first turn of a question asks for two phone tools at once
 (calendar and weather); once the results are in, it answers with a timer action.
 
+Like Hermes, it keeps sessions: with an `X-Hermes-Session-Id` header it holds that session's turns
+itself and uses only the last message of the body as the new turn (earlier messages in the body
+are ignored). Answers say how many earlier questions the session has seen, so a follow-up shows
+the history continued. Without the header it is stateless. `GET /v1/capabilities` advertises
+`session_continuity_header`.
+
     python3 scripts/mock-hermes.py [port]      # default 8642, key "test"
-    HERMES_URL=http://127.0.0.1:8642 HERMES_KEY=test swift test --filter LiveHermes
+    HERMES_URL=http://127.0.0.1:8642 HERMES_KEY=test HERMES_MOCK=1 swift test --filter LiveHermes
 """
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 KEY = "test"
+
+# session id -> the turns Hermes would hold in its state.db (the new message of every request)
+SESSIONS = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -37,6 +46,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {"status": "ok"})
         if self.path == "/v1/models" and self.authorized():
             return self.reply(200, {"object": "list", "data": [{"id": "hermes-agent", "object": "model"}]})
+        if self.path == "/v1/capabilities" and self.authorized():
+            return self.reply(200, {"object": "capabilities", "session_continuity_header": True,
+                                    "features": {"chat_completions": True, "streaming": True}})
         self.reply(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
@@ -44,12 +56,19 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         last = body["messages"][-1]["content"]
+        session = self.headers.get("X-Hermes-Session-Id")
+        history = SESSIONS.setdefault(session, []) if session else []
+        # Questions of this session before the current one (results messages belong to a question).
+        earlier = sum(1 for turn in history if '"type":"results"' not in turn)
+        if '"type":"results"' in last:
+            earlier -= 1  # the question this round belongs to is already in the history
+        history.append(last)
         if '"type":"results"' in last:
             results = json.loads(last)["results"]
             facts = " / ".join(r["content"].split("\n")[0] for r in results)
             text = json.dumps({
                 "type": "answer",
-                "sentence": f"Mock Hermes saw: {facts}"[:150],
+                "sentence": f"Mock Hermes ({earlier} earlier question{'' if earlier == 1 else 's'}) saw: {facts}"[:150],
                 "followUps": ["Thanks"],
                 "actions": [{"tool": "set_timer", "args": {"minutes": 10, "label": "Tea"}}],
             })

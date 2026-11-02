@@ -135,90 +135,30 @@ struct ConductorTests {
         #expect(hermes.asked == ["Tell me about the election", "Polls?"])
 
         conductor.handle(InputEvent(.doubleTap, from: .ring))
-        #expect(hermes.ended == 0)  // glasses-off no longer ends the Hermes chat
-        #expect(brain.ended == 1)  // the on-device conversation still ends
+        #expect(brain.ended == 1)  // the on-device conversation ends
     }
 
-    @Test func neuesGesprächStartsFreshWithoutReachingHermes() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.answers = ["Tell me about the election": Answer(sentence: "Mostly about taxes.")]
-        conductor.ask("Tell me about the election")
-        try await eventually { conductor.screen?.text == "Mostly about taxes." }
-
-        conductor.ask("Neues Gespräch")
-        try await eventually { conductor.screen?.text == "Neues Gespräch." }
-        #expect(hermes.ended == 1)
+    @Test func glassesOffEndsOnlyTheOnDeviceBrainAndKeepsTheHermesSession() async throws {
+        let transport = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#, #"{"type":"answer","sentence":"Two."}"#])
+        let store = FakeHermesSessionStore()
+        let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true },
+                                 store: store)
+        let conductor = Conductor(
+            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
+            today: FixedToday(info: TodayInfo(now: Date())),
+            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
+                          finalTranscript: .milliseconds(200), remote: .milliseconds(400), remoteFallback: .milliseconds(150)))
+        conductor.ask("Tell me about the election", onHermes: true)
+        try await eventually { conductor.screen?.text == "One." }
+        let session = try #require(hermes.sessionID)
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(conductor.mode == .off)
         #expect(brain.ended == 1)
-        #expect(hermes.asked == ["Tell me about the election"])  // the phrase never went to Hermes
-        #expect(conductor.screen?.kind == .says)
-    }
+        #expect(hermes.sessionID == session)
 
-    @Test func newChatResetsInEnglish() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.answers = ["News?": Answer(sentence: "Here's the news.")]
-        conductor.ask("News?")
-        try await eventually { conductor.screen?.text == "Here's the news." }
-
-        conductor.ask("new chat")
-        try await eventually { conductor.screen?.text == "New conversation." }
-        #expect(hermes.ended == 1)
-        #expect(hermes.asked == ["News?"])
-    }
-
-    @Test func aResetPhraseWhileHermesIsThinkingWins() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.delay = .milliseconds(120)
-        conductor.ask("Tell me about the election")
-        try await eventually { conductor.mode == .working }
-
-        conductor.ask("New chat")
-        try await eventually { conductor.screen?.text == "New conversation." }
-        try await Task.sleep(for: .milliseconds(200))  // the cancelled answer would have arrived by now (idle is 300 ms)
-        #expect(conductor.screen?.text == "New conversation.")
-        #expect(conductor.mode == .showing)
-        #expect(hermes.ended == 1)
-    }
-
-    @Test func aResetPhraseReplacesAnAnswerWithChoicesAndActions() async throws {
-        let hermes = FakeHermes()
-        let timer = FakeTool.timer()
-        let conductor = conductorWithHermes(hermes, tools: [timer])
-        hermes.answers = ["Pasta?": Answer(sentence: "Ten minutes.", followUps: ["Sauce?"],
-                                           actions: [try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a1", tool: "set_timer", arguments: ["minutes": 10])))])]
-        conductor.ask("Pasta?")
-        try await eventually { conductor.screen?.text == "Ten minutes." }
-        #expect(conductor.screen?.rail != nil)
-
-        conductor.ask("Neuer Chat")
-        try await eventually { conductor.screen?.text == "Neues Gespräch." }
-        #expect(conductor.screen?.kind == .says)
-        #expect(conductor.screen?.rail == nil)  // no leftover choices or pending action
-        #expect(hermes.asked == ["Pasta?"])
-    }
-
-    @Test func aResetPhraseWorksWithoutHermes() async throws {
-        brain.answers = ["Hi": Answer(sentence: "Hi Jan!")]
-        conductor.ask("Hi")
-        try await eventually { conductor.screen?.text == "Hi Jan!" }
-
-        conductor.ask("Start over")
-        try await eventually { conductor.screen?.text == "New conversation." }
-        #expect(brain.ended == 1)
-        #expect(brain.asked == ["Hi"])  // the phrase never reached the on-device brain either
-    }
-
-    @Test func phrasesThatOnlyContainAResetWordRouteNormally() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        conductor.ask("Reset my timer please")
-        try await eventually { conductor.mode == .showing }
-        #expect(hermes.ended == 0)
-        #expect(brain.ended == 0)
-        #expect(conductor.screen?.text != "New conversation.")
-        #expect(hermes.asked + brain.asked == ["Reset my timer please"])
+        conductor.ask("And the polls?", onHermes: true)
+        try await eventually { conductor.screen?.text == "Two." }
+        #expect(transport.sessions == [session, session])
     }
 
     @Test func theOnDeviceGapEndsOnlyTheOnDeviceConversation() async throws {
@@ -236,13 +176,12 @@ struct ConductorTests {
         conductor.ask("And the polls?")
         try await eventually { hermes.asked.count == 2 }
         #expect(brain.ended == 1)
-        #expect(hermes.ended == 0)
     }
 
     @Test func doubleTapWhileHermesThinksDropsTheQuestion() async throws {
         let transport = ScriptedHermes([#"{"type":"answer","sentence":"Too late."}"#])
         transport.delay = .milliseconds(150)
-        let store = FakeHermesHistoryStore()
+        let store = FakeHermesSessionStore()
         let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true },
                                  store: store)
         let conductor = Conductor(
@@ -256,8 +195,7 @@ struct ConductorTests {
         try await Task.sleep(for: .milliseconds(300))  // the answer would have arrived by now
         #expect(conductor.mode == .off)
         #expect(transport.replies.count == 1)  // the request was cancelled, not answered
-        #expect(hermes.conversation.isEmpty)
-        #expect(store.stored?.messages.isEmpty == true)
+        #expect(hermes.sessionID == store.stored)  // the session stays
     }
 
     @Test func simpleTasksStayOnThePhone() async throws {
@@ -519,7 +457,6 @@ final class FakeHermes: RemoteBrain {
     var error: Error?
     private(set) var asked: [String] = []
     private(set) var contexts: [String] = []
-    private(set) var ended = 0
 
     func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         asked.append(message)
@@ -537,7 +474,6 @@ final class FakeHermes: RemoteBrain {
         if let error { throw error }
         return answers[message] ?? Answer(sentence: "?")
     }
-    func endConversation() { ended += 1 }
 }
 
 /// Yields `script` once audio arrives (or right away), and finishes when the audio ends.
@@ -591,4 +527,10 @@ func eventually(timeout: Double = 1, _ condition: () -> Bool) async throws {
         if Date() > deadline { Issue.record("condition not met in \(timeout) s"); throw TimedOut() }
         try await Task.sleep(for: .milliseconds(5))
     }
+}
+
+/// A settable clock for tests that move time forward.
+final class ManualClock: @unchecked Sendable {
+    var now: Date
+    init(_ now: Date) { self.now = now }
 }

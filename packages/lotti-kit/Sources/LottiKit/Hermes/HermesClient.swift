@@ -12,10 +12,11 @@ public struct ChatMessage: Equatable, Sendable, Codable {
     }
 }
 
-/// Sends a whole conversation to Hermes and returns its reply text. `progress` gets Hermes's
-/// own tool activity ("web_search") while it works.
+/// Sends the newest message to Hermes and returns its reply text. `session` is sent as
+/// `X-Hermes-Session-Id`: Hermes keeps the history. `progress` gets Hermes's own tool activity
+/// ("web_search") while it works.
 public protocol HermesTransport: Sendable {
-    func complete(_ messages: [ChatMessage], progress: @escaping @Sendable (String) -> Void) async throws -> String
+    func complete(_ messages: [ChatMessage], session: String, progress: @escaping @Sendable (String) -> Void) async throws -> String
 }
 
 /// Where your Hermes is: its API server (`hermes gateway` with `API_SERVER_ENABLED=true`).
@@ -64,8 +65,11 @@ public enum HermesError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Talks to Hermes's OpenAI-compatible chat completions endpoint, streaming. Stateless: every
-/// request carries the whole conversation, so the phone owns the history.
+/// Talks to Hermes's OpenAI-compatible chat completions endpoint, streaming. With the
+/// `X-Hermes-Session-Id` header Hermes loads the session's history itself and treats only the last
+/// message of the body as new, so a request is the system prompt plus the newest message. A Hermes
+/// without that header support (no `session_continuity_header` in `/v1/capabilities`) answers
+/// without memory of earlier questions.
 public struct HermesClient: HermesTransport {
     /// Read at every request, so settings changes apply right away. Nil when not set up.
     public var config: @Sendable () -> HermesConfig?
@@ -84,13 +88,14 @@ public struct HermesClient: HermesTransport {
         return URLSession(configuration: configuration)
     }()
 
-    public func complete(_ messages: [ChatMessage], progress: @escaping @Sendable (String) -> Void) async throws -> String {
+    public func complete(_ messages: [ChatMessage], session id: String, progress: @escaping @Sendable (String) -> Void) async throws -> String {
         guard let config = config() else { throw HermesError.notConfigured }
         var request = URLRequest(url: config.endpoint("chat/completions"))
         request.httpMethod = "POST"
         request.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(id, forHTTPHeaderField: "X-Hermes-Session-Id")
         struct Body: Encodable {
             var model = "hermes-agent"
             var messages: [ChatMessage]
