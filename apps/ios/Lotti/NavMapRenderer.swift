@@ -6,7 +6,8 @@ import Observation
 import UIKit
 
 /// Renders the navigation screen's maps: an Apple Maps snapshot with the road network lifted
-/// into green (near-white streets and yellow main roads), the active route in red, Jan and the
+/// into green (the light style's cool-gray streets and yellow main roads), the active route in
+/// red, Jan and the
 /// destination in green — an RGBA bitmap that `NavMapBmp` reduces to the lens' 3-color palette
 /// (green roads, red route, everything else off). The last bitmaps are kept for the debug
 /// section, so what the glasses receive can be checked on the phone.
@@ -27,6 +28,8 @@ final class NavMapRenderer: NavMapProviding {
         options.showsBuildings = false
         options.pointOfInterestFilter = .excludingAll
         options.region = Self.region(for: request)
+        // Always the light style: in dark mode the streets are dark and nothing gets lifted.
+        options.traitCollection = UITraitCollection(userInterfaceStyle: .light)
         let snapshot = try? await MKMapSnapshotter(options: options).start()
         if snapshot == nil { print("[Nav] map snapshot failed") }
 
@@ -48,11 +51,12 @@ final class NavMapRenderer: NavMapProviding {
                 context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
             }
 
-            // Lift the roads: near-white (streets, labels) and yellow (main roads) become
-            // green; everything else drops out as the palette's off color.
+            // Lift the roads: streets are light neutral-to-cool gray (the blocks around them are
+            // warm beige, parks green, labels dark), main roads yellow in some regions. Those
+            // become green; everything else drops out as the palette's off color.
             for pixel in 0..<(width * height) {
                 let r = buffer[pixel * 4], g = buffer[pixel * 4 + 1], b = buffer[pixel * 4 + 2]
-                let road = (r >= 245 && g >= 245 && b >= 245) || (r >= 240 && g >= 190 && b <= 130)
+                let road = Self.isRoad(r: Int(r), g: Int(g), b: Int(b))
                 buffer[pixel * 4] = road ? NavMapBmp.road.r : 0
                 buffer[pixel * 4 + 1] = road ? NavMapBmp.road.g : 0
                 buffer[pixel * 4 + 2] = road ? NavMapBmp.road.b : 0
@@ -93,6 +97,15 @@ final class NavMapRenderer: NavMapProviding {
 
         if request.kind == .mini { lastMini = image } else { lastFull = image }
         return NavMapBitmap(width: width, height: height, rgba: rgba)
+    }
+
+    /// Street pixels of the light map style: light gray, not warmer than neutral
+    /// (b, g ≥ r − 4, spread ≤ 24, value 150…250), or yellow main roads.
+    static func isRoad(r: Int, g: Int, b: Int) -> Bool {
+        let high = max(r, g, b), low = min(r, g, b)
+        let gray = b >= r - 4 && g >= r - 4 && high - low <= 24 && (150...250).contains(high)
+        let yellow = r >= 240 && g >= 190 && b <= 130
+        return gray || yellow
     }
 
     /// The region the bitmap covers: ~550 m around Jan for the mini map, Jan + the route for

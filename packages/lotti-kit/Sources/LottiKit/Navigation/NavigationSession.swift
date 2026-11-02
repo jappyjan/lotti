@@ -2,9 +2,9 @@ import CoreLocation
 import Foundation
 
 /// Drives the firmware's navigation screen for one trip: opens it, keeps it alive with a
-/// heartbeat, sends a progress card on every step change (and at least every 5 s), reroutes when
-/// you leave the route, and closes the screen on arrival, stop or when you leave it on the
-/// glasses.
+/// heartbeat, pushes frames — a progress card followed by the map of the view the glasses show —
+/// on every step change and while you move, reroutes when you leave the route, and closes the
+/// screen on arrival, stop or when you leave it on the glasses.
 ///
 /// iOS has no turn-by-turn API for third-party apps, so Lotti tracks progress itself against the
 /// MapKit route (`StepTracker`). The session is fed location fixes through `locations`; the app
@@ -31,25 +31,29 @@ public final class NavigationSession {
     private var eventsTask: Task<Void, Never>?
     private var lastCard: NavProgress?
     private var lastCounter = -1
-    private var lastCardSent: Date = .distantPast
     private var lastLocation: CLLocation?
-    /// The map view the glasses show (from `viewChanged`): nil when there's no map to stream.
-    private var mapView: NavMapRequest.Kind?
-    private var lastMapSent: Date = .distantPast
-    private var mapSending = false
-    /// Set once the route is ready: the firmware sets up its map rendering from the overview,
-    /// so the full map is pushed proactively (the Even app does this right after START, not
-    /// only when the user swipes to the map view).
-    private var overviewPushPending = false
-    /// Each frame (mini and full separately) gets a new session id for its fragments.
-    private var mapSessionIDs: [NavMapRequest.Kind: UInt64] = [:]
+    /// The view the glasses show: the screen opens on the arrow view with the mini map; a
+    /// `viewChanged` other than 1 switches to the full map (the Even app's rule).
+    private var mapView: NavMapRequest.Kind = .mini
+    /// The glasses' own compass heading (degrees), which turns the mini map.
+    private var glassesHeading: Double?
+    /// `basicInfoIndex` of the next card: counts every pushed frame, reset with each route.
+    private var frameIndex: UInt64 = 0
+    private var lastFramePush: Date = .distantPast
+    private var pushing = false
+    private var pushPending = false
+    /// What the last full map showed: it's resent only when this moved on (`_shouldSendOverviewMap`).
+    private var lastOverview: (sent: Date, heading: Double?, location: CLLocation)?
+    /// One session id counter for both maps, wrapping 0…255 (the app's `nextSessionId`).
+    private var mapSessionID: UInt64 = 0
 
     /// Seconds between heartbeats; the screen ends the session if none lands for 30 s.
     public var heartbeatInterval: Duration = .seconds(5)
-    /// Send a card again after this long even when nothing changed.
-    public var refreshInterval: Duration = .seconds(5)
-    /// Send the map again after this long while a map view is showing.
-    public var mapRefreshInterval: Duration = .seconds(15)
+    /// Shortest gap between two frames (card + map) pushed for location updates alone; a new
+    /// step or a view change pushes right away.
+    public var frameInterval: Duration = .seconds(2)
+    /// The full map is resent at most this often, and only once the picture moved on.
+    public var overviewInterval: Duration = .seconds(5)
 
     public init(
         link: any GlassesLink,
@@ -96,12 +100,8 @@ public final class NavigationSession {
     public func setRoute(_ route: Route) {
         guard isRunning else { return }
         mode = route.mode
-        tracker = StepTracker(route: route)
-        lastCounter = -1
-        lastCardSent = .distantPast
-        lastCard = nil
+        restart(with: route)
         print("[Nav] route set: \(route.steps.count) steps, \(Int(route.totalDistance)) m")
-        overviewPushPending = true
         if let lastLocation { handleLocation(lastLocation) }
     }
 
@@ -159,18 +159,15 @@ public final class NavigationSession {
                 // Navigation launched from the glasses' menu: no favorites yet.
                 _ = try? await link.navigationRequest(G2Navigation.locationNone(magic: magic))
             case .viewChanged(let view):
-                // 1 = arrow view (with a small map next to it), 2 = the full map view
-                // (the Even app's order; the firmware shows "Karte wird geladen" until the
-                // right bitmap arrives).
-                mapView = switch view {
-                case 1: .mini
-                case 2, 3: .full
-                default: nil
-                }
+                // 1 = the arrow view with the mini map; anything else is the full map (the Even
+                // app keeps exactly this flag and lets the next frame carry the right map).
+                mapView = view == 1 ? .mini : .full
                 print("[Nav] view changed to \(view)")
-                lastMapSent = .distantPast
-                Task { await sendMap() }
-            case .locationSelected, .compassChanged, .compassCalibrateStart, .compassCalibrateDone, .other:
+                requestFrame(now: true)
+            case .compassChanged(let value):
+                // The glasses' heading: it turns the mini map (`rotationAngle`).
+                glassesHeading = Double(value % 360)
+            case .locationSelected, .compassCalibrateStart, .compassCalibrateDone, .other:
                 break
             }
         }
@@ -184,8 +181,9 @@ public final class NavigationSession {
         case .progress(let card):
             self.tracker = tracker
             lastCard = card
-            sendCardIfNeeded()
-            Task { await sendMapIfStale() }
+            let newStep = card.counter != lastCounter
+            lastCounter = card.counter
+            requestFrame(now: newStep)
         case .unreliable:
             self.tracker = tracker
         case .arrived:
@@ -200,33 +198,92 @@ public final class NavigationSession {
         }
     }
 
-    // MARK: Maps
+    // MARK: Frames
 
-    /// Streams the map: the overview first when one is pending (the firmware's map rendering
-    /// initializes from it), then the current view's map when the last frame is older than
-    /// `mapRefreshInterval` (or a view change asked for one right away).
-    private func sendMapIfStale() async {
-        guard mapView != nil, !mapSending else { return }
-        let overviewDue = overviewPushPending
-        let stale = Date().timeIntervalSince(lastMapSent) >= Double(mapRefreshInterval.components.seconds)
-        guard overviewDue || stale else { return }
-        overviewPushPending = false
-        if overviewDue { await sendMap(kind: .full) }
-        if mapView == .mini { await sendMap(kind: .mini) }
+    /// Pushes a frame: the progress card, then — once the glasses took it — the map of the view
+    /// they show. That's the Even app's `MapImagePusher` cycle: the card always goes first, its
+    /// `basicInfoIndex` counts the frames, the mini map rides along with every frame on the
+    /// arrow view, the full map only when its picture moved on. `now` skips the frame interval
+    /// (new step, view change); a request during a push runs one more frame after it.
+    private func requestFrame(now: Bool = false) {
+        guard isRunning, lastCard != nil else { return }
+        if pushing {
+            pushPending = true
+            return
+        }
+        let due = Date().timeIntervalSince(lastFramePush) >= seconds(frameInterval)
+        guard now || due else { return }
+        pushing = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.pushing = false }
+            repeat {
+                self.pushPending = false
+                await self.pushFrame()
+            } while self.pushPending && self.isRunning
+        }
     }
 
-    private func sendMap(kind override: NavMapRequest.Kind? = nil) async {
-        guard !mapSending, let provider = mapProvider, let location = lastLocation,
-              let tracker else { return }
-        let kind = override ?? mapView
-        guard let kind else { return }
-        mapSending = true
-        defer { mapSending = false }
-        lastMapSent = Date()  // set up front: concurrent stale-checks can't stack sends
+    private func pushFrame() async {
+        guard phase == .navigating, let card = lastCard, let mode else { return }
+        lastFramePush = Date()
+        let payload = G2Navigation.basicInfo(
+            magic: nextMagic(),
+            direction: card.direction.rawValue,
+            distance: card.distance,
+            road: card.road,
+            remainingTime: card.remainingTime,
+            remainingDistance: card.remainingDistance,
+            eta: card.eta,
+            speed: card.speed,
+            method: mode.method,
+            counter: frameIndex
+        )
+        do {
+            let reply = try await link.navigationRequest(payload)
+            guard G2Navigation.replyError(reply.payload) == 0 else {
+                print("[Nav] the glasses rejected a card")
+                return
+            }
+        } catch {
+            print("[Nav] no answer for a card: \(error.localizedDescription)")
+            return
+        }
+        frameIndex += 1
+        guard phase == .navigating else { return }
+        switch mapView {
+        case .mini: await sendMap(kind: .mini)
+        case .full: if overviewDue() { await sendMap(kind: .full) }
+        }
+    }
+
+    /// The app's `_shouldSendOverviewMap`: the first time, then at most every
+    /// `overviewInterval`, and only once the heading turned > 15° or Jan moved on (≥ 1 % of the
+    /// route) — otherwise the glasses keep showing the last one.
+    private func overviewDue() -> Bool {
+        guard let last = lastOverview else { return true }
+        guard Date().timeIntervalSince(last.sent) >= seconds(overviewInterval) else { return false }
+        let heading = currentHeading
+        if (last.heading == nil) != (heading == nil) { return true }
+        if let a = last.heading, let b = heading {
+            let turn = abs((a - b + 540).truncatingRemainder(dividingBy: 360) - 180)
+            if turn >= 15 { return true }
+        }
+        guard let location = lastLocation, let tracker else { return false }
+        return location.distance(from: last.location) >= max(tracker.route.totalDistance, 1) * 0.01
+    }
+
+    /// The glasses' compass when they report one, else the phone's course.
+    private var currentHeading: Double? {
+        glassesHeading ?? lastLocation.flatMap { $0.course >= 0 ? $0.course : nil }
+    }
+
+    private func sendMap(kind: NavMapRequest.Kind) async {
+        guard let provider = mapProvider, let location = lastLocation, let tracker else { return }
+        let heading = currentHeading
         let routePoints = tracker.route.steps.flatMap(\.points)
         let request = NavMapRequest(
-            kind: kind, coordinate: location.coordinate,
-            heading: location.course > 0 ? location.course : nil, route: routePoints)
+            kind: kind, coordinate: location.coordinate, heading: heading, route: routePoints)
         guard let bitmap = await provider.bitmap(for: request) else {
             print("[Nav] no \(kind) map bitmap")
             return
@@ -237,7 +294,7 @@ public final class NavigationSession {
             print("[Nav] couldn't encode the \(kind) map bitmap")
             return
         }
-        let rotation = request.heading.map { UInt64($0.rounded()) % 360 } ?? 0
+        let rotation = heading.map { UInt64((Int($0.rounded()) % 360 + 360) % 360) } ?? 0
         switch kind {
         case .mini:
             // A mini map ≤ 8192 bytes is one message without session fields (the app's rule).
@@ -246,9 +303,8 @@ public final class NavigationSession {
                     magic: nextMagic(), size: UInt64(frame.data.count),
                     compressMode: frame.mode.rawValue, data: frame.data, rotationAngle: rotation))
             } else {
-                let chunks = chunks(of: frame.data, size: 8192)
-                let sessionID = nextMapSessionID(for: kind)
-                for (index, chunk) in chunks.enumerated() {
+                let sessionID = nextMapSessionID()
+                for (index, chunk) in chunks(of: frame.data, size: 8192).enumerated() {
                     await sendMapFragment(G2Navigation.miniMapFragment(
                         magic: nextMagic(), size: UInt64(frame.data.count),
                         compressMode: frame.mode.rawValue, data: chunk, rotationAngle: rotation,
@@ -256,14 +312,14 @@ public final class NavigationSession {
                 }
             }
         case .full:
-            let chunks = chunks(of: frame.data, size: 4096)
-            let sessionID = nextMapSessionID(for: kind)
-            for (index, chunk) in chunks.enumerated() {
+            let sessionID = nextMapSessionID()
+            for (index, chunk) in chunks(of: frame.data, size: 4096).enumerated() {
                 await sendMapFragment(G2Navigation.maxMapFragment(
                     magic: nextMagic(), sessionID: sessionID, totalSize: UInt64(frame.data.count),
                     compressMode: frame.mode.rawValue, index: UInt64(index),
                     packetSize: UInt64(chunk.count), data: chunk))
             }
+            lastOverview = (Date(), heading, location)
         }
         print("[Nav] \(kind) map sent (\(bitmap.width)×\(bitmap.height), \(frame.data.count) bytes, "
               + "\(frame.mode == .lz4 ? "lz4" : "raw"))")
@@ -288,32 +344,24 @@ public final class NavigationSession {
         stride(from: 0, to: data.count, by: size).map { Array(data[$0..<min($0 + size, data.count)]) }
     }
 
-    private func nextMapSessionID(for kind: NavMapRequest.Kind) -> UInt64 {
-        let next = (mapSessionIDs[kind] ?? 0) + 1
-        mapSessionIDs[kind] = next
-        return next
+    private func nextMapSessionID() -> UInt64 {
+        mapSessionID = (mapSessionID + 1) & 0xFF
+        return mapSessionID
     }
 
-    private func sendCardIfNeeded() {
-        guard let card = lastCard, let mode else { return }
-        let changed = card.counter != lastCounter
-        let stale = Date().timeIntervalSince(lastCardSent) >= Double(refreshInterval.components.seconds)
-        guard changed || stale else { return }
-        lastCounter = card.counter
-        lastCardSent = Date()
-        let payload = G2Navigation.basicInfo(
-            magic: nextMagic(),
-            direction: card.direction.rawValue,
-            distance: card.distance,
-            road: card.road,
-            remainingTime: card.remainingTime,
-            remainingDistance: card.remainingDistance,
-            eta: card.eta,
-            speed: card.speed,
-            method: mode.method,
-            counter: UInt64(card.counter)
-        )
-        Task { await link.sendNavigation(payload) }
+    /// A new route: the frame index and the full map start over (the app's `reset`).
+    private func restart(with route: Route) {
+        tracker = StepTracker(route: route)
+        lastCounter = -1
+        lastCard = nil
+        frameIndex = 0
+        lastFramePush = .distantPast
+        lastOverview = nil
+    }
+
+    private func seconds(_ duration: Duration) -> Double {
+        let parts = duration.components
+        return Double(parts.seconds) + Double(parts.attoseconds) / 1e18
     }
 
     private func startHeartbeat() {
@@ -353,10 +401,7 @@ public final class NavigationSession {
         await link.sendNavigation(G2Navigation.recalculating(magic: nextMagic()))
         if let route = await replan(location, mode) {
             self.mode = route.mode
-            self.tracker = StepTracker(route: route)
-            lastCounter = -1
-            lastCardSent = .distantPast
-            lastCard = nil
+            restart(with: route)
             phase = .navigating
             handleLocation(location)
         } else {
@@ -371,7 +416,6 @@ public final class NavigationSession {
     private func end(_ finalPhase: Phase) {
         guard isRunning else { return }
         phase = finalPhase
-        mapView = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
         link.displaySuspended = false
