@@ -54,3 +54,7 @@ Thumbs.db
 DerivedData/
 xcuserdata/
 *.xcresult
+
+# Python
+__pycache__/
+*.pyc
