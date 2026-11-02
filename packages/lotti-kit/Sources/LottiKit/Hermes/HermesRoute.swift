@@ -11,10 +11,7 @@ public enum HermesRoute {
 
     /// Phrases that mean "forget this conversation and start fresh". Matched whole and
     /// case-insensitively, so "reset my timer" still reaches Hermes.
-    static let resets = [
-        "neues gespräch", "neuer chat", "neue unterhaltung", "neu anfangen",
-        "new chat", "new conversation", "start over", "reset",
-    ]
+    static let resets = germanResets + ["new chat", "new conversation", "start over", "reset"]
 
     /// The German reset phrases, so the confirmation matches what you said.
     static let germanResets = ["neues gespräch", "neuer chat", "neue unterhaltung", "neu anfangen"]
@@ -49,10 +46,7 @@ public enum HermesRoute {
     }
 
     private static func resetPhrase(_ text: String) -> String? {
-        let normalized = text
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-            .trimmingCharacters(in: .punctuationCharacters)
+        let normalized = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         return resets.contains(normalized) ? normalized : nil
     }
 }

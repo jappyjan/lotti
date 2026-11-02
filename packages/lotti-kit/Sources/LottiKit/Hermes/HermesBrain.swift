@@ -18,28 +18,27 @@ public final class HermesBrain: RemoteBrain {
     @ObservationIgnored private let store: (any HermesHistoryStore)?
     @ObservationIgnored private let resetThreshold: @MainActor () -> Duration
     @ObservationIgnored private let now: @Sendable () -> Date
-    /// The committed conversation. A question works on its own copy and only replaces this when it
-    /// succeeds, so a half-finished round is never visible here (or in the store).
+    /// The committed conversation, always capped (see `capped`). A question works on its own copy
+    /// and only replaces this when it succeeds, so a half-finished round is never visible here.
+    ///
+    /// The store gets committed states only: these messages with the new `lastAsked` when a
+    /// question starts, the answered round on success, and the empty state after a reset. A
+    /// failed or cancelled question needs no save: its start already stored the rollback state.
+    /// So a kill mid-question reloads the pre-question conversation, never a dangling call.
     @ObservationIgnored private var messages: [ChatMessage] = []
     /// Bumped by every new question and every reset. A question that finds it changed has been
-    /// superseded (Jan asked again, or said "new chat" meanwhile) and must not touch the state.
+    /// superseded (Jan asked again, or said "new chat" meanwhile) and must not touch the state,
+    /// even if it went on to succeed.
     @ObservationIgnored private var turn = 0
-    /// When Jan last asked, persisted with the messages. A gap longer than `resetThreshold()`
+    /// When Jan last asked Hermes, persisted with the messages. A gap longer than `resetThreshold()`
     /// starts a fresh conversation. This is the Hermes clock; `Conductor` has its own for the
     /// on-device brain, and the two never reset each other.
     @ObservationIgnored private var lastAsked: Date?
 
     /// The most recent messages kept alongside the system prompt, so a long conversation can't grow
-    /// forever. Truncation drops whole question rounds only (see `capped`), at the start of every
-    /// question and on load, so requests to Hermes and the stored copy are both bounded.
-    ///
-    /// Persistence stores committed states only: the messages before a question (with the new
-    /// `lastAsked`), the messages after a successful answer, the rollback after a failure, and the
-    /// empty state after a reset. A half-finished round (dangling call or results) never reaches
-    /// the store, so a kill mid-question reloads the pre-question conversation.
-    ///
-    /// The system prompt (including what Hermes may read) is fixed when a conversation starts; a
-    /// changed "Hermes may read" setting applies from the next fresh conversation. Accepted.
+    /// forever. Truncation drops whole question rounds only (see `capped`), on load and whenever a
+    /// question is committed, so requests to Hermes (history plus the round in flight) and the
+    /// stored copy are both bounded.
     static let maxTurns = 40
 
     /// - Parameters:
@@ -62,7 +61,8 @@ public final class HermesBrain: RemoteBrain {
         self.store = store
         self.resetThreshold = resetThreshold
         self.now = now
-        if let store, let loaded = try? store.load() {
+        // Anything that doesn't start with the system prompt isn't ours (or is damaged): start fresh.
+        if let store, let loaded = try? store.load(), loaded.messages.first?.role == .system {
             self.messages = Self.capped(loaded.messages)
             self.lastAsked = loaded.lastAsked
         }
@@ -75,11 +75,10 @@ public final class HermesBrain: RemoteBrain {
 
     public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         resetIfStale()
-        messages = Self.capped(messages)
         // Jan did ask, so the clock restarts now, even if the question fails. Stored with the
         // pre-question messages: the round in flight is not committed yet.
         lastAsked = now()
-        save(messages)
+        persist()
         turn += 1
         let mine = turn
         do {
@@ -87,8 +86,8 @@ public final class HermesBrain: RemoteBrain {
             let answer = try await run(message, context: context, round: &round, status: status)
             // Superseded while waiting: the newer question or the reset owns the state now.
             guard mine == turn else { throw CancellationError() }
-            messages = round
-            save(messages)
+            messages = Self.capped(round)
+            persist()
             return answer
         } catch {
             // A failed or cancelled question leaves no trace (its round was never committed), so
@@ -103,12 +102,13 @@ public final class HermesBrain: RemoteBrain {
         messages = []
         trace = []
         lastAsked = nil
-        save(messages)
+        persist()
     }
 
-    /// A question asked after longer than the threshold starts a fresh conversation.
+    /// A question asked after longer than the threshold starts a fresh conversation. A `lastAsked`
+    /// that far in the future (the clock was wrong, then corrected) counts as stale too.
     private func resetIfStale() {
-        guard let lastAsked, now().timeIntervalSince(lastAsked) > Double(resetThreshold().components.seconds) else { return }
+        guard let lastAsked, abs(now().timeIntervalSince(lastAsked)) > Double(resetThreshold().components.seconds) else { return }
         messages = []
         trace = []
     }
@@ -116,6 +116,9 @@ public final class HermesBrain: RemoteBrain {
     private func run(_ message: String, context: String, round messages: inout [ChatMessage],
                      status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         let allowed = allowedReads()
+        // The system prompt (including what Hermes may read) is fixed when a conversation starts; a
+        // newly shared read applies from the next fresh conversation (hiding one resets it, see
+        // HermesView). Accepted.
         if messages.isEmpty {
             let reads = toolbox.reads.filter { allowed.contains($0.name) }
             messages = [ChatMessage(.system, HermesFormat.instructions(reads: reads, actions: toolbox.actions))]
@@ -163,7 +166,7 @@ public final class HermesBrain: RemoteBrain {
     /// A user message that starts a round: a question built by `HermesFormat.question`, as opposed
     /// to the phone's `results` reply inside a round.
     private static func isQuestion(_ message: ChatMessage) -> Bool {
-        message.role == .user && !(message.content.hasPrefix("{") && message.content.contains(#""type":"results""#))
+        message.role == .user && !HermesFormat.isResults(message.content)
     }
 
     /// Keeps the system prompt and drops the oldest whole question rounds until at most
@@ -178,9 +181,9 @@ public final class HermesBrain: RemoteBrain {
         return [messages[0]] + messages[start...]
     }
 
-    private func save(_ messages: [ChatMessage]) {
+    private func persist() {
         guard let store else { return }
-        try? store.save(PersistedHermesSession(messages: Self.capped(messages), lastAsked: lastAsked))
+        try? store.save(PersistedHermesSession(messages: messages, lastAsked: lastAsked))
     }
 
     private func note(_ line: String) {
