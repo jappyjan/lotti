@@ -356,6 +356,56 @@ struct HermesBrainTests {
         #expect(store.stored?.messages.isEmpty == true)
     }
 
+    @Test func exactlyTheThresholdContinuesAndOneSecondMoreResets() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let reply = #"{"type":"answer","sentence":"ok."}"#
+        let hermes = ScriptedHermes([reply, reply, reply])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, resetThreshold: { .seconds(900) }, now: { clock.now })
+        _ = try await brain.answer("One", context: "") { _ in }
+        clock.now = Date(timeIntervalSince1970: 900)  // gap == threshold: continues
+        _ = try await brain.answer("Two", context: "") { _ in }
+        #expect(hermes.requests[1].count == 4)
+        clock.now = Date(timeIntervalSince1970: 900 + 901)  // gap > threshold: fresh
+        _ = try await brain.answer("Three", context: "") { _ in }
+        #expect(hermes.requests[2].count == 2)
+    }
+
+    @Test func theThresholdIsReadAtEveryQuestion() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        var threshold = Duration.seconds(900)
+        let reply = #"{"type":"answer","sentence":"ok."}"#
+        let hermes = ScriptedHermes([reply, reply, reply])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, resetThreshold: { threshold }, now: { clock.now })
+        _ = try await brain.answer("One", context: "") { _ in }
+        // A 20 minute gap would reset at 15 minutes, but the setting was raised to 30 before asking.
+        clock.now = Date(timeIntervalSince1970: 1200)
+        threshold = .seconds(1800)
+        _ = try await brain.answer("Two", context: "") { _ in }
+        #expect(hermes.requests[1].count == 4)
+        // And lowering it applies right away too.
+        clock.now = Date(timeIntervalSince1970: 1200 + 1000)
+        threshold = .seconds(900)
+        _ = try await brain.answer("Three", context: "") { _ in }
+        #expect(hermes.requests[2].count == 2)
+    }
+
+    @Test func midnightDoesNotReset() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        let beforeMidnight = calendar.date(from: DateComponents(year: 2026, month: 11, day: 2, hour: 23, minute: 50))!
+        let clock = ManualClock(beforeMidnight)
+        let reply = #"{"type":"answer","sentence":"ok."}"#
+        let hermes = ScriptedHermes([reply, reply])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, resetThreshold: { .seconds(7200) }, now: { clock.now })
+        _ = try await brain.answer("One", context: "") { _ in }
+        clock.now = beforeMidnight.addingTimeInterval(20 * 60)  // 00:10 the next day
+        _ = try await brain.answer("Two", context: "") { _ in }
+        #expect(hermes.requests[1].count == 4)
+    }
+
     private static let plainReply = #"{"type":"answer","sentence":"yep."}"#
     private static let callReply = #"{"type":"call","calls":[{"id":"c1","tool":"weather","args":{}}]}"#
 

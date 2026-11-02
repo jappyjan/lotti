@@ -167,6 +167,60 @@ struct ConductorTests {
         #expect(hermes.asked == ["News?"])
     }
 
+    @Test func aResetPhraseWhileHermesIsThinkingWins() async throws {
+        let hermes = FakeHermes()
+        let conductor = conductorWithHermes(hermes)
+        hermes.delay = .milliseconds(120)
+        conductor.ask("Tell me about the election")
+        try await eventually { conductor.mode == .working }
+
+        conductor.ask("New chat")
+        try await eventually { conductor.screen?.text == "New conversation." }
+        try await Task.sleep(for: .milliseconds(200))  // the cancelled answer would have arrived by now (idle is 300 ms)
+        #expect(conductor.screen?.text == "New conversation.")
+        #expect(conductor.mode == .showing)
+        #expect(hermes.ended == 1)
+    }
+
+    @Test func aResetPhraseReplacesAnAnswerWithChoicesAndActions() async throws {
+        let hermes = FakeHermes()
+        let timer = FakeTool.timer()
+        let conductor = conductorWithHermes(hermes, tools: [timer])
+        hermes.answers = ["Pasta?": Answer(sentence: "Ten minutes.", followUps: ["Sauce?"],
+                                           actions: [try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a1", tool: "set_timer", arguments: ["minutes": 10])))])]
+        conductor.ask("Pasta?")
+        try await eventually { conductor.screen?.text == "Ten minutes." }
+        #expect(conductor.screen?.rail != nil)
+
+        conductor.ask("Neuer Chat")
+        try await eventually { conductor.screen?.text == "Neues Gespräch." }
+        #expect(conductor.screen?.kind == .says)
+        #expect(conductor.screen?.rail == nil)  // no leftover choices or pending action
+        #expect(hermes.asked == ["Pasta?"])
+    }
+
+    @Test func aResetPhraseWorksWithoutHermes() async throws {
+        brain.answers = ["Hi": Answer(sentence: "Hi Jan!")]
+        conductor.ask("Hi")
+        try await eventually { conductor.screen?.text == "Hi Jan!" }
+
+        conductor.ask("Start over")
+        try await eventually { conductor.screen?.text == "New conversation." }
+        #expect(brain.ended == 1)
+        #expect(brain.asked == ["Hi"])  // the phrase never reached the on-device brain either
+    }
+
+    @Test func phrasesThatOnlyContainAResetWordRouteNormally() async throws {
+        let hermes = FakeHermes()
+        let conductor = conductorWithHermes(hermes)
+        conductor.ask("Reset my timer please")
+        try await eventually { conductor.mode == .showing }
+        #expect(hermes.ended == 0)
+        #expect(brain.ended == 0)
+        #expect(conductor.screen?.text != "New conversation.")
+        #expect(hermes.asked + brain.asked == ["Reset my timer please"])
+    }
+
     @Test func simpleTasksStayOnThePhone() async throws {
         let hermes = FakeHermes()
         let conductor = conductorWithHermes(hermes)
