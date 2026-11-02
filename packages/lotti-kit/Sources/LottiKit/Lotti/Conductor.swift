@@ -7,7 +7,7 @@ import Observation
 /// - display off: double tap or look up → today view
 /// - scroll moves the rail highlight, tap picks it
 /// - double tap: back (from a screen opened from the rail), otherwise display off, which also
-///   ends the conversation
+///   ends the on-device conversation (Hermes keeps its own, until the inactivity threshold)
 /// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
 ///   off, talking needs a double tap first (the today view opens), then the hold, so a stray hold
 ///   in your pocket or hair doesn't start listening.
@@ -249,7 +249,6 @@ public final class Conductor {
 
     private func endConversation() {
         brain.endConversation()
-        hermes?.endConversation()
     }
 
     private func show(_ next: Screen, timeout: Bool = true) {
@@ -403,6 +402,15 @@ public final class Conductor {
     /// on-device brain; everything else to Hermes, with the phone as the fallback when Hermes is
     /// missing, failing or too slow. "Ask Hermes" and "Hermes, …" go to Hermes without fallback.
     private func answer(_ question: String, onHermes toHermes: Bool = false) async {
+        // "Neues Gespräch" / "new chat" starts fresh right away, no Hermes round-trip.
+        if HermesRoute.resetRequest(question) {
+            hermes?.endConversation()
+            brain.endConversation()
+            lastAsked = now()
+            mode = .showing
+            show(Screen(.says, HermesRoute.resetConfirmation(question)))
+            return
+        }
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
             endConversation()
         }

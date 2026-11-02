@@ -170,7 +170,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 
 Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's API server (`hermes gateway`, OpenAI-compatible `/v1/chat/completions`), with the address and `API_SERVER_KEY` set in the Lotti app (key in the Keychain). Nothing in Hermes needs configuring.
 
-**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own; Hermes keeps its conversation (so follow-ups have context) until the conversation ends (double tap, or 5 minutes).
+**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own; the phone keeps one ongoing Hermes conversation (persisted in UserDefaults, so follow-ups work an hour later or after a restart). It resets only after inactivity (a gap since the last question longer than the "Conversation" setting in the Hermes screen, default 2 h) or when you say "Neues Gespräch" / "new chat". Glasses-off and double tap do not end it; they only reset the on-device brain (5 minutes of quiet or glasses-off).
 
 **Phone tools for Hermes: Lotti's reply format.** Hermes runs its own tools on its server and never hands tool calls back to the client, so the phone's tools travel inside the conversation as JSON. Lotti's system message (Hermes layers it on top of its own prompt) lists the tools you share and asks for exactly one JSON object per reply:
 
@@ -219,7 +219,7 @@ Details:
 - **Limits:** at most 4 rounds of phone calls per question; with the last results Hermes is told to answer now. The whole question gives up after 2 minutes; double tap cancels sooner.
 - **Hermes asks for what it needs.** The first message carries only the date and time; calendar, weather and location are sent only when Hermes calls for them.
 - **Forgiving parser:** finds the JSON inside fences or prose, accepts `args` or `arguments`, numbers missing ids. A reply that isn't JSON is shown as plain text. Invalid actions are dropped.
-- **Stateless:** every request carries the whole conversation, so the phone owns the history (Hermes's `X-Hermes-Session-Id` isn't used; mixing it with a full history isn't documented). A failed or cancelled question is removed, so "Try again" starts clean.
+- **Stateless:** every request carries the whole conversation, so the phone owns the history (Hermes's `X-Hermes-Session-Id` isn't used; mixing it with a full history isn't documented). A failed or cancelled question is removed, so "Try again" starts clean. The stored history is bounded (system prompt plus at most 40 messages, dropping whole question rounds from the oldest) and only committed states are persisted, never a half-finished round. Every question carries a fresh "Now: …" line. The system prompt (what Hermes may read) is fixed per conversation, so a changed sharing setting applies from the next fresh one.
 - **Streaming:** Hermes's `hermes.tool.progress` events and the format's `status` show on the glasses' working screen ("Searching the web…", "Checking your calendar…").
 - **Errors:** unreachable, wrong key, busy or too slow each get a short sentence and a "Try again" choice.
 - **Network:** HTTPS (e.g. `tailscale serve`) or plain HTTP on the local network. Hermes binds to localhost by default, so it has to be reachable from the phone.

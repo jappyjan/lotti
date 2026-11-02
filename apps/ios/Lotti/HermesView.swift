@@ -50,6 +50,20 @@ struct HermesView: View {
                 Text("Hermes asks for these only when a question needs them. Timers and reminders always wait for your tap on the glasses.")
             }
 
+            Section {
+                Picker("Conversation", selection: Binding(
+                    get: { Settings.hermesConversationMinutes },
+                    set: { Settings.hermesConversationMinutes = $0 })) {
+                    ForEach(Self.conversationMinutes, id: \.self) { minutes in
+                        Text(Self.conversationLabel(minutes)).tag(minutes)
+                    }
+                }
+            } header: {
+                Text("Conversation")
+            } footer: {
+                Text("Hermes keeps the conversation going until this long after your last question, then starts fresh. Saying \"Neues Gespräch\" resets it right away.")
+            }
+
             if Settings.hermesConfig != nil {
                 Section {
                     Button("Remove Hermes", role: .destructive) {
@@ -63,6 +77,14 @@ struct HermesView: View {
             }
         }
         .navigationTitle("Hermes")
+    }
+
+    private static let conversationMinutes = [15, 30, 60, 120, 240, 480, 1440]
+
+    private static func conversationLabel(_ minutes: Int) -> String {
+        if minutes >= 1440 { return "1 day" }
+        if minutes >= 60, minutes.isMultiple(of: 60) { return "\(minutes / 60) h" }
+        return "\(minutes) min"
     }
 
     private func saveAndTest() async {
@@ -85,6 +107,18 @@ struct HermesView: View {
 extension Settings {
     static let hermesAddressKey = "hermesAddress"
     static let hermesHiddenReadsKey = "hermesHiddenReads"
+    static let hermesConversationMinutesKey = "hermesConversationMinutes"
+
+    /// How long Hermes remembers a conversation after your last question, in minutes (default 2 h).
+    static var hermesConversationMinutes: Int {
+        get { UserDefaults.standard.object(forKey: hermesConversationMinutesKey) as? Int ?? 120 }
+        set { UserDefaults.standard.set(newValue, forKey: hermesConversationMinutesKey) }
+    }
+
+    /// The conversation limit as a `Duration`, read by `HermesBrain` at every question.
+    static var hermesConversationLimit: Duration {
+        .seconds(hermesConversationMinutes * 60)
+    }
 
     static var hermesAddress: String {
         get { UserDefaults.standard.string(forKey: hermesAddressKey) ?? "" }

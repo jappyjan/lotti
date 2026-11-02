@@ -25,7 +25,9 @@ struct LottiApp: App {
         let hermes = HermesBrain(
             transport: hermesClient, toolbox: toolbox,
             allowedReads: { Set(toolbox.reads.map(\.name)).subtracting(Settings.hermesHiddenReads) },
-            isConfigured: { Settings.hermesConfig != nil })
+            isConfigured: { Settings.hermesConfig != nil },
+            store: UserDefaultsHermesHistoryStore(),
+            resetThreshold: { Settings.hermesConversationLimit })
         let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
                                   phoneMicrophone: PhoneMicrophone(), today: today)
         conductor.setDisplayStyle(Settings.displayStyle)

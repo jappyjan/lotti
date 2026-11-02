@@ -22,6 +22,27 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     }
 }
 
+/// Remembers what was saved and hands back whatever it was seeded with, like UserDefaults.
+final class FakeHermesHistoryStore: HermesHistoryStore, @unchecked Sendable {
+    private(set) var stored: PersistedHermesSession?
+    private(set) var saved: [PersistedHermesSession] = []
+
+    init(stored: PersistedHermesSession? = nil) { self.stored = stored }
+
+    func load() throws -> PersistedHermesSession? { stored }
+
+    func save(_ session: PersistedHermesSession) throws {
+        saved.append(session)
+        stored = session
+    }
+}
+
+/// A settable clock for tests that move time forward.
+final class ManualClock: @unchecked Sendable {
+    var now: Date
+    init(_ now: Date) { self.now = now }
+}
+
 struct HermesFormatTests {
     @Test func parsesSeveralCalls() {
         let reply = HermesFormat.parse(#"""
@@ -175,13 +196,13 @@ struct HermesBrainTests {
         let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#, #"{"type":"answer","sentence":"Two."}"#])
         let brain = brain(hermes)
         _ = try await brain.answer("First", context: "Now: Sunday") { _ in }
-        _ = try await brain.answer("Second", context: "Now: Sunday") { _ in }
+        _ = try await brain.answer("Second", context: "Now: Monday") { _ in }
         #expect(hermes.requests[1].map(\.role) == [.system, .user, .assistant, .user])
-        #expect(hermes.requests[1].last?.content == "Jan: Second")
+        #expect(hermes.requests[1].last?.content == "Now: Monday\n\nJan: Second")
 
         brain.endConversation()
         hermes.replies = [#"{"type":"answer","sentence":"Three."}"#]
-        _ = try await brain.answer("Third", context: "Now: Monday") { _ in }
+        _ = try await brain.answer("Third", context: "Now: Tuesday") { _ in }
         #expect(hermes.requests[2].count == 2)
     }
 
@@ -218,6 +239,166 @@ struct HermesBrainTests {
         _ = try await brain(hermes).answer("News?", context: "") { statuses.append($0) }
         #expect(statuses == ["Searching the web"])
     }
+
+    // MARK: Persistence and reset
+
+    @Test func loadsPersistedMessagesOnInit() {
+        let stored = PersistedHermesSession(
+            messages: [ChatMessage(.system, "prompt"), ChatMessage(.user, "Jan: Hi"), ChatMessage(.assistant, "Hey.")],
+            lastAsked: Date())
+        let store = FakeHermesHistoryStore(stored: stored)
+        let brain = HermesBrain(transport: ScriptedHermes([]), toolbox: toolbox,
+                                allowedReads: { ["calendar", "weather"] }, isConfigured: { true }, store: store)
+        #expect(brain.conversation == stored.messages)
+    }
+
+    @Test func savesMessagesAndLastAskedOnEveryChange() async throws {
+        let store = FakeHermesHistoryStore()
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox,
+                                allowedReads: { ["calendar", "weather"] }, isConfigured: { true }, store: store)
+        _ = try await brain.answer("First", context: "Now: Sunday") { _ in }
+        let last = try #require(store.saved.last)
+        #expect(last.messages.map(\.role) == [.system, .user, .assistant])
+        #expect(last.lastAsked != nil)
+    }
+
+    @Test func aStaleConversationStartsFresh() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#, #"{"type":"answer","sentence":"Two."}"#])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, resetThreshold: { .seconds(100) }, now: { clock.now })
+        _ = try await brain.answer("First", context: "") { _ in }
+        clock.now = Date(timeIntervalSince1970: 200)  // gap > 100 s → fresh chat
+        _ = try await brain.answer("Second", context: "") { _ in }
+        #expect(hermes.requests[1].count == 2)  // system + user, old history gone
+        #expect(hermes.requests[1].first?.role == .system)
+        #expect(hermes.requests[1].last?.content == "Jan: Second")
+    }
+
+    @Test func restartKeepsTheConversationWithinTheThreshold() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#])
+        let store = FakeHermesHistoryStore()
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store, resetThreshold: { .seconds(7200) }, now: { clock.now })
+        _ = try await brain.answer("First", context: "") { _ in }
+
+        // "Relaunch" an hour later: a fresh brain over the same store keeps the conversation.
+        clock.now = Date(timeIntervalSince1970: 3600)
+        let hermes2 = ScriptedHermes([#"{"type":"answer","sentence":"Two."}"#])
+        let reborn = HermesBrain(transport: hermes2, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                 isConfigured: { true }, store: store, resetThreshold: { .seconds(7200) }, now: { clock.now })
+        _ = try await reborn.answer("Second", context: "") { _ in }
+        #expect(hermes2.requests.first?.map(\.role) == [.system, .user, .assistant, .user])
+    }
+
+    private static let plainReply = #"{"type":"answer","sentence":"yep."}"#
+    private static let callReply = #"{"type":"call","calls":[{"id":"c1","tool":"weather","args":{}}]}"#
+
+    private func isQuestion(_ message: ChatMessage) -> Bool {
+        message.role == .user && message.content.contains("Jan: ")
+    }
+
+    @Test func historyIsCappedAtTheQuestionBoundary() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        // Alternating 2-message and 4-message rounds, so the cut lands inside a tool-call round.
+        var replies: [String] = []
+        for index in 0..<40 {
+            if index % 2 == 1 { replies.append(Self.callReply) }
+            replies.append(Self.plainReply)
+        }
+        let hermes = ScriptedHermes(replies)
+        let store = FakeHermesHistoryStore()
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store, resetThreshold: { .seconds(7200) }, now: { clock.now })
+        for index in 0..<40 {
+            clock.now = Date(timeIntervalSince1970: TimeInterval(index * 60))
+            _ = try await brain.answer("Q\(index)", context: "") { _ in }
+            // The in-memory history is capped at the start of each question; one round may sit on top.
+            #expect(brain.conversation.count <= HermesBrain.maxTurns + 1 + 4)
+        }
+        for session in store.saved where !session.messages.isEmpty {  // the first save is the empty pre-question state
+            #expect(session.messages.count <= HermesBrain.maxTurns + 1 + 4)
+            #expect(session.messages.first?.role == .system)
+            let first = try #require(session.messages.dropFirst().first)
+            #expect(isQuestion(first))
+        }
+        let last = try #require(store.saved.last)
+        #expect(last.messages.count <= HermesBrain.maxTurns + 1)
+        // Requests sent to Hermes stay bounded too, and never open with a results message.
+        for request in hermes.requests {
+            #expect(request.count <= HermesBrain.maxTurns + 1 + 4)
+            #expect(request.first?.role == .system)
+            #expect(request.dropFirst().first.map(isQuestion) == true)
+        }
+        #expect(brain.conversation.last?.role == .assistant)
+        #expect(brain.conversation.contains { $0.content == "Jan: Q39" })
+        #expect(!brain.conversation.contains { $0.content == "Jan: Q0" })
+    }
+
+    @Test func aSingleOversizedRoundIsKeptWhole() {
+        var messages = [ChatMessage(.system, "prompt"), ChatMessage(.user, "Jan: old"), ChatMessage(.assistant, "x"),
+                        ChatMessage(.user, "Jan: big")]
+        for _ in 0..<30 {
+            messages.append(ChatMessage(.assistant, Self.callReply))
+            messages.append(ChatMessage(.user, HermesFormat.results([ToolResult(id: "c1", ok: true, content: "sunny")])))
+        }
+        messages.append(ChatMessage(.assistant, Self.plainReply))
+        let capped = HermesBrain.capped(messages)
+        #expect(capped.count == messages.count - 2)
+        #expect(capped[1].content == "Jan: big")
+    }
+
+    @Test func aQuestionFailingMidRoundPersistsThePreQuestionState() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let store = FakeHermesHistoryStore()
+        // First question works; the second calls a tool, then Hermes has nothing left to say.
+        let hermes = ScriptedHermes([Self.plainReply, Self.callReply])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store, now: { clock.now })
+        _ = try await brain.answer("First", context: "") { _ in }
+        let committed = try #require(store.saved.last).messages
+        clock.now = Date(timeIntervalSince1970: 60)
+        await #expect(throws: (any Error).self) { _ = try await brain.answer("Second", context: "") { _ in } }
+        let last = try #require(store.saved.last)
+        #expect(last.messages == committed)
+        #expect(brain.conversation == committed)
+        #expect(last.lastAsked == Date(timeIntervalSince1970: 60))
+        // No save in between ever held the half-finished round.
+        for session in store.saved.dropFirst(2) { #expect(session.messages == committed) }
+    }
+
+    @Test func aCancelledQuestionPersistsThePreQuestionState() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let store = FakeHermesHistoryStore()
+        let hermes = ScriptedHermes([Self.plainReply, Self.plainReply])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store, now: { clock.now })
+        _ = try await brain.answer("First", context: "") { _ in }
+        let committed = try #require(store.saved.last).messages
+        clock.now = Date(timeIntervalSince1970: 60)
+        hermes.delay = .seconds(5)
+        let task = Task { @MainActor in try await brain.answer("Second", context: "") { _ in } }
+        try await Task.sleep(for: .milliseconds(50))
+        task.cancel()
+        _ = try? await task.value
+        let last = try #require(store.saved.last)
+        #expect(last.messages == committed)
+        #expect(last.lastAsked == Date(timeIntervalSince1970: 60))
+    }
+
+    @Test func endConversationClearsAndPersists() async throws {
+        let store = FakeHermesHistoryStore()
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#])
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox,
+                                allowedReads: { ["calendar", "weather"] }, isConfigured: { true }, store: store)
+        _ = try await brain.answer("First", context: "") { _ in }
+        brain.endConversation()
+        #expect(brain.conversation.isEmpty)
+        #expect(store.saved.last?.messages.isEmpty == true)
+        #expect(store.saved.last?.lastAsked == nil)
+    }
 }
 
 struct RouterTests {
@@ -251,5 +432,21 @@ struct RouterTests {
     @Test func withoutHermesEverythingIsLocal() {
         #expect(Router.route("Wie geht's dir?", hermesAvailable: false) == .local)
         #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: false) == .local)
+    }
+
+    @Test func resetPhrasesMatchWholeAndCaseInsensitively() {
+        #expect(HermesRoute.resetRequest("Neues Gespräch"))
+        #expect(HermesRoute.resetRequest("neuer chat"))
+        #expect(HermesRoute.resetRequest("new chat"))
+        #expect(HermesRoute.resetRequest("New conversation."))
+        #expect(HermesRoute.resetRequest("start over"))
+        #expect(HermesRoute.resetRequest("reset"))
+        #expect(HermesRoute.resetRequest("Reset."))
+        #expect(HermesRoute.resetConfirmation("Neues Gespräch") == "Neues Gespräch.")
+        #expect(HermesRoute.resetConfirmation("new chat") == "New conversation.")
+
+        #expect(!HermesRoute.resetRequest("reset my timer"))
+        #expect(!HermesRoute.resetRequest("start over the meeting"))
+        #expect(!HermesRoute.resetRequest("What's new?"))
     }
 }

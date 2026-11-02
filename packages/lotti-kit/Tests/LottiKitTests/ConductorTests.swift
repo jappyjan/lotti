@@ -135,7 +135,36 @@ struct ConductorTests {
         #expect(hermes.asked == ["Tell me about the election", "Polls?"])
 
         conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(hermes.ended == 0)  // glasses-off no longer ends the Hermes chat
+        #expect(brain.ended == 1)  // the on-device conversation still ends
+    }
+
+    @Test func neuesGesprächStartsFreshWithoutReachingHermes() async throws {
+        let hermes = FakeHermes()
+        let conductor = conductorWithHermes(hermes)
+        hermes.answers = ["Tell me about the election": Answer(sentence: "Mostly about taxes.")]
+        conductor.ask("Tell me about the election")
+        try await eventually { conductor.screen?.text == "Mostly about taxes." }
+
+        conductor.ask("Neues Gespräch")
+        try await eventually { conductor.screen?.text == "Neues Gespräch." }
         #expect(hermes.ended == 1)
+        #expect(brain.ended == 1)
+        #expect(hermes.asked == ["Tell me about the election"])  // the phrase never went to Hermes
+        #expect(conductor.screen?.kind == .says)
+    }
+
+    @Test func newChatResetsInEnglish() async throws {
+        let hermes = FakeHermes()
+        let conductor = conductorWithHermes(hermes)
+        hermes.answers = ["News?": Answer(sentence: "Here's the news.")]
+        conductor.ask("News?")
+        try await eventually { conductor.screen?.text == "Here's the news." }
+
+        conductor.ask("new chat")
+        try await eventually { conductor.screen?.text == "New conversation." }
+        #expect(hermes.ended == 1)
+        #expect(hermes.asked == ["News?"])
     }
 
     @Test func simpleTasksStayOnThePhone() async throws {
