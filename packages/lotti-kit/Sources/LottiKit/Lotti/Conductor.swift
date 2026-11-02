@@ -23,7 +23,8 @@ public final class Conductor {
         public var answer: Duration
         /// Wait this long for the final transcript after you let go.
         public var finalTranscript: Duration
-        /// A conversation older than this starts fresh.
+        /// An on-device conversation older than this starts fresh. Hermes has its own, longer
+        /// threshold (see `HermesBrain`); this one never ends the Hermes chat.
         public var conversation: Duration
         /// Give up on Hermes after this when you asked for it. It may research the web; double tap cancels sooner.
         public var remote: Duration
@@ -84,6 +85,8 @@ public final class Conductor {
     @ObservationIgnored private var listening: Task<String, Never>?
     @ObservationIgnored private var thinking: Task<Void, Never>?
     @ObservationIgnored private var usingPhoneMic = false
+    /// When Jan last asked anything: the on-device brain's clock for `timing.conversation`.
+    /// HermesBrain keeps its own; neither resets the other.
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false

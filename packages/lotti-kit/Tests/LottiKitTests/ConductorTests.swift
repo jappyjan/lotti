@@ -221,6 +221,45 @@ struct ConductorTests {
         #expect(hermes.asked + brain.asked == ["Reset my timer please"])
     }
 
+    @Test func theOnDeviceGapEndsOnlyTheOnDeviceConversation() async throws {
+        let hermes = FakeHermes()
+        let clock = ManualClock(Date(timeIntervalSince1970: 0))
+        let conductor = Conductor(
+            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
+            today: FixedToday(info: TodayInfo(now: Date())),
+            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
+                          finalTranscript: .milliseconds(200), remote: .milliseconds(400), remoteFallback: .milliseconds(150)),
+            now: { clock.now })
+        conductor.ask("Tell me about the election")
+        try await eventually { conductor.mode == .showing }
+        clock.now = Date(timeIntervalSince1970: 301)  // past timing.conversation (300 s)
+        conductor.ask("And the polls?")
+        try await eventually { hermes.asked.count == 2 }
+        #expect(brain.ended == 1)
+        #expect(hermes.ended == 0)
+    }
+
+    @Test func doubleTapWhileHermesThinksDropsTheQuestion() async throws {
+        let transport = ScriptedHermes([#"{"type":"answer","sentence":"Too late."}"#])
+        transport.delay = .milliseconds(150)
+        let store = FakeHermesHistoryStore()
+        let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true },
+                                 store: store)
+        let conductor = Conductor(
+            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
+            today: FixedToday(info: TodayInfo(now: Date())),
+            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
+                          finalTranscript: .milliseconds(200), remote: .milliseconds(400), remoteFallback: .milliseconds(150)))
+        conductor.ask("Tell me about the election", onHermes: true)
+        try await eventually { conductor.mode == .working && !transport.requests.isEmpty }
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        try await Task.sleep(for: .milliseconds(300))  // the answer would have arrived by now
+        #expect(conductor.mode == .off)
+        #expect(transport.replies.count == 1)  // the request was cancelled, not answered
+        #expect(hermes.conversation.isEmpty)
+        #expect(store.stored?.messages.isEmpty == true)
+    }
+
     @Test func simpleTasksStayOnThePhone() async throws {
         let hermes = FakeHermes()
         let conductor = conductorWithHermes(hermes)
