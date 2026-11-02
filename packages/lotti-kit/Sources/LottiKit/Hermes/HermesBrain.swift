@@ -18,7 +18,12 @@ public final class HermesBrain: RemoteBrain {
     @ObservationIgnored private let store: (any HermesHistoryStore)?
     @ObservationIgnored private let resetThreshold: @MainActor () -> Duration
     @ObservationIgnored private let now: @Sendable () -> Date
+    /// The committed conversation. A question works on its own copy and only replaces this when it
+    /// succeeds, so a half-finished round is never visible here (or in the store).
     @ObservationIgnored private var messages: [ChatMessage] = []
+    /// Bumped by every new question and every reset. A question that finds it changed has been
+    /// superseded (Jan asked again, or said "new chat" meanwhile) and must not touch the state.
+    @ObservationIgnored private var turn = 0
     /// When Jan last asked, persisted with the messages. A gap longer than `resetThreshold()`
     /// starts a fresh conversation. This is the Hermes clock; `Conductor` has its own for the
     /// on-device brain, and the two never reset each other.
@@ -71,25 +76,30 @@ public final class HermesBrain: RemoteBrain {
     public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         resetIfStale()
         messages = Self.capped(messages)
-        let before = messages
         // Jan did ask, so the clock restarts now, even if the question fails. Stored with the
         // pre-question messages: the round in flight is not committed yet.
         lastAsked = now()
-        save(before)
+        save(messages)
+        turn += 1
+        let mine = turn
         do {
-            let answer = try await run(message, context: context, status: status)
+            var round = messages
+            let answer = try await run(message, context: context, round: &round, status: status)
+            // Superseded while waiting: the newer question or the reset owns the state now.
+            guard mine == turn else { throw CancellationError() }
+            messages = round
             save(messages)
             return answer
         } catch {
-            // A failed or cancelled question leaves no trace, so "Try again" starts clean.
-            messages = before
-            save(before)
-            note("✕ \(error.localizedDescription)")
+            // A failed or cancelled question leaves no trace (its round was never committed), so
+            // "Try again" starts clean.
+            if mine == turn { note("✕ \(error.localizedDescription)") }
             throw error
         }
     }
 
     public func endConversation() {
+        turn += 1
         messages = []
         trace = []
         lastAsked = nil
@@ -103,7 +113,8 @@ public final class HermesBrain: RemoteBrain {
         trace = []
     }
 
-    private func run(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+    private func run(_ message: String, context: String, round messages: inout [ChatMessage],
+                     status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         let allowed = allowedReads()
         if messages.isEmpty {
             let reads = toolbox.reads.filter { allowed.contains($0.name) }

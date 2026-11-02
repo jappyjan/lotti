@@ -22,6 +22,27 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     }
 }
 
+/// A transport whose first request hangs until cancelled and then takes a while to unwind, like a
+/// URLSession task that is cancelled. Later requests answer from the script straight away.
+final class SlowToCancelHermes: HermesTransport, @unchecked Sendable {
+    var replies: [String]
+    private(set) var requests: [[ChatMessage]] = []
+
+    init(_ replies: [String]) { self.replies = replies }
+
+    func complete(_ messages: [ChatMessage], progress report: @escaping @Sendable (String) -> Void) async throws -> String {
+        requests.append(messages)
+        if requests.count == 1 {
+            do { try await Task.sleep(for: .seconds(30)) } catch {
+                await Task.detached { try? await Task.sleep(for: .milliseconds(150)) }.value
+                throw error
+            }
+        }
+        guard !replies.isEmpty else { throw HermesError.empty }
+        return replies.removeFirst()
+    }
+}
+
 /// Remembers what was saved and hands back whatever it was seeded with, like UserDefaults.
 final class FakeHermesHistoryStore: HermesHistoryStore, @unchecked Sendable {
     private(set) var stored: PersistedHermesSession?
@@ -291,6 +312,48 @@ struct HermesBrainTests {
                                  isConfigured: { true }, store: store, resetThreshold: { .seconds(7200) }, now: { clock.now })
         _ = try await reborn.answer("Second", context: "") { _ in }
         #expect(hermes2.requests.first?.map(\.role) == [.system, .user, .assistant, .user])
+    }
+
+    @Test func aCancelledQuestionDoesNotUndoANewerOne() async throws {
+        // Jan asks again while the first question is still unwinding from its cancellation.
+        let hermes = SlowToCancelHermes([#"{"type":"answer","sentence":"Two."}"#])
+        let store = FakeHermesHistoryStore()
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store)
+        let first = Task { try await brain.answer("First", context: "") { _ in } }
+        try await Task.sleep(for: .milliseconds(50))
+        first.cancel()
+        let second = Task { try await brain.answer("Second", context: "") { _ in } }
+        _ = try await second.value
+        _ = await first.result
+
+        // The second question's request carried no trace of the cancelled one, and the history
+        // that ended up kept (and stored) is system → question → answer.
+        #expect(hermes.requests[1].map(\.role) == [.system, .user])
+        #expect(brain.conversation.map(\.role) == [.system, .user, .assistant])
+        #expect(brain.conversation[1].content.hasSuffix("Jan: Second"))
+        #expect(store.stored?.messages == brain.conversation)
+    }
+
+    @Test func aResetWhileAQuestionIsInFlightStays() async throws {
+        // "Neues Gespräch" while Hermes is still thinking: the cancelled question must not bring
+        // the old conversation back when it unwinds.
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#])
+        let store = FakeHermesHistoryStore()
+        let brain = HermesBrain(transport: hermes, toolbox: toolbox, allowedReads: { ["calendar", "weather"] },
+                                isConfigured: { true }, store: store)
+        _ = try await brain.answer("First", context: "") { _ in }
+        #expect(brain.conversation.count == 3)
+
+        hermes.delay = .seconds(30)
+        let second = Task { try await brain.answer("Second", context: "") { _ in } }
+        try await Task.sleep(for: .milliseconds(50))
+        second.cancel()
+        brain.endConversation()
+        _ = await second.result
+
+        #expect(brain.conversation.isEmpty)
+        #expect(store.stored?.messages.isEmpty == true)
     }
 
     private static let plainReply = #"{"type":"answer","sentence":"yep."}"#

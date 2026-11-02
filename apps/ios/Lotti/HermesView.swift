@@ -10,6 +10,7 @@ struct HermesView: View {
     @State private var address = Settings.hermesAddress
     @State private var key = Settings.hermesKey
     @State private var hiddenReads = Settings.hermesHiddenReads
+    @State private var conversationMinutes = Settings.hermesConversationMinutes
     @State private var check: String?
     @State private var checking = false
 
@@ -52,8 +53,8 @@ struct HermesView: View {
 
             Section {
                 Picker("Conversation", selection: Binding(
-                    get: { Settings.hermesConversationMinutes },
-                    set: { Settings.hermesConversationMinutes = $0 })) {
+                    get: { conversationMinutes },
+                    set: { conversationMinutes = $0; Settings.hermesConversationMinutes = $0 })) {
                     ForEach(Self.conversationMinutes, id: \.self) { minutes in
                         Text(Self.conversationLabel(minutes)).tag(minutes)
                     }
