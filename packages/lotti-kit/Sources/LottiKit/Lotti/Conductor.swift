@@ -23,8 +23,8 @@ public final class Conductor {
         public var answer: Duration
         /// Wait this long for the final transcript after you let go.
         public var finalTranscript: Duration
-        /// An on-device conversation older than this starts fresh. Hermes has its own, longer
-        /// threshold (see `HermesBrain`); this one never ends the Hermes chat.
+        /// An on-device conversation older than this starts fresh. Hermes has no such threshold
+        /// (it continues one session forever), so this never ends the Hermes chat.
         public var conversation: Duration
         /// Give up on Hermes after this when you asked for it. It may research the web; double tap cancels sooner.
         public var remote: Duration

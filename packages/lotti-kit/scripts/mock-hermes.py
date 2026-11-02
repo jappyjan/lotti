@@ -61,7 +61,7 @@ class Handler(BaseHTTPRequestHandler):
         # Questions of this session before the current one (results messages belong to a question).
         earlier = sum(1 for turn in history if '"type":"results"' not in turn)
         if '"type":"results"' in last:
-            earlier -= 1  # the question this round belongs to is already in the history
+            earlier = max(0, earlier - 1)  # the question this round belongs to is already in the history
         history.append(last)
         if '"type":"results"' in last:
             results = json.loads(last)["results"]
