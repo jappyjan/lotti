@@ -5,6 +5,8 @@ import SwiftUI
 /// Where your Hermes is, and which phone facts it may read.
 struct HermesView: View {
     let client: HermesClient
+    /// Its conversation is forgotten when it could reach another server or a hidden read.
+    let hermes: HermesBrain
     let readTools: [PhoneToolSpec]
 
     @State private var address = Settings.hermesAddress
@@ -40,6 +42,8 @@ struct HermesView: View {
                         set: { shared in
                             if shared { hiddenReads.remove(tool.name) } else { hiddenReads.insert(tool.name) }
                             Settings.hermesHiddenReads = hiddenReads
+                            // What Hermes already read stays in the conversation; hiding it starts fresh.
+                            if !shared { hermes.endConversation() }
                         })) {
                         Text(tool.name.capitalized)
                         Text(tool.description)
@@ -52,7 +56,7 @@ struct HermesView: View {
             }
 
             Section {
-                Picker("Conversation", selection: Binding(
+                Picker("Start fresh after", selection: Binding(
                     get: { conversationMinutes },
                     set: { conversationMinutes = $0; Settings.hermesConversationMinutes = $0 })) {
                     ForEach(Self.conversationMinutes, id: \.self) { minutes in
@@ -62,7 +66,7 @@ struct HermesView: View {
             } header: {
                 Text("Conversation")
             } footer: {
-                Text("Hermes keeps the conversation going until this long after your last question, then starts fresh. Saying \"Neues Gespräch\" resets it right away.")
+                Text("After this long without a question, Hermes starts a new conversation. Say \"Neues Gespräch\" or \"New chat\" to start one right away.")
             }
 
             if Settings.hermesConfig != nil {
@@ -73,6 +77,7 @@ struct HermesView: View {
                         Settings.hermesAddress = ""
                         Settings.hermesKey = ""
                         check = nil
+                        hermes.endConversation()
                     }
                 }
             }
@@ -93,7 +98,10 @@ struct HermesView: View {
             check = "That address doesn't look right."
             return
         }
-        Settings.hermesAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Another server must not get the old conversation.
+        if newAddress != Settings.hermesAddress { hermes.endConversation() }
+        Settings.hermesAddress = newAddress
         Settings.hermesKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
         checking = true
         defer { checking = false }

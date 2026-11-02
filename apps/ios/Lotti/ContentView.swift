@@ -25,7 +25,7 @@ struct ContentView: View {
                     }
                     NavigationLink("Calendars") { CalendarsView() }
                     NavigationLink {
-                        HermesView(client: hermesClient, readTools: toolbox.reads)
+                        HermesView(client: hermesClient, hermes: hermes, readTools: toolbox.reads)
                     } label: {
                         LabeledContent("Hermes", value: hermes.isConfigured ? "On" : "Not set up")
                     }
