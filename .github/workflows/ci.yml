@@ -16,15 +16,17 @@ concurrency:
 
 jobs:
   main:
-    # Every project is Swift (lotti-kit, brain-eval, the iOS app): it needs macOS and Xcode.
-    runs-on: macos-26
+    # Every project is Swift (lotti-kit, brain-eval, the iOS app): it needs macOS and Xcode 27
+    # (brain-eval uses FoundationModels' `LanguageModel`, new in Xcode 27). `macos-26` stops at
+    # Xcode 26.6; `xcode-27` is GitHub's macOS 27 + Xcode 27 image (preview).
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@v5
         with:
           filter: tree:0
           fetch-depth: 0
 
-      # The newest Xcode on the runner: the app targets iOS 26 and uses FoundationModels.
+      # The newest Xcode on the runner.
       - name: Select Xcode
         run: |
           xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
