@@ -195,11 +195,14 @@ struct HermesBrainTests {
             #"{"type":"call","status":"Checking your morning","calls":[{"id":"c1","tool":"calendar","args":{"from":"2026-11-02"}},{"id":"c2","tool":"weather","args":{}}]}"#,
             #"{"type":"answer","sentence":"Standup at 9:30, take an umbrella.","followUps":["Later?"]}"#,
         ])
+        // Each call takes 1 s: one after the other would take 2 s. The margin is for slow CI machines.
+        calendar.delay = .seconds(1)
+        weather.delay = .seconds(1)
         let brain = brain(hermes)
         var statuses: [String] = []
         let started = Date()
         let answer = try await brain.answer("How's tomorrow?", context: "Now: Sunday") { statuses.append($0) }
-        #expect(Date().timeIntervalSince(started) < 0.3)  // both calls ran together
+        #expect(Date().timeIntervalSince(started) < 1.8)  // both calls ran together
         #expect(answer == Answer(sentence: "Standup at 9:30, take an umbrella.", followUps: ["Later?"]))
         #expect(statuses == ["Checking your morning"])
 
