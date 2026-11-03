@@ -24,13 +24,14 @@ export const builtinJobs: BuiltinJob[] = [
       const cal = app.integrations.calendar;
       if (!cal) return 'No calendar connected.';
       const now = app.clock.now();
-      const events = await cal.events(now, now + 10 * MIN);
+      const lead = Math.max(1, app.settings.num('jobs.meeting_soon.lead_min') || 10);
+      const events = await cal.events(now, now + lead * MIN);
       for (const e of events) {
         const ref = `calendar:${e.id}:${e.start}`;
         app.inbox.create({
           kind: 'calendar',
           title: e.title,
-          summary: `Starts ${humanLocal(e.start).slice(-5)}${e.location ? ' · ' + e.location : ''}`,
+          summary: `Starts ${humanLocal(e.start, 'en', app.settings.displayOffsetMin()).slice(-5)}${e.location ? ' · ' + e.location : ''}`,
           sourceRef: ref,
           startsAt: e.start,
           expiresInHours: Math.max(1, (e.end - now) / 3_600_000),
@@ -38,7 +39,7 @@ export const builtinJobs: BuiltinJob[] = [
         });
       }
       return events.length
-        ? `${events.length} meeting(s) within 10 min.`
+        ? `${events.length} meeting(s) within ${lead} min.`
         : 'No meeting soon.';
     },
   },
@@ -54,9 +55,15 @@ export const builtinJobs: BuiltinJob[] = [
         app.settings.kvGet('important_mail.since') ??
           app.clock.now() - 10 * MIN,
       );
+      const fetchedAt = app.clock.now();
       const msgs = await mail.unread(since);
-      app.settings.kvSet('important_mail.since', String(app.clock.now()));
-      if (!msgs.length) return 'No new mail.';
+      // `since` moves only after triage and the inbox items succeeded: a failed run retries the same mail.
+      const done = () =>
+        app.settings.kvSet('important_mail.since', String(fetchedAt));
+      if (!msgs.length) {
+        done();
+        return 'No new mail.';
+      }
       const raw = await app.providers.text(
         'You triage new mail for the user. Return ONLY JSON: [{"id": string, "important": boolean, "title": string, "summary": string}]. ' +
           'Important = needs attention soon (personal, deadlines, money, appointments, security). Not important = newsletters, promos, notifications.',
@@ -85,6 +92,7 @@ export const builtinJobs: BuiltinJob[] = [
           }
         }
       }
+      done();
       return `${msgs.length} new mail(s), ${n} important.`;
     },
   },

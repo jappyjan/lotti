@@ -45,7 +45,9 @@ async function stdioApp() {
   )) as any;
   return { t, id: r.result.id as string };
 }
-const settle = () => new Promise((r) => setTimeout(r, 400));
+/** Wait for the refreshes the ops started: refreshes are serialised, so a new one ends after all earlier ones. */
+const settle = (t: ReturnType<typeof makeApp>) =>
+  t.app.integrations.mcp.refresh!();
 
 test('mcp stdio: test connection lists tools; mcp.tools shows confirmation flags', async () => {
   const { t, id } = await stdioApp();
@@ -66,7 +68,7 @@ test('mcp stdio: test connection lists tools; mcp.tools shows confirmation flags
 test('mcp stdio: remote tools are registered as mcp__server__tool; confirmation gates the call', async () => {
   const { t, id } = await stdioApp();
   await t.app.ops.invoke('mcp.test', { id }, 'app');
-  await settle();
+  await settle(t);
   const names = t.app.tools.all().map((x) => x.name);
   assert.ok(names.includes('mcp__My_Server__echo'));
   const spec = t.app.tools
@@ -109,7 +111,7 @@ test('mcp stdio: remote tools are registered as mcp__server__tool; confirmation 
     { id, tool: 'echo', needsConfirmation: false },
     'app',
   );
-  await settle();
+  await settle(t);
   const run2 = newRun();
   const r2 = await t.app.tools.call(
     'mcp__My_Server__echo',
@@ -125,7 +127,7 @@ test('mcp stdio: remote tools are registered as mcp__server__tool; confirmation 
     { id, tool: 'fail', needsConfirmation: false },
     'app',
   );
-  await settle();
+  await settle(t);
   const r3 = await t.app.tools.call(
     'mcp__My_Server__fail',
     {},
@@ -136,8 +138,13 @@ test('mcp stdio: remote tools are registered as mcp__server__tool; confirmation 
 
   // delete removes the tools
   await t.app.ops.invoke('mcp.delete', { id }, 'app');
-  await settle();
+  await settle(t);
   assert.ok(!t.app.tools.all().some((x) => x.name.startsWith('mcp__')));
+  assert.equal(
+    t.app.actions.hasHandler('mcp__My_Server__echo'),
+    false,
+    'perform handlers go with the tools',
+  );
 });
 
 test('mcp stdio: env secret reaches the server; set_credential is app only', async () => {
@@ -162,7 +169,7 @@ test('mcp stdio: env secret reaches the server; set_credential is app only', asy
     { id, tool: 'echo', needsConfirmation: false },
     'app',
   );
-  await settle();
+  await settle(t);
   const r = await t.app.tools.call(
     'mcp__My_Server__echo',
     { text: 'x' },
@@ -243,7 +250,7 @@ test('mcp http: JSON and SSE replies, bearer token, session id', async () => {
     { id, key: 'bearer', value: 'tok' },
     'app',
   );
-  await settle();
+  await settle(t);
   m.seen.length = 0;
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
   assert.deepEqual(r.result, { ok: true, tools: ['now'] });

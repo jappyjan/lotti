@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { ActionService } from './actions.ts';
 import { ask } from './agent/loop.ts';
 import type { AskInput } from './agent/loop.ts';
@@ -33,6 +34,8 @@ export interface App {
   clock: Clock;
   log: Logger;
   fetch: typeof fetch;
+  /** DNS lookup (all addresses) used by web_fetch's private-address check; injectable for tests. */
+  lookup: (host: string) => Promise<string[]>;
   key: Buffer;
   startedAt: number;
   db: Db;
@@ -61,6 +64,7 @@ export interface CreateAppOptions {
   config: Config;
   clock?: Clock;
   fetch?: typeof fetch;
+  lookup?: (host: string) => Promise<string[]>;
   logger?: Logger;
   integrations?: Partial<Integrations>;
 }
@@ -71,6 +75,12 @@ export function createApp(o: CreateAppOptions): App {
   app.clock = o.clock ?? systemClock;
   app.log = o.logger ?? consoleLogger;
   app.fetch = o.fetch ?? ((...a) => fetch(...a));
+  app.lookup =
+    o.lookup ??
+    (async (host) =>
+      (await dnsLookup(host, { all: true, verbatim: true })).map(
+        (r) => r.address,
+      ));
   app.key = deriveKey(o.config.masterKey);
   app.startedAt = app.clock.now();
   app.db = new Db(o.config.dbPath);
@@ -85,6 +95,7 @@ export function createApp(o: CreateAppOptions): App {
   app.inbox = new InboxService(app);
   app.actions = new ActionService(app);
   app.memory = new MemoryService(app);
+  app.memory.backfillNorm();
   app.conversations = new ConversationService(app);
   app.skills = new SkillStore(app);
   app.dreaming = new DreamingService(app);

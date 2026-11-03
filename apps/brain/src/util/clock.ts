@@ -48,12 +48,41 @@ export function parseIso(s: string | undefined | null): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-/** "2026-11-03 Tuesday 08:15" style, 24 h, for prompts. */
-export function humanLocal(ms: number, locale: 'de' | 'en' = 'en'): string {
-  const d = new Date(ms);
+/** UTC offset in minutes of an ISO 8601 string ("…+01:00" -> 60, "…Z" -> 0), or null when it has none. */
+export function parseOffsetMin(s: string | undefined | null): number | null {
+  if (!s) return null;
+  if (/T.*Z$/i.test(s)) return 0;
+  const m = /T.*([+-])(\d{2}):?(\d{2})$/.exec(s);
+  if (!m) return null;
+  const v = Number(m[2]) * 60 + Number(m[3]);
+  return m[1] === '-' ? -v : v;
+}
+
+/**
+ * "2026-11-03 Tuesday 08:15" style, 24 h, for prompts. With `offsetMin` the time is shown at that UTC
+ * offset (the phone's), otherwise in the server's local time zone.
+ */
+export function humanLocal(
+  ms: number,
+  locale: 'de' | 'en' = 'en',
+  offsetMin?: number | null,
+): string {
+  const shifted = offsetMin !== undefined && offsetMin !== null;
+  const d = new Date(shifted ? ms + offsetMin * MIN : ms);
   const day = d.toLocaleDateString(locale === 'de' ? 'de-DE' : 'en-GB', {
     weekday: 'long',
+    ...(shifted ? { timeZone: 'UTC' } : {}),
   });
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${day} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  const [y, mo, da, h, mi] = shifted
+    ? [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()]
+    : [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()];
+  return `${y}-${p(mo + 1)}-${p(da)} ${day} ${p(h)}:${p(mi)}`;
+}
+
+/** "+01:00" for prompts. */
+export function offsetLabel(offsetMin: number): string {
+  const a = Math.abs(offsetMin);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${offsetMin < 0 ? '-' : '+'}${p(Math.floor(a / 60))}:${p(a % 60)}`;
 }

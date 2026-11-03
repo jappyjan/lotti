@@ -1,9 +1,17 @@
 import { z } from 'zod';
-import { SETTING_DEFS } from '../settings.ts';
+import { isProviderManaged, SETTING_DEFS } from '../settings.ts';
 import { isoLocal } from '../util/clock.ts';
 import { defineOp, out } from './registry.ts';
 
 const providerId = z.string().min(1);
+
+/** provider.* settings belong to the providers.* ops (a tap for the agent and the admin MCP). */
+function refuseProviderKey(key: string): void {
+  if (isProviderManaged(key))
+    throw new Error(
+      `${key} is managed by the providers.* operations (providers.set_active, providers.set_model).`,
+    );
+}
 
 export const coreOps = [
   // ---- status ---------------------------------------------------------------
@@ -176,7 +184,7 @@ export const coreOps = [
     name: 'settings.list',
     group: 'settings',
     description:
-      'All settings with value, default, description and whether they are safety settings.',
+      'All settings with value, default, description, whether they are safety settings, and managedBy ("providers" = change them with the providers.* ops).',
     inputSchema: z.object({}),
     risk: 'free',
     handler: (_i, { app }) => app.settings.all(),
@@ -201,6 +209,7 @@ export const coreOps = [
     risk: 'free',
     handler(i, { app }) {
       if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
+      refuseProviderKey(i.key);
       if (app.settings.isSafety(i.key))
         throw new Error(
           `${i.key} is a safety setting: use settings.set_safety (needs confirmation).`,
@@ -253,6 +262,7 @@ export const coreOps = [
     risk: 'free',
     handler(i, { app }) {
       if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
+      refuseProviderKey(i.key);
       if (app.settings.isSafety(i.key))
         throw new Error(
           'Safety settings cannot be reset by the agent; use settings.set_safety.',
@@ -317,13 +327,14 @@ export const coreOps = [
     description: 'Paired devices.',
     inputSchema: z.object({}),
     risk: 'app_only',
-    handler: (_i, { app }) =>
+    handler: (_i, { app, deviceId }) =>
       app.auth.devices().map((d) => ({
         id: d.id,
         name: d.name,
         createdAt: isoLocal(d.createdAt),
         lastSeenAt: d.lastSeenAt ? isoLocal(d.lastSeenAt) : null,
         connected: app.hub.connectedDeviceIds().includes(d.id),
+        isSelf: d.id === deviceId,
       })),
   }),
   defineOp({

@@ -16,6 +16,8 @@ export interface Config {
   };
   /** Phone tool timeout (protocol: 10 s). Overridable for tests. */
   phoneToolTimeoutMs: number;
+  /** WebSocket ping interval; a socket that missed the previous pong is terminated. Overridable for tests. */
+  wsPingIntervalMs: number;
   version: string;
 }
 
@@ -52,6 +54,7 @@ export function loadConfig(
     workspaceDir: resolve(dataDir, 'workspace'),
     apns,
     phoneToolTimeoutMs: 10_000,
+    wsPingIntervalMs: 30_000,
     version: '0.1.0',
   };
 }

@@ -331,7 +331,11 @@ export class McpClientImpl implements McpClient {
         );
       }
     }
-    for (const n of this.registered) this.app.tools.unregister(n);
+    // Swap at once: tools and their `perform` handlers go together (a removed server leaves neither behind).
+    for (const n of this.registered) {
+      this.app.tools.unregister(n);
+      this.app.actions.unregister(n);
+    }
     this.registered.clear();
     for (const { server, tools } of staged)
       for (const t of tools) this.registerTool(server, t);

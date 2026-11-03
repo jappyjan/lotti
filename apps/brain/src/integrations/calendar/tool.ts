@@ -38,7 +38,7 @@ export const calendarEventsTool: ToolDef = {
       allDay?: boolean;
       calendar?: string;
     }) =>
-      `- ${e.allDay ? humanLocal(e.start, run.locale).slice(0, -6) + ' (all day)' : `${humanLocal(e.start, run.locale)}–${humanLocal(e.end, run.locale).slice(-5)}`} ${e.title}${e.location ? ' @ ' + e.location : ''}${e.calendar ? ' [' + e.calendar + ']' : ''}`;
+      `- ${e.allDay ? humanLocal(e.start, run.locale).slice(0, -6) + ' (all day)' : `${humanLocal(e.start, run.locale, run.utcOffsetMin)}–${humanLocal(e.end, run.locale, run.utcOffsetMin).slice(-5)}`} ${e.title}${e.location ? ' @ ' + e.location : ''}${e.calendar ? ' [' + e.calendar + ']' : ''}`;
     if (a.nextOnly && cal.next) {
       const e = await cal.next(from);
       return e

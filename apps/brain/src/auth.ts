@@ -8,6 +8,9 @@ import {
 } from './util/crypto.ts';
 import type { DeviceInfo } from './integrations/index.ts';
 
+/** Pairing codes expire 15 minutes after they were created. */
+export const PAIRING_CODE_TTL_MS = 15 * 60_000;
+
 export interface Device extends DeviceInfo {
   createdAt: number;
   lastSeenAt: number | null;
@@ -18,18 +21,24 @@ export class Auth {
   constructor(private app: App) {}
 
   // ---- pairing --------------------------------------------------------
+  /** The newest unused pairing code that has not expired (codes live PAIRING_CODE_TTL_MS). */
   currentPairingCode(): string | undefined {
     return this.app.db.get<{ code: string }>(
-      'SELECT code FROM pairing_codes WHERE used_at IS NULL ORDER BY created_at DESC LIMIT 1',
+      'SELECT code FROM pairing_codes WHERE used_at IS NULL AND created_at > ? ORDER BY created_at DESC LIMIT 1',
+      this.app.clock.now() - PAIRING_CODE_TTL_MS,
     )?.code;
   }
+  /** A fresh code; older unused codes stop working. */
   newPairingCode(): string {
     const code = pairingCode();
-    this.app.db.run(
-      'INSERT INTO pairing_codes(code, created_at) VALUES(?,?)',
-      code,
-      this.app.clock.now(),
-    );
+    this.app.db.tx(() => {
+      this.app.db.run('DELETE FROM pairing_codes WHERE used_at IS NULL');
+      this.app.db.run(
+        'INSERT INTO pairing_codes(code, created_at) VALUES(?,?)',
+        code,
+        this.app.clock.now(),
+      );
+    });
     return code;
   }
   hasDevices(): boolean {
@@ -37,22 +46,21 @@ export class Auth {
       'SELECT 1 AS x FROM devices WHERE revoked_at IS NULL',
     );
   }
-  /** Code to show in the logs at startup: only while no device is paired (or an unused code exists). */
+  /** Code to show in the logs at startup: only while no device is paired (re-issued once the old one expired). */
   ensureStartupCode(): string | undefined {
-    const existing = this.currentPairingCode();
-    if (existing) return existing;
-    if (!this.hasDevices()) return this.newPairingCode();
-    return undefined;
+    if (this.hasDevices()) return undefined;
+    return this.currentPairingCode() ?? this.newPairingCode();
   }
-  /** Single-use. Returns the device token, or null if the code is wrong/used. */
+  /** Single-use. Returns the device token, or null if the code is wrong/used/expired. */
   pair(
     code: string,
     deviceName: string,
   ): { token: string; deviceId: string } | null {
     const norm = code.trim().toUpperCase().replace(/\s/g, '');
     const row = this.app.db.get<{ code: string }>(
-      'SELECT code FROM pairing_codes WHERE used_at IS NULL AND code = ?',
+      'SELECT code FROM pairing_codes WHERE used_at IS NULL AND code = ? AND created_at > ?',
       norm.includes('-') ? norm : `${norm.slice(0, 4)}-${norm.slice(4)}`,
+      this.app.clock.now() - PAIRING_CODE_TTL_MS,
     );
     if (!row) return null;
     const token = randomToken('lt_');

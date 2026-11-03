@@ -124,6 +124,16 @@ const MIGRATIONS: string[] = [
   /* 8: when a calendar item starts (the today view counts down to it) */ `
   ALTER TABLE inbox ADD COLUMN starts_at INTEGER;
   `,
+  /* 9: indexes for the hot queries (job history, catch-up, inbox dedupe/expiry, open conversation) */ `
+  CREATE INDEX IF NOT EXISTS job_runs_started ON job_runs(started_at);
+  CREATE INDEX IF NOT EXISTS inbox_source_ref ON inbox(source_ref);
+  CREATE INDEX IF NOT EXISTS inbox_status_expires ON inbox(status, expires_at);
+  CREATE INDEX IF NOT EXISTS conversations_status_active ON conversations(status, last_active_at);
+  `,
+  /* 10: normalised memory text for duplicate checks (filled by MemoryService.backfillNorm) */ `
+  ALTER TABLE memories ADD COLUMN norm TEXT;
+  CREATE INDEX memories_norm ON memories(norm, status);
+  `,
 ];
 
 export function migrate(db: Db): void {

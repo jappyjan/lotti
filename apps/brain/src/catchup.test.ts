@@ -92,20 +92,46 @@ test('slept needs the phone to be quiet and the night overlap; phone use at nigh
   await ev(t, 'phone_unlock', at(3, 22, 0));
   assert.equal((await ev(t, 'gesture', at(3, 23, 30))).triggered, false);
   assert.equal(got.length, 0);
-  // phone used at 02:00, glasses at 07:00: gap 5 h -> reason is away, not slept
+  // Plugged in 22:35 (charging is a state, not a moment), brief unlock at 01:30, glasses at 07:00.
+  // Decision: 01:30 is phone use after 3 h -> one `away` brief (the rules say so); 01:30..07:00 is 5.5 h of the
+  // night without phone use while the phone kept charging -> `slept` at 07:00. Exactly two briefs.
   const t2 = makeApp({ toolTimeoutMs: 30 });
   const got2 = listen(t2);
-  t2.mock.script(text('Brief'));
+  t2.mock.script(text('Brief'), text('Guten Morgen'));
   await ev(t2, 'phone_unlock', at(3, 22, 0));
   await ev(t2, 'phone_charging', at(3, 22, 5));
   await ev(t2, 'phone_unlock', at(3, 22, 30));
   await ev(t2, 'phone_charging', at(3, 22, 35));
-  t2.mock.script(text('Brief 2'));
-  await ev(t2, 'phone_unlock', at(4, 1, 30)); // woke up at night: away from 22:30..01:30 = 3 h -> brief
+  const night = await ev(t2, 'phone_unlock', at(4, 1, 30));
+  assert.deepEqual([night.triggered, night.reason], [true, 'away']);
   const d = await ev(t2, 'head_up', at(4, 7, 0));
-  assert.equal(d.triggered, true);
-  assert.equal(d.reason, 'away'); // phone was used at 01:30, so the 5.5 h span is not "slept"... only away
-  assert.ok(got2.length >= 1);
+  assert.deepEqual([d.triggered, d.reason], [true, 'slept']);
+  assert.equal(got2.length, 2);
+  assert.deepEqual(
+    got2.map((m) => m.text),
+    ['Brief', 'Guten Morgen'],
+  );
+});
+
+test('charging is a state: plugged in 18:00, unplugged 21:00, untouched overnight is not "slept"', async () => {
+  const t = makeApp({ toolTimeoutMs: 30 });
+  const got = listen(t);
+  t.mock.script(text('Brief'));
+  await ev(t, 'phone_unlock', at(3, 17, 55));
+  await ev(t, 'phone_charging', at(3, 18, 0));
+  await ev(t, 'phone_unplugged', at(3, 21, 0));
+  assert.equal(
+    t.app.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM presence_events WHERE event='phone_unplugged'")!.n,
+    1,
+    'phone_unplugged is recorded',
+  );
+  const d = await ev(t, 'head_up', at(4, 7, 0));
+  assert.deepEqual([d.triggered, d.reason], [true, 'away'], 'not charging during the night');
+  assert.equal(got.length, 1);
+  assert.equal(
+    t.app.catchup.chargingNightMs(at(3, 17, 55).getTime(), at(4, 7, 0).getTime()),
+    0,
+  );
 });
 
 test('brief is nothing when the agent finds nothing relevant', async () => {

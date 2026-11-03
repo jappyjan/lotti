@@ -75,6 +75,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
       'bring',
       'providers',
       'mcp',
+      'dreaming',
     ],
     description: 'Op groups the agent may use as tools (app_only ops never)',
     safety: true,
@@ -149,7 +150,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     description: 'Dreaming drops memories unused this long',
   },
   'dreaming.enabled': { default: true, description: 'Nightly dreaming' },
+  'jobs.meeting_soon.lead_min': {
+    default: 10,
+    description: 'Meeting soon: minutes before an event it shows up',
+  },
 };
+
+/** Keys owned by the providers.* ops: settings.set / settings.reset refuse them. */
+export const isProviderManaged = (key: string) => key.startsWith('provider.');
 
 export class SettingsService {
   constructor(private app: App) {}
@@ -201,6 +209,7 @@ export class SettingsService {
     default: unknown;
     description: string;
     safety: boolean;
+    managedBy?: 'providers';
   }[] {
     return Object.entries(SETTING_DEFS).map(([key, d]) => ({
       key,
@@ -208,7 +217,23 @@ export class SettingsService {
       default: d.default,
       description: d.description,
       safety: !!d.safety,
+      ...(isProviderManaged(key) ? { managedBy: 'providers' as const } : {}),
     }));
+  }
+
+  /** The phone's UTC offset (minutes) from its last ask; remembered for background work. */
+  notePhoneOffset(offsetMin: number): void {
+    if (this.kvGet('phone.utc_offset_min') !== String(offsetMin))
+      this.kvSet('phone.utc_offset_min', String(offsetMin));
+  }
+  /**
+   * Offset to render times in for background work (jobs, catch-up, meeting items): the phone's last one,
+   * unless the server has its own TZ configured. null = server local time.
+   */
+  displayOffsetMin(): number | null {
+    if (process.env.TZ) return null;
+    const v = this.kvGet('phone.utc_offset_min');
+    return v === undefined || Number.isNaN(Number(v)) ? null : Number(v);
   }
 
   /** Raw internal kv (not user settings): last-run markers etc. */

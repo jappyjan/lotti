@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { makeApp } from '../testing/helpers.ts';
+import { makeApp, until } from '../testing/helpers.ts';
 import { ClaudeRuntime } from './runtimes/claude.ts';
 import { CodexRuntime, parseDeviceAuth } from './runtimes/codex.ts';
 import { registerIntegrations } from './register.ts';
@@ -73,12 +73,14 @@ test('codex: device login via ops (start -> url+code, status -> done), state und
   )) as any;
   assert.equal(mid.result.loggedIn, false);
   assert.equal(mid.result.state, 'pending');
-  await new Promise((r) => setTimeout(r, 600));
-  const done = (await t.app.ops.invoke(
-    'providers.codex_login_status',
-    {},
-    'app',
-  )) as any;
+  const done = await until(async () => {
+    const r = (await t.app.ops.invoke(
+      'providers.codex_login_status',
+      {},
+      'app',
+    )) as any;
+    return r.result.state !== 'pending' && r;
+  }, 10_000, 'codex login to finish');
   assert.equal(done.result.state, 'done');
   assert.equal(done.result.loggedIn, true);
   assert.equal(codex.configured(), true);
@@ -114,8 +116,10 @@ test('codex: failed login reports an error', async () => {
   const codex = new CodexRuntime(t.app, f.bin);
   const s = await codex.loginStart();
   assert.equal(s.code, 'AB12-CD345');
-  await new Promise((r) => setTimeout(r, 600));
-  const st = await codex.loginStatus();
+  const st = await until(async () => {
+    const r = await codex.loginStatus();
+    return r.state !== 'pending' && r;
+  }, 10_000, 'codex login to fail');
   assert.equal(st.state, 'error');
   assert.equal(st.loggedIn, false);
 });
@@ -144,7 +148,7 @@ test('codex: run end to end through the agent loop (active provider = codex)', a
   const codex = new CodexRuntime(t.app, f.bin);
   t.app.providers.register(codex);
   await codex.loginStart();
-  await new Promise((r) => setTimeout(r, 600));
+  await until(async () => (await codex.loginStatus()).state !== 'pending', 10_000);
   assert.ok(codex.configured());
   t.app.settings.set('provider.active', 'codex');
   const run = newRun({ askId: 'ask_1' });
@@ -169,7 +173,9 @@ test('codex: run end to end through the agent loop (active provider = codex)', a
     ),
   );
   assert.ok(
-    log.args.includes('mcp_servers.lotti.http_headers={"X-Lotti-Ask"="ask_1"}'),
+    log.args.some((a: string) =>
+      /^mcp_servers\.lotti\.http_headers=\{"X-Lotti-Ask"="ask_1_\w+"\}$/.test(a),
+    ),
   );
   assert.equal(log.env.token, t.app.auth.internalToken());
   assert.equal(log.env.master, null);
@@ -242,7 +248,7 @@ test('claude: token credential makes it configured; run passes token, MCP config
     cfg.mcpServers.lotti.headers.authorization,
     `Bearer ${t.app.auth.internalToken()}`,
   );
-  assert.equal(cfg.mcpServers.lotti.headers['x-lotti-ask'], 'ask_9');
+  assert.match(cfg.mcpServers.lotti.headers['x-lotti-ask'], /^ask_9_\w+$/);
   assert.match(log.stdin, /User: Hi/);
 });
 
@@ -265,5 +271,47 @@ test('claude: failure surfaces stderr; falls back when a fallback provider exist
       mcpServers: [],
     }),
     /setup-token/,
+  );
+});
+
+test('runtimes: silence timeout kills the whole process group (grandchildren too)', async () => {
+  const { runProc } = await import('./runtimes/proc.ts');
+  const f = fakeBin(
+    'hangs',
+    `const {spawn}=require('child_process');
+const g=spawn('sleep',['30'],{stdio:'ignore'});
+fs.writeFileSync(LOG,JSON.stringify({pid:g.pid}));
+setInterval(()=>{},1000);`,
+  );
+  const t0 = Date.now();
+  await assert.rejects(
+    // Long enough for node to start and write its log even on a loaded runner.
+    runProc(f.bin, [], { idleTimeoutMs: 2000 }),
+    /silent for/,
+  );
+  assert.ok(Date.now() - t0 < 8000);
+  const { pid } = f.log();
+  const t1 = Date.now();
+  let alive = true;
+  while (alive && Date.now() - t1 < 5000) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    } catch {
+      alive = false;
+    }
+  }
+  assert.equal(alive, false, 'grandchild killed with the group');
+});
+
+test('runtimes use agent.silence_timeout_sec', async () => {
+  const t = makeApp();
+  t.app.settings.set('agent.silence_timeout_sec', 1);
+  const f = fakeBin('claude', `setInterval(()=>{},1000);`);
+  t.app.secrets.set('provider.claude_code.api_key', 'tok');
+  const c = new ClaudeRuntime(t.app, f.bin);
+  await assert.rejects(
+    c.run({ system: 's', prompt: 'p', mcpServers: [] }),
+    /silent for 1 s/,
   );
 });

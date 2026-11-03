@@ -87,6 +87,8 @@ export interface TestApp {
   mock: MockProvider;
   fetchCalls: string[];
   setFetch(f: typeof fetch): void;
+  /** DNS answers for web_fetch (default: every name is a public address, localhost is 127.0.0.1). */
+  setLookup(f: (host: string) => Promise<string[]>): void;
   cleanup(): void;
 }
 
@@ -96,6 +98,7 @@ export function makeApp(
     fetch?: typeof fetch;
     start?: Date | number;
     toolTimeoutMs?: number;
+    wsPingMs?: number;
   } = {},
 ): TestApp {
   const dir = mkdtempSync(join(tmpdir(), 'lotti-brain-'));
@@ -107,15 +110,19 @@ export function makeApp(
     }),
     dbPath: ':memory:',
     phoneToolTimeoutMs: opts.toolTimeoutMs ?? 10_000,
+    wsPingIntervalMs: opts.wsPingMs ?? 30_000,
   };
   const clock = new FakeClock(opts.start ?? new Date(2026, 10, 3, 8, 0, 0));
   const fetchCalls: string[] = [];
   let impl: typeof fetch =
     opts.fetch ?? (async () => new Response('{}', { status: 404 }));
+  let lookup = async (host: string) =>
+    host === 'localhost' ? ['127.0.0.1', '::1'] : ['93.184.215.14'];
   const app = createApp({
     config,
     clock,
     logger: silentLogger,
+    lookup: (h) => lookup(h),
     fetch: ((input: any, init?: any) => {
       fetchCalls.push(
         String(input instanceof URL ? input.href : (input?.url ?? input)),
@@ -133,6 +140,7 @@ export function makeApp(
     mock,
     fetchCalls,
     setFetch: (f) => (impl = f),
+    setLookup: (f) => (lookup = f),
     cleanup: () => app.db.close(),
   };
 }
@@ -142,6 +150,21 @@ export const jsonResponse = (body: unknown, status = 200) =>
     status,
     headers: { 'content-type': 'application/json' },
   });
+
+/** Poll `f` until it returns a truthy value (or throw after `ms`). Use instead of fixed sleeps. */
+export async function until<T>(
+  f: () => T | Promise<T>,
+  ms = 5000,
+  what = 'condition',
+): Promise<Exclude<T, false | null | undefined | 0 | ''>> {
+  const t0 = Date.now();
+  for (;;) {
+    const v = await f();
+    if (v) return v as Exclude<T, false | null | undefined | 0 | ''>;
+    if (Date.now() - t0 > ms) throw new Error(`timeout waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 
 /** Pair a device and return its token. */
 export function pairDevice(app: App, name = 'Test iPhone'): string {
@@ -211,10 +234,10 @@ export class WsClient {
       });
     });
   }
-  /** Next message of this type that arrives after now. */
-  next(type: string, ms = 3000): Promise<any> {
+  /** Next message of this type (and matching `pred`) that arrives after now. */
+  next(type: string, ms = 3000, pred: (m: any) => boolean = () => true): Promise<any> {
     const seen = this.messages.length;
-    const ex = (m: any) => m.type === type;
+    const ex = (m: any) => m.type === type && pred(m);
     return new Promise((resolve, reject) => {
       const t = setTimeout(
         () => reject(new Error(`timeout waiting for ${type}`)),

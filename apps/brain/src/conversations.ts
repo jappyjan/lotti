@@ -46,6 +46,9 @@ const renderTurns = (turns: { role: string; text: string }[]) =>
     .map((t) => `${t.role === 'user' ? 'User' : 'Lotti'}: ${t.text}`)
     .join('\n');
 
+/** How long `hello` / `ask` wait for conversation maintenance before going on. */
+export const MAINTAIN_WAIT_MS = 3000;
+
 /**
  * One shared "current conversation" across glasses and phone.
  *  - idle >= compact_idle_min (10): LLM summary replaces old turns, recent turns kept.
@@ -61,8 +64,38 @@ export class ConversationService {
     );
   }
 
-  /** Close/compact if idle thresholds passed. Never throws (LLM failures are logged). */
-  async maintain(): Promise<void> {
+  private maintaining?: Promise<void>;
+
+  /**
+   * Close/compact if idle thresholds passed. Never throws (LLM failures are logged). Single-flight: callers
+   * that arrive while a run is in progress share it (no double compaction / close).
+   */
+  maintain(): Promise<void> {
+    if (!this.maintaining)
+      this.maintaining = this.doMaintain()
+        .catch((e) =>
+          this.app.log.warn(
+            'conversation maintenance failed',
+            e instanceof Error ? e.message : e,
+          ),
+        )
+        .finally(() => (this.maintaining = undefined));
+    return this.maintaining;
+  }
+
+  /**
+   * `maintain()`, but wait at most `ms` (default MAINTAIN_WAIT_MS): a slow compaction (LLM) must not hold up a
+   * welcome or an ask; it finishes in the background.
+   */
+  async maintainBounded(ms = MAINTAIN_WAIT_MS): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.maintain(),
+      new Promise<void>((r) => (timer = setTimeout(r, ms))),
+    ]).finally(() => clearTimeout(timer));
+  }
+
+  private async doMaintain(): Promise<void> {
     const c = this.openRow();
     if (!c) return;
     const idle = this.app.clock.now() - c.last_active_at;
@@ -218,7 +251,39 @@ export class ConversationService {
       id,
     );
     if (!c || c.status === 'closed') return;
-    const turns = this.turns(id);
+    const { title, summary, body } = await this.titleAndSummary(c);
+    if (body) await this.app.memory.extractFrom(body, id);
+    this.app.db.run(
+      "UPDATE conversations SET status='closed', title=?, summary=? WHERE id=?",
+      title,
+      summary,
+      id,
+    );
+    this.indexConv(id);
+  }
+
+  /** Dreaming: (re)write title + summary of a closed conversation. It stays closed (never the open one). */
+  async refreshSummary(id: string): Promise<boolean> {
+    const c = this.app.db.get<CRow>(
+      'SELECT * FROM conversations WHERE id=?',
+      id,
+    );
+    if (!c || c.status !== 'closed') return false;
+    const { title, summary } = await this.titleAndSummary(c);
+    this.app.db.run(
+      'UPDATE conversations SET title=?, summary=? WHERE id=?',
+      title,
+      summary,
+      id,
+    );
+    this.indexConv(id);
+    return true;
+  }
+
+  private async titleAndSummary(
+    c: CRow,
+  ): Promise<{ title: string; summary: string; body: string | null }> {
+    const turns = this.turns(c.id);
     const body =
       (c.summary ? `Summary so far: ${c.summary}\n\n` : '') +
       renderTurns(turns);
@@ -227,31 +292,23 @@ export class ConversationService {
       60,
     );
     let summary = c.summary ?? clip(renderTurns(turns), 400);
-    if (turns.length || c.summary) {
-      try {
-        const raw = await this.app.providers.text(
-          'Return ONLY JSON {"title": string (max 6 words), "summary": string (max 5 short sentences)} for this conversation, in its language.',
-          body,
-        );
-        const j = extractJson(raw) as
-          { title?: string; summary?: string } | undefined;
-        if (j?.title) title = String(j.title);
-        if (j?.summary) summary = String(j.summary);
-      } catch (e) {
-        this.app.log.warn(
-          'conversation summary failed',
-          e instanceof Error ? e.message : e,
-        );
-      }
-      await this.app.memory.extractFrom(body, id);
+    if (!turns.length && !c.summary) return { title, summary, body: null };
+    try {
+      const raw = await this.app.providers.text(
+        'Return ONLY JSON {"title": string (max 6 words), "summary": string (max 5 short sentences)} for this conversation, in its language.',
+        body,
+      );
+      const j = extractJson(raw) as
+        { title?: string; summary?: string } | undefined;
+      if (j?.title) title = String(j.title);
+      if (j?.summary) summary = String(j.summary);
+    } catch (e) {
+      this.app.log.warn(
+        'conversation summary failed',
+        e instanceof Error ? e.message : e,
+      );
     }
-    this.app.db.run(
-      "UPDATE conversations SET status='closed', title=?, summary=? WHERE id=?",
-      title,
-      summary,
-      id,
-    );
-    this.indexConv(id);
+    return { title, summary, body };
   }
 
   list(limit = 30): ConversationInfo[] {

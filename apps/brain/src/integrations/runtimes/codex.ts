@@ -177,6 +177,13 @@ export class CodexRuntime implements AgentRuntimeProvider {
       ...CodexRuntime.STORE,
       '-c',
       'approval_policy="never"',
+      // Only Lotti's MCP tools: Codex's own shell/exec and web search would bypass the shell log.
+      '-c',
+      'features.shell_tool=false',
+      '-c',
+      'features.unified_exec=false',
+      '-c',
+      'web_search="disabled"',
       ...(mcp
         ? [
             '-c',
@@ -200,6 +207,8 @@ export class CodexRuntime implements AgentRuntimeProvider {
         env: this.env(mcp ? { LOTTI_TOOLS_TOKEN: mcp.bearerToken } : {}),
         cwd: this.app.config.workspaceDir,
         input: `${req.system}\n\n${req.prompt}`,
+        idleTimeoutMs:
+          this.app.settings.num('agent.silence_timeout_sec') * 1000,
         ...(req.signal ? { signal: req.signal } : {}),
       });
       const text = existsSync(outFile)

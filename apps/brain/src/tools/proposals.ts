@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { App } from '../app.ts';
 import type { ProposedAction } from '../actions.ts';
+import { clip } from '../util/text.ts';
 import type { ToolContext, ToolDef } from './registry.ts';
 
 /** Create a proposed action, attach it to the run, tell the model it is only proposed. */
@@ -13,22 +14,29 @@ export function proposeAction(
   return `Proposed "${p.title}". Nothing has happened yet: the user must tap to confirm. Tell them briefly what you proposed.`;
 }
 
-const timer = z.object({
-  minutes: z.number().min(0.1).max(1440).optional(),
-  seconds: z.number().int().min(1).max(86_400).optional(),
-  label: z.string().optional(),
+/**
+ * Phone actions run on the phone with the phone's own tool schemas (apps/ios/Lotti/PhoneTools.swift):
+ * keep these EXACTLY in sync (pinned by a test).
+ */
+export const timerSchema = z.object({
+  minutes: z.number().int().min(1).max(720).describe('length in minutes, 1 to 720'),
+  label: z.string().optional().describe("what it's for, 1 to 3 words"),
 });
-const reminder = z.object({
-  title: z.string().min(1),
+export const reminderSchema = z.object({
+  text: z.string().min(1).describe('what to remember, short'),
   due: z
     .string()
     .optional()
-    .describe('ISO 8601 date-time with offset, e.g. 2026-11-03T18:00:00+01:00'),
-  notes: z.string().optional(),
+    .describe(
+      'when, as free text the phone understands: a day and time like "tomorrow 09:00" or "monday 18:30", or just "18:30" for today',
+    ),
 });
-const nav = z.object({
-  destination: z.string().min(1).describe('Address or place name'),
-  mode: z.enum(['driving', 'walking', 'cycling', 'transit']).optional(),
+export const navSchema = z.object({
+  destination: z
+    .string()
+    .min(1)
+    .describe('the place as said, e.g. "Mauerpark" or "Kastanienallee 12"'),
+  mode: z.enum(['walk', 'bike']).optional().describe('default walk'),
 });
 const mail = z.object({
   mailId: z.string().describe('Id of the mail being answered'),
@@ -61,7 +69,7 @@ const tool = (
   ...(t.status ? { status: t.status } : {}),
   async handler(args, ctx) {
     return proposeAction(ctx, {
-      title: t.title(args),
+      title: clip(t.title(args), 140),
       target: t.target,
       tool: t.name,
       args,
@@ -73,38 +81,40 @@ export const proposalTools: ToolDef[] = [
   tool({
     name: 'set_timer',
     description: 'Propose a timer on the phone.',
-    inputSchema: timer,
+    inputSchema: timerSchema,
     target: 'phone',
-    title: (a) =>
-      `Timer ${a.minutes ? a.minutes + ' min' : (a.seconds ?? 0) + ' s'}${a.label ? ' · ' + a.label : ''}`,
+    title: (a) => `Timer ${a.minutes} min${a.label ? ' · ' + a.label : ''}`,
   }),
   tool({
     name: 'create_reminder',
     description: 'Propose a new reminder on the phone.',
-    inputSchema: reminder,
+    inputSchema: reminderSchema,
     target: 'phone',
-    title: (a) => `Reminder: ${a.title}`,
+    title: (a) => `Reminder: ${a.text}${a.due ? ' · ' + a.due : ''}`,
   }),
   tool({
     name: 'start_navigation',
-    description: 'Propose starting navigation on the phone/glasses.',
-    inputSchema: nav,
+    description:
+      'Propose turn-by-turn navigation on the glasses, walking or by bike.',
+    inputSchema: navSchema,
     target: 'phone',
-    title: (a) => `Navigate to ${a.destination}`,
+    title: (a) => `Navigate to ${a.destination}${a.mode === 'bike' ? ' by bike' : ''}`,
   }),
   tool({
     name: 'send_mail_reply',
     description: 'Propose sending a reply to a mail.',
     inputSchema: mail,
     target: 'server',
-    title: (a) => `Send reply${a.to ? ' to ' + a.to : ''}`,
+    title: (a) =>
+      `Send reply to ${a.to ?? 'the sender of mail ' + a.mailId}: "${clip(String(a.body).replace(/\s+/g, ' ').trim(), 80)}"`,
   }),
   tool({
     name: 'create_calendar_event',
     description: 'Propose a new calendar event.',
     inputSchema: event,
     target: 'server',
-    title: (a) => `Add "${a.title}" to calendar`,
+    title: (a) =>
+      `Add "${a.title}" ${a.start}–${a.end}${a.attendees?.length ? ' with ' + a.attendees.join(', ') : ''} to calendar`,
   }),
 ];
 

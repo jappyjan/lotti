@@ -51,8 +51,44 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
+const FAIL_WINDOW_MS = 10 * 60_000;
+const FAIL_PER_IP = 10;
+/** Across all addresses (a reverse proxy makes every client look like one IP, or many). */
+const FAIL_GLOBAL = 30;
+
+/** Wrong pairing codes per IP and in total, over a sliding 10 minute window. Old entries are pruned. */
+export class PairFailures {
+  private perIp = new Map<string, number[]>();
+  private all: number[] = [];
+  blocked(ip: string, now: number): boolean {
+    this.prune(now);
+    return (
+      (this.perIp.get(ip)?.length ?? 0) >= FAIL_PER_IP ||
+      this.all.length >= FAIL_GLOBAL
+    );
+  }
+  note(ip: string, now: number): void {
+    this.prune(now);
+    this.perIp.set(ip, [...(this.perIp.get(ip) ?? []), now]);
+    this.all.push(now);
+  }
+  /** Number of IPs tracked (for tests). */
+  get size(): number {
+    return this.perIp.size;
+  }
+  private prune(now: number): void {
+    const cut = now - FAIL_WINDOW_MS;
+    this.all = this.all.filter((t) => t > cut);
+    for (const [ip, ts] of this.perIp) {
+      const keep = ts.filter((t) => t > cut);
+      if (keep.length) this.perIp.set(ip, keep);
+      else this.perIp.delete(ip);
+    }
+  }
+}
+
 export function createHttpServer(app: App): Server {
-  const failures = new Map<string, { n: number; since: number }>();
+  const failures = new PairFailures();
   const server = createServer((req, res) => {
     route(app, req, res, failures).catch((e) => {
       if (e instanceof HttpError)
@@ -71,7 +107,7 @@ async function route(
   app: App,
   req: IncomingMessage,
   res: ServerResponse,
-  failures: Map<string, { n: number; since: number }>,
+  failures: PairFailures,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://x');
   const path = url.pathname;
@@ -82,9 +118,8 @@ async function route(
 
   if (path === '/api/v1/pair' && method === 'POST') {
     const ip = req.socket.remoteAddress ?? '?';
-    const f = failures.get(ip);
-    const now = Date.now();
-    if (f && now - f.since < 10 * 60_000 && f.n >= 10)
+    const now = app.clock.now();
+    if (failures.blocked(ip, now))
       throw new HttpError(429, 'Too many attempts');
     const b = (await readJson(req)) as { code?: string; deviceName?: string };
     const r =
@@ -92,13 +127,8 @@ async function route(
         ? app.auth.pair(b.code, String(b.deviceName ?? 'device'))
         : null;
     if (!r) {
-      failures.set(
-        ip,
-        !f || now - f.since >= 10 * 60_000
-          ? { n: 1, since: now }
-          : { n: f.n + 1, since: f.since },
-      );
-      throw new HttpError(401, 'Invalid or used pairing code');
+      failures.note(ip, now);
+      throw new HttpError(401, 'Invalid, used or expired pairing code');
     }
     app.log.info(`paired device ${b.deviceName ?? 'device'}`);
     return send(res, 200, { token: r.token });
@@ -116,7 +146,14 @@ async function route(
         403,
         'Only from the server itself (see the server logs)',
       );
-    const code = app.auth.currentPairingCode() ?? app.auth.newPairingCode();
+    // Anything on this host can reach loopback (the agent's shell, web_fetch, ...): once a device is
+    // paired, new codes come only from the app (pairing.new_code).
+    if (app.auth.hasDevices())
+      throw new HttpError(
+        403,
+        'Already paired: create a pairing code in the app.',
+      );
+    const code = app.auth.ensureStartupCode()!;
     app.log.info(`Pairing code: ${code}`);
     return send(res, 200, { code });
   }
@@ -149,7 +186,9 @@ async function route(
       return send(res, 200, app.ops.describe('app'));
     const m = /^\/api\/v1\/ops\/([\w.]+)$/.exec(path);
     if (m && method === 'POST') {
-      const r = await app.ops.invoke(m[1]!, await readJson(req), 'app');
+      const r = await app.ops.invoke(m[1]!, await readJson(req), 'app', {
+        deviceId: device.id,
+      });
       if (!r.ok)
         return send(res, r.error.startsWith('Unknown operation') ? 404 : 400, {
           ok: false,

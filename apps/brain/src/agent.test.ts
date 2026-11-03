@@ -74,7 +74,7 @@ test('proposal tools give actions (max 2) and never act by themselves', async ()
   t.mock.script(
     calls(
       { id: '1', name: 'set_timer', args: { minutes: 10, label: 'Tee' } },
-      { id: '2', name: 'create_reminder', args: { title: 'Müll' } },
+      { id: '2', name: 'create_reminder', args: { text: 'Müll' } },
       {
         id: '3',
         name: 'start_navigation',
@@ -225,4 +225,44 @@ test('memories and skill index go into the system prompt', async () => {
   const sys = (t.mock.calls[0]!.messages[0] as any).content as string;
   assert.match(sys, /Jan wohnt in Hamburg/);
   assert.match(sys, /wetter: Wetter-Routine/);
+});
+
+test('time zone: the prompt shows the phone\'s local time (+01:00) and background work remembers the offset', async () => {
+  const { handle } = await import('./server/ws.ts');
+  const prev = process.env.TZ;
+  delete process.env.TZ;
+  try {
+    const t = makeApp({ start: Date.parse('2026-11-03T07:15:00Z') });
+    const sent: any[] = [];
+    const conn = { id: 'c', deviceId: 'd', deviceName: 'x', ready: true, send: (m: any) => sent.push(m), close() {} };
+    t.app.hub.add(conn);
+    t.mock.script(answer('ok'));
+    await handle(t.app, conn, {
+      type: 'ask',
+      id: 'tz',
+      text: 'Wie spät ist es?',
+      channel: 'phone',
+      locale: 'de',
+      now: '2026-11-03T08:15:00+01:00',
+    });
+    for (let i = 0; i < 50 && !sent.some((m) => m.type === 'answer'); i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const sys = (t.mock.calls[0]!.messages[0] as any).content as string;
+    assert.match(sys, /Now: 2026-11-03 Dienstag 08:15 \(local time, UTC\+01:00\)/);
+    assert.equal(t.app.settings.displayOffsetMin(), 60, 'remembered for background work');
+    t.mock.script(text('NOTHING'));
+    await runJobPrompt(t.app, 'job');
+    assert.match((t.mock.calls[1]!.messages[0] as any).content, /Now: 2026-11-03 Tuesday 08:15 \(local time, UTC\+01:00\)/);
+  } finally {
+    if (prev !== undefined) process.env.TZ = prev;
+  }
+});
+
+test('catch-up prompt does not tell the model to create inbox items', async () => {
+  const t = makeApp();
+  t.mock.script(text('NOTHING'));
+  await t.app.catchup.generate('away');
+  const sys = (t.mock.calls[0]!.messages[0] as any).content as string;
+  assert.ok(!/inbox_create/.test(sys), 'no inbox rule');
+  assert.match(sys, /do not create inbox items/);
 });

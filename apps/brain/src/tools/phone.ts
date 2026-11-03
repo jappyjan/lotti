@@ -9,7 +9,12 @@ export const locationTool: ToolDef = {
   kind: 'phone',
   status: { de: 'Frage Standort ab …', en: 'Getting your location …' },
   async handler(_args, { app, run }) {
-    const r = await app.hub.readLocation('agent', run.askId, run.signal);
+    const r = await app.hub.readLocation(
+      'agent',
+      run.askId,
+      run.signal,
+      run.connId,
+    );
     return r.ok ? r.text : `Could not get the location: ${r.text}`;
   },
 };
@@ -29,6 +34,7 @@ export const remindersTool: ToolDef = {
     const r = await app.hub.callPhone('reminders', args, {
       ...(run.askId ? { askId: run.askId } : {}),
       ...(run.signal ? { signal: run.signal } : {}),
+      ...(run.connId ? { connId: run.connId } : {}),
     });
     return r.ok ? r.text : `Could not read reminders: ${r.text}`;
   },

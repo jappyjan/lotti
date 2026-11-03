@@ -78,14 +78,24 @@ export class Hub {
   }
 
   // ---- phone tools -------------------------------------------------------
-  /** Ask the phone to run a tool; 10 s timeout. The most recently connected socket is used. */
+  /**
+   * Ask the phone to run a tool; 10 s timeout. Goes to the socket that asked (`connId`), else (jobs,
+   * catch-up, or that socket is gone) to the most recently connected one.
+   */
   callPhone(
     name: string,
     args: Record<string, unknown>,
-    opts: { askId?: string; signal?: AbortSignal; callId?: string } = {},
+    opts: {
+      askId?: string;
+      signal?: AbortSignal;
+      callId?: string;
+      connId?: string;
+    } = {},
   ): Promise<PhoneResult> {
     const conns = this.connections();
-    const conn = conns[conns.length - 1];
+    const conn =
+      (opts.connId && conns.find((c) => c.id === opts.connId)) ||
+      conns[conns.length - 1];
     if (!conn)
       return Promise.resolve({
         ok: false,
@@ -121,8 +131,10 @@ export class Hub {
     });
   }
 
-  toolResult(callId: string, ok: boolean, text: string): void {
-    this.pending.get(callId)?.resolve({ ok, text });
+  /** A phone's answer; only the socket the call went to can answer it. */
+  toolResult(callId: string, ok: boolean, text: string, connId?: string): void {
+    const p = this.pending.get(callId);
+    if (p && (!connId || p.connId === connId)) p.resolve({ ok, text });
   }
 
   /** `location` phone tool wrapper: location_access start/end around the call + log. */
@@ -130,6 +142,7 @@ export class Hub {
     source: 'agent' | 'catchup',
     askId?: string,
     signal?: AbortSignal,
+    connId?: string,
   ): Promise<PhoneResult> {
     if (!this.app.settings.bool('location.enabled'))
       return {
@@ -148,7 +161,12 @@ export class Hub {
       r = await this.callPhone(
         'location',
         {},
-        { ...(askId ? { askId } : {}), ...(signal ? { signal } : {}), callId },
+        {
+          ...(askId ? { askId } : {}),
+          ...(signal ? { signal } : {}),
+          ...(connId ? { connId } : {}),
+          callId,
+        },
       );
     } finally {
       this.broadcast({
@@ -171,17 +189,21 @@ export class Hub {
   }
 
   // ---- asks ----------------------------------------------------------------
-  registerAsk(id: string): AbortController {
-    this.asks.get(id)?.abort();
+  // Keyed by connection + ask id: two devices may send the same id without cancelling each other.
+  private askKey = (connId: string, id: string) => `${connId}\u0000${id}`;
+  registerAsk(connId: string, id: string): AbortController {
+    const key = this.askKey(connId, id);
+    this.asks.get(key)?.abort();
     const ac = new AbortController();
-    this.asks.set(id, ac);
+    this.asks.set(key, ac);
     return ac;
   }
-  finishAsk(id: string, ac: AbortController): void {
-    if (this.asks.get(id) === ac) this.asks.delete(id);
+  finishAsk(connId: string, id: string, ac: AbortController): void {
+    const key = this.askKey(connId, id);
+    if (this.asks.get(key) === ac) this.asks.delete(key);
   }
-  cancelAsk(id: string): boolean {
-    const ac = this.asks.get(id);
+  cancelAsk(connId: string, id: string): boolean {
+    const ac = this.asks.get(this.askKey(connId, id));
     if (!ac) return false;
     const e = new Error('cancelled');
     e.name = 'CancelledError';

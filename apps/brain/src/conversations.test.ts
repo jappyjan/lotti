@@ -172,3 +172,51 @@ test('compaction failure leaves turns untouched', async () => {
     4,
   );
 });
+
+test('maintain() is single-flight: concurrent callers share one close (no double LLM work)', async () => {
+  const t = makeApp();
+  await chat(t, 'Hallo');
+  t.clock.advanceMinutes(61);
+  let calls = 0;
+  const slow = async () => {
+    calls++;
+    await new Promise((r) => setTimeout(r, 30));
+    return text('{"title":"Hallo","summary":"Gruß."}');
+  };
+  t.mock.script(slow, slow, slow, slow);
+  const p1 = t.app.conversations.maintain();
+  const p2 = t.app.conversations.maintain();
+  assert.equal(p1, p2, 'same promise');
+  await Promise.all([p1, p2]);
+  assert.equal(calls, 2, 'one title/summary + one memory extraction');
+  assert.equal(t.app.conversations.list()[0]!.status, 'closed');
+});
+
+test('hello does not wait longer than HELLO_MAINTAIN_MS for maintenance', async () => {
+  const { handle, HELLO_MAINTAIN_MS } = await import('./server/ws.ts');
+  assert.equal(HELLO_MAINTAIN_MS, 3000);
+  const t = makeApp();
+  let release!: () => void;
+  t.app.conversations.maintain = () => new Promise<void>((r) => (release = r));
+  const sent: any[] = [];
+  const conn = {
+    id: 'c1',
+    deviceId: 'd',
+    deviceName: 'x',
+    ready: false,
+    send: (m: any) => sent.push(m),
+    close() {},
+  };
+  const { mock } = await import('node:test');
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const p = handle(t.app, conn, { type: 'hello' });
+    await Promise.resolve();
+    mock.timers.tick(HELLO_MAINTAIN_MS);
+    await p;
+    assert.equal(sent[0].type, 'welcome');
+  } finally {
+    mock.timers.reset();
+    release();
+  }
+});

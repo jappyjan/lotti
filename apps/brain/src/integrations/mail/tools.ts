@@ -29,7 +29,7 @@ export const mailSearchTool: ToolDef = {
       ? r
           .map(
             (m) =>
-              `- id=${m.id} | ${humanLocal(m.receivedAt, run.locale)} | ${m.unread ? 'UNREAD | ' : ''}${m.from} | ${m.subject}\n  ${m.snippet.slice(0, 160)}`,
+              `- id=${m.id} | ${humanLocal(m.receivedAt, run.locale, run.utcOffsetMin)} | ${m.unread ? 'UNREAD | ' : ''}${m.from} | ${m.subject}\n  ${m.snippet.slice(0, 160)}`,
           )
           .join('\n')
       : 'No mail found.';
@@ -50,6 +50,6 @@ export const mailReadTool: ToolDef = {
     const mail = app.integrations.mail;
     if (!mail?.read) return NONE;
     const m = await mail.read(a.id);
-    return `From: ${m.from}\nTo: ${m.to}\nDate: ${humanLocal(m.receivedAt, run.locale)}\nSubject: ${m.subject}\n\n${m.body.slice(0, 12_000)}`;
+    return `From: ${m.from}\nTo: ${m.to}\nDate: ${humanLocal(m.receivedAt, run.locale, run.utcOffsetMin)}\nSubject: ${m.subject}\n\n${m.body.slice(0, 12_000)}`;
   },
 };

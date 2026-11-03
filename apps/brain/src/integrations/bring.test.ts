@@ -44,13 +44,18 @@ function bringApp(extra: Parameters<typeof mockFetch>[0] = []) {
       u: '/bringlists/',
       res: (r) => {
         const f = new URLSearchParams(r.body);
-        if (f.get('purchase'))
+        if (f.get('purchase')) {
+          // like Bring!: adding an item that is on the list replaces its specification
+          lists.items.purchase = lists.items.purchase.filter(
+            (i) => i.name !== f.get('purchase'),
+          );
           lists.items.purchase.push({
             name: f.get('purchase')!,
             ...(f.get('specification')
               ? { specification: f.get('specification')! }
               : {}),
           } as any);
+        }
         if (f.get('recently'))
           lists.items.purchase = lists.items.purchase.filter(
             (i) => i.name !== f.get('recently'),
@@ -220,4 +225,26 @@ test('bring: expired session re-logs in once; API failure is clear', async () =>
   const id = (await login(t2)).result;
   assert.equal(id.ok, false);
   assert.match(id.error, /HTTP 500/);
+});
+
+test('bring undo restores what was there: remove keeps the specification, add of an existing item restores its old one', async () => {
+  const { t } = bringApp();
+  await login(t);
+  const items = async () =>
+    ((await t.app.ops.invoke('bring.items', {}, 'app')) as any).result.map(
+      (i: any) => `${i.name}${i.spec ? ` (${i.spec})` : ''}`,
+    );
+  const rm = (await t.app.ops.invoke('bring.remove', { item: 'Brot' }, 'agent')) as any;
+  assert.ok(!(await items()).some((x: string) => x.startsWith('Brot')));
+  assert.equal((await t.app.actions.undo(rm.undoHandle.id)).ok, true);
+  assert.ok((await items()).includes('Brot (1 Stk)'), 'specification is back');
+
+  const add = (await t.app.ops.invoke('bring.add', { item: 'Brot', spec: '2 Stk' }, 'agent')) as any;
+  assert.ok((await items()).includes('Brot (2 Stk)'));
+  assert.equal((await t.app.actions.undo(add.undoHandle.id)).ok, true);
+  assert.ok((await items()).includes('Brot (1 Stk)'), 'still on the list with the old specification');
+
+  const fresh = (await t.app.ops.invoke('bring.add', { item: 'Milch' }, 'agent')) as any;
+  await t.app.actions.undo(fresh.undoHandle.id);
+  assert.ok(!(await items()).includes('Milch'), 'a new item is removed again');
 });

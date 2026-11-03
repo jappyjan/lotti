@@ -58,9 +58,11 @@ export class MemoryService {
   ): Memory {
     const t = text.trim();
     if (!t) throw new Error('Nothing to remember.');
-    const dup = this.app.db
-      .all<Row>("SELECT * FROM memories WHERE status='active'")
-      .find((r) => norm(r.text) === norm(t));
+    const n = norm(t);
+    const dup = this.app.db.get<Row>(
+      "SELECT * FROM memories WHERE norm=? AND status='active' LIMIT 1",
+      n,
+    );
     if (dup) {
       this.app.db.run(
         'UPDATE memories SET last_used_at=? WHERE id=?',
@@ -72,9 +74,10 @@ export class MemoryService {
     const id = opts.id ?? newId('mem_');
     this.app.db.tx(() => {
       this.app.db.run(
-        'INSERT INTO memories(id,text,kind,source_conversation,created_at,supersedes,status) VALUES(?,?,?,?,?,?,?)',
+        'INSERT INTO memories(id,text,norm,kind,source_conversation,created_at,supersedes,status) VALUES(?,?,?,?,?,?,?,?)',
         id,
         t,
+        n,
         opts.kind ?? 'fact',
         opts.source ?? null,
         opts.createdAt ?? this.app.clock.now(),
@@ -89,6 +92,22 @@ export class MemoryService {
       if (opts.supersedes) this.supersede(opts.supersedes);
     });
     return this.get(id)!;
+  }
+
+  /** Fill `norm` for rows written before it existed (once, at start-up). */
+  backfillNorm(): void {
+    const rows = this.app.db.all<{ id: string; text: string }>(
+      'SELECT id, text FROM memories WHERE norm IS NULL',
+    );
+    if (!rows.length) return;
+    this.app.db.tx(() => {
+      for (const r of rows)
+        this.app.db.run(
+          'UPDATE memories SET norm=? WHERE id=?',
+          norm(r.text),
+          r.id,
+        );
+    });
   }
 
   /** Mark superseded: kept for history, no longer searched or shown to the model. */
@@ -156,8 +175,9 @@ export class MemoryService {
         );
       if (patch.text?.trim()) {
         this.app.db.run(
-          'UPDATE memories SET text=? WHERE id=?',
+          'UPDATE memories SET text=?, norm=? WHERE id=?',
           patch.text.trim(),
+          norm(patch.text.trim()),
           id,
         );
         if (cur.status === 'active') {

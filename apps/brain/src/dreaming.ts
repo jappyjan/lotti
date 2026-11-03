@@ -11,13 +11,65 @@ export interface DreamReport {
   stats: Record<string, number>;
 }
 
-function jaccard(a: string, b: string): number {
-  const x = new Set(norm(a).split(' '));
-  const y = new Set(norm(b).split(' '));
+const DUP_THRESHOLD = 0.8;
+/** Memories per contradiction prompt (grouped by kind). */
+export const CONTRADICTION_BATCH = 150;
+const yieldNow = () => new Promise<void>((r) => setImmediate(r));
+
+function jaccard(x: Set<string>, y: Set<string>): number {
   let inter = 0;
   for (const w of x) if (y.has(w)) inter++;
   const uni = x.size + y.size - inter;
   return uni ? inter / uni : 0;
+}
+
+/**
+ * Near-duplicate pairs (Jaccard >= 0.8 on normalised words, same kind) without comparing all pairs:
+ * prefix filtering. Words are ordered by rarity; two sets that reach the threshold must share a word among
+ * the first |x| - ceil(t*|x|) + 1 of either set, so only those are compared. Exact, not a heuristic.
+ * Calls `onDup(keep, drop)` with keep = the earlier item in `items` (newest first).
+ */
+export async function findNearDuplicates<T extends { id: string; kind: string; text: string }>(
+  items: T[],
+  onDup: (keep: T, drop: T) => void,
+): Promise<void> {
+  const sets = items.map(
+    (m) => new Set(norm(m.text).split(' ').filter(Boolean)),
+  );
+  const freq = new Map<string, number>();
+  for (const s of sets) for (const w of s) freq.set(w, (freq.get(w) ?? 0) + 1);
+  const index = new Map<string, number[]>(); // kind + word -> item indexes
+  const prefixes = sets.map((s, i) => {
+    const words = [...s].sort(
+      (a, b) => freq.get(a)! - freq.get(b)! || (a < b ? -1 : 1),
+    );
+    const p = words.slice(
+      0,
+      words.length - Math.ceil(DUP_THRESHOLD * words.length) + 1,
+    );
+    for (const w of p) {
+      const k = `${items[i]!.kind}\u0000${w}`;
+      const l = index.get(k);
+      if (l) l.push(i);
+      else index.set(k, [i]);
+    }
+    return p;
+  });
+  const gone = new Set<number>();
+  for (let i = 0; i < items.length; i++) {
+    if (i % 500 === 499) await yieldNow();
+    if (gone.has(i)) continue;
+    const cands = new Set<number>();
+    for (const w of prefixes[i]!)
+      for (const j of index.get(`${items[i]!.kind}\u0000${w}`) ?? [])
+        if (j > i && !gone.has(j)) cands.add(j);
+    for (const j of [...cands].sort((a, b) => a - b)) {
+      if (jaccard(sets[i]!, sets[j]!) >= DUP_THRESHOLD) {
+        gone.add(j);
+        onDup(items[i]!, items[j]!);
+      }
+    }
+  }
 }
 
 /** Nightly housekeeping: dedupe/merge, resolve contradictions (newest wins), drop stale, tidy skills, refresh summaries. */
@@ -39,37 +91,40 @@ export class DreamingService {
     // 1. dedupe: near-identical memories -> keep newest, supersede older
     const active = app.memory.list({ limit: 5000 }); // newest first
     const gone = new Set<string>();
-    for (let i = 0; i < active.length; i++) {
-      const a = active[i]!;
-      if (gone.has(a.id)) continue;
-      for (let j = i + 1; j < active.length; j++) {
-        const b = active[j]!;
-        if (gone.has(b.id) || a.kind !== b.kind) continue;
-        if (jaccard(a.text, b.text) >= 0.8) {
-          app.memory.supersede(b.id);
-          gone.add(b.id);
-          stats.merged++;
-          lines.push(`Merged duplicate: "${b.text}" -> "${a.text}"`);
-        }
-      }
-    }
+    await findNearDuplicates(active, (a, b) => {
+      app.memory.supersede(b.id);
+      gone.add(b.id);
+      stats.merged++;
+      lines.push(`Merged duplicate: "${b.text}" -> "${a.text}"`);
+    });
 
-    // 2. contradictions: ask the LLM; newest wins
+    // 2. contradictions: ask the LLM per kind, at most CONTRADICTION_BATCH memories a call; newest wins
     const rest = active.filter((m) => !gone.has(m.id));
-    if (rest.length >= 2) {
+    const byKind = new Map<string, typeof rest>();
+    for (const m of rest) byKind.set(m.kind, [...(byKind.get(m.kind) ?? []), m]);
+    const batches: (typeof rest)[] = [];
+    for (const group of byKind.values())
+      for (let i = 0; i < group.length; i += CONTRADICTION_BATCH)
+        batches.push(group.slice(i, i + CONTRADICTION_BATCH));
+    for (const batch of batches.filter((b) => b.length >= 2)) {
+      await yieldNow();
       try {
         const raw = await app.providers.text(
           'You review a list of memories about one user. Find pairs that CONTRADICT each other (e.g. two different home towns). ' +
             'Return ONLY JSON: [{"a":"<id>","b":"<id>"}] (empty array if none). Do not list mere duplicates or compatible facts.',
-          rest.map((m) => `${m.id} [${m.createdAt}] ${m.text}`).join('\n'),
+          batch.map((m) => `${m.id} [${m.createdAt}] ${m.text}`).join('\n'),
         );
         const j = extractJson(raw);
         if (Array.isArray(j)) {
           for (const p of j) {
-            const x = rest.find((m) => m.id === p?.a);
-            const y = rest.find((m) => m.id === p?.b);
-            if (!x || !y || gone.has(x.id) || gone.has(y.id)) continue;
-            const [newer, older] = x.createdAt >= y.createdAt ? [x, y] : [y, x];
+            const x = batch.find((m) => m.id === p?.a);
+            const y = batch.find((m) => m.id === p?.b);
+            if (!x || !y || x === y || gone.has(x.id) || gone.has(y.id))
+              continue;
+            const [newer, older] =
+              Date.parse(x.createdAt) >= Date.parse(y.createdAt)
+                ? [x, y]
+                : [y, x];
             app.db.run(
               'UPDATE memories SET supersedes=? WHERE id=?',
               older.id,
@@ -124,11 +179,8 @@ export class DreamingService {
     const missing = app.db.all<{ id: string }>(
       "SELECT id FROM conversations WHERE status='closed' AND (summary IS NULL OR summary='') LIMIT 20",
     );
-    for (const c of missing) {
-      app.db.run("UPDATE conversations SET status='open' WHERE id=?", c.id);
-      await app.conversations.close(c.id);
-      stats.summaries++;
-    }
+    for (const c of missing)
+      if (await app.conversations.refreshSummary(c.id)) stats.summaries++;
 
     const report = lines.length ? lines.join('\n') : 'Nothing to tidy.';
     const id = newId('dream_');

@@ -19,11 +19,8 @@ export function registerIntegrations(app: App): void {
   i.connectors.set('bring', bringConnector);
   for (const k of connectorKinds) i.connectors.set(k, makeConnector(k));
 
-  const cal = new MergedCalendar(app);
-  i.calendar = cal;
-  app.actions.register('create_calendar_event', (args) =>
-    cal.createEvent(args),
-  );
+  // The `create_calendar_event` server action (tools/proposals.ts) runs i.calendar.createEvent.
+  i.calendar = new MergedCalendar(app);
   const mail = new MergedMail(app);
   i.mail = mail;
 

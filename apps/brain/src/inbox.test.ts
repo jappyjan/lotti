@@ -130,11 +130,12 @@ test('phone events and sync update the inbox both ways', async () => {
     const b = t.app.inbox.create({ title: 'B' });
     c.send({ type: 'inbox_event', itemId: a.id, event: 'shown' });
     c.send({ type: 'inbox_event', itemId: b.id, event: 'dismissed' });
-    await new Promise((r) => setTimeout(r, 100));
+    // messages are handled in order: the full sync answers after both events were applied
+    const fullP = c.next('inbox', 3000, (m) => m.full === true);
+    c.send({ type: 'inbox_sync' });
+    const full = await fullP;
     assert.equal(t.app.inbox.get(a.id)!.status, 'seen');
     assert.equal(t.app.inbox.get(b.id)!.status, 'dismissed');
-    c.send({ type: 'inbox_sync' });
-    const full = await c.next('inbox');
     assert.equal(full.full, true);
     assert.deepEqual(
       full.items.map((i: any) => [i.id, i.status]),

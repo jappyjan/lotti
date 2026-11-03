@@ -201,6 +201,153 @@ test('web_fetch: strips html, blocks private hosts, honours the setting', async 
   );
 });
 
+test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirects are all checked', async () => {
+  const { isPrivateAddress } = await import('./tools/web.ts');
+  for (const ip of [
+    '127.0.0.1',
+    '10.1.2.3',
+    '100.64.0.7',
+    '100.127.255.255',
+    '169.254.169.254',
+    '172.16.0.1',
+    '192.168.1.1',
+    '0.0.0.0',
+    '224.0.0.1',
+    '255.255.255.255',
+    '::',
+    '::1',
+    'fc00::1',
+    'fd12:3456::1',
+    'fe80::1',
+    'ff02::1',
+    '::ffff:127.0.0.1',
+    '::ffff:7f00:1',
+    '::ffff:a9fe:a9fe',
+    '::127.0.0.1',
+    '[::1]',
+  ])
+    assert.equal(isPrivateAddress(ip), true, ip);
+  for (const ip of ['8.8.8.8', '100.128.0.1', '172.32.0.1', '2606:4700::1111', '::ffff:8.8.8.8'])
+    assert.equal(isPrivateAddress(ip), false, ip);
+
+  const hits: string[] = [];
+  const t = makeApp({
+    fetch: async (u: any) => {
+      hits.push(String(u));
+      const url = new URL(String(u));
+      if (url.pathname === '/to-local')
+        return new Response('', {
+          status: 302,
+          headers: { location: 'http://127.0.0.1:8787/api/v1/pair/code' },
+        });
+      if (url.pathname === '/hop')
+        return new Response('', {
+          status: 301,
+          headers: { location: '/final' },
+        });
+      if (url.pathname === '/loop')
+        return new Response('', { status: 302, headers: { location: '/loop' } });
+      return new Response('x'.repeat(100_000), {
+        headers: { 'content-type': 'text/plain' },
+      });
+    },
+  });
+  const blocked = async (url: string) =>
+    assert.match((await run(t, 'web_fetch', { url })).text, /blocked/, url);
+  await blocked('http://[::ffff:7f00:1]/');
+  await blocked('http://[::ffff:127.0.0.1]/');
+  await blocked('http://2130706433/'); // decimal 127.0.0.1
+  await blocked('http://0x7f.1/');
+  await blocked('http://100.64.1.1/'); // CGNAT
+  t.setLookup(async (h) => (h === 'evil.example' ? ['8.8.8.8', '10.0.0.5'] : ['93.184.215.14']));
+  await blocked('https://evil.example/'); // ANY private answer blocks
+  assert.equal(hits.length, 0, 'nothing was fetched');
+
+  await blocked('https://example.com/to-local');
+  assert.deepEqual(hits, ['https://example.com/to-local'], 'redirect target not fetched');
+  hits.length = 0;
+  const ok = await run(t, 'web_fetch', { url: 'https://example.com/hop', maxChars: 500 });
+  assert.match(ok.text, /^HTTP 200/);
+  assert.match(ok.text, /truncated at 500/);
+  assert.deepEqual(hits, ['https://example.com/hop', 'https://example.com/final']);
+  assert.match(
+    (await run(t, 'web_fetch', { url: 'https://example.com/loop' })).text,
+    /Too many redirects/,
+  );
+});
+
+test('web_fetch reads at most ~maxChars*4 bytes of the body', async () => {
+  let pulled = 0;
+  const t = makeApp({
+    fetch: async () =>
+      new Response(
+        new ReadableStream({
+          pull(c) {
+            pulled += 1000;
+            if (pulled > 1_000_000) c.close();
+            else c.enqueue(new TextEncoder().encode('y'.repeat(1000)));
+          },
+        }),
+        { headers: { 'content-type': 'text/plain' } },
+      ),
+  });
+  const r = await run(t, 'web_fetch', { url: 'https://example.com/big', maxChars: 1000 });
+  assert.match(r.text, /truncated at 1000/);
+  assert.ok(pulled < 20_000, `pulled ${pulled} bytes`);
+});
+
+test('phone action proposals use exactly the phone tool schemas (apps/ios/Lotti/PhoneTools.swift)', async () => {
+  const t = makeApp();
+  const params = (name: string) => {
+    const spec = t.app.tools.specs([t.app.tools.get(name)!])[0]!.parameters as any;
+    return {
+      props: Object.fromEntries(
+        Object.entries(spec.properties).map(([k, v]: [string, any]) => [
+          k,
+          { type: v.type, ...(v.enum ? { enum: v.enum } : {}), ...(v.minimum !== undefined ? { min: v.minimum, max: v.maximum } : {}) },
+        ]),
+      ),
+      required: spec.required ?? [],
+    };
+  };
+  assert.deepEqual(params('set_timer'), {
+    props: { minutes: { type: 'integer', min: 1, max: 720 }, label: { type: 'string' } },
+    required: ['minutes'],
+  });
+  assert.deepEqual(params('create_reminder'), {
+    props: { text: { type: 'string' }, due: { type: 'string' } },
+    required: ['text'],
+  });
+  assert.match(
+    (t.app.tools.specs([t.app.tools.get('create_reminder')!])[0]!.parameters as any).properties.due.description,
+    /tomorrow 09:00/,
+  );
+  assert.deepEqual(params('start_navigation'), {
+    props: { destination: { type: 'string' }, mode: { type: 'string', enum: ['walk', 'bike'] } },
+    required: ['destination'],
+  });
+  assert.match((await run(t, 'set_timer', { minutes: 0.5 })).text, /Invalid arguments/);
+  assert.match((await run(t, 'set_timer', { minutes: 721 })).text, /Invalid arguments/);
+  assert.match((await run(t, 'start_navigation', { destination: 'x', mode: 'driving' })).text, /Invalid arguments/);
+});
+
+test('confirmation titles name what runs: mail recipient + body, calendar time + attendees', async () => {
+  const t = makeApp();
+  await run(t, 'send_mail_reply', { mailId: 'm1', to: 'boss@example.com', body: 'Ja,   passt mir.\nBis morgen' });
+  await run(t, 'create_calendar_event', {
+    title: 'Zahnarzt',
+    start: '2026-11-04T10:00:00+01:00',
+    end: '2026-11-04T11:00:00+01:00',
+    attendees: ['a@example.com'],
+  });
+  const titles = t.app.db.all<{ title: string }>('SELECT title FROM actions ORDER BY rowid').map((r) => r.title);
+  assert.equal(titles[0], 'Send reply to boss@example.com: "Ja, passt mir. Bis morgen"');
+  assert.equal(titles[1], 'Add "Zahnarzt" 2026-11-04T10:00:00+01:00–2026-11-04T11:00:00+01:00 with a@example.com to calendar');
+  await run(t, 'send_mail_reply', { mailId: 'm1', body: 'x'.repeat(500) });
+  const long = t.app.db.all<{ title: string }>('SELECT title FROM actions ORDER BY rowid DESC LIMIT 1')[0]!.title;
+  assert.ok(long.length <= 140, long);
+});
+
 test('phone tools without a phone say so; skill_load and conversation tools work', async () => {
   const t = makeApp();
   assert.match((await run(t, 'location', {})).text, /not connected/);
@@ -216,6 +363,12 @@ test('phone tools without a phone say so; skill_load and conversation tools work
 
 test('proposed server actions run only after perform; handlers are stubs until connectors exist', async () => {
   const t = makeApp();
+  // the spy is in place before the proposal: proposing must not call it
+  let created: unknown;
+  t.app.integrations.calendar = {
+    events: async () => [],
+    createEvent: async (a) => ((created = a), { ok: true, text: 'Angelegt' }),
+  };
   const r = await run(t, 'create_calendar_event', {
     title: 'Zahnarzt',
     start: '2026-11-04T10:00:00+01:00',
@@ -226,11 +379,6 @@ test('proposed server actions run only after perform; handlers are stubs until c
     'SELECT * FROM actions',
   )!;
   assert.equal(action.status, 'proposed');
-  let created: unknown;
-  t.app.integrations.calendar = {
-    events: async () => [],
-    createEvent: async (a) => ((created = a), { ok: true, text: 'Angelegt' }),
-  };
   assert.equal(created, undefined); // nothing ran on proposal
   const p = await t.app.actions.perform(action.id);
   assert.deepEqual([p.ok, p.text], [true, 'Angelegt']);

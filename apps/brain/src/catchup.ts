@@ -30,7 +30,6 @@ const ACTIVITY = new Set<string>([
 ]);
 /** Phone use: breaks "slept". */
 const PHONE_USE = new Set<string>(['phone_unlock', 'app_open']);
-const QUIET_PHONE = new Set<string>(['phone_charging', 'phone_still']);
 
 export type ReturnReason = 'away' | 'slept';
 
@@ -73,7 +72,8 @@ export function nightOverlapMs(
  * Presence signals -> return detection -> one short brief.
  *  - away: no activity for catchup.away_hours (default 2 h), then activity again.
  *  - slept: no phone use across >= catchup.sleep_min_hours of the night window (22:00-09:00) while the phone was
- *    charging/still, even if the glasses were never worn (works without wear events).
+ *    quiet: charging (a state: phone_charging .. phone_unplugged) for >= 1 h of that night, or reported still.
+ *    Works without wear events.
  * Once per return: a brief resets the reference point (lastCatchup).
  */
 export class CatchupService {
@@ -107,7 +107,7 @@ export class CatchupService {
     app.db.run(
       'DELETE FROM presence_events WHERE id < (SELECT MAX(id) - 2000 FROM presence_events)',
     );
-    if (QUIET_PHONE.has(event)) this.setKv('last_quiet_phone', at);
+    if (event === 'phone_still') this.setKv('last_still', at);
 
     let decision: PresenceDecision = { triggered: false };
     if (ACTIVITY.has(event)) {
@@ -148,12 +148,11 @@ export class CatchupService {
         s.str('catchup.night_start'),
         s.str('catchup.night_end'),
       );
-      const quietAt = this.kv('last_quiet_phone');
-      if (
-        overlap >= s.num('catchup.sleep_min_hours') * HOUR &&
-        quietAt !== null &&
-        quietAt >= spanStart
-      ) {
+      const stillAt = this.kv('last_still');
+      const quiet =
+        this.chargingNightMs(spanStart, at) >= HOUR ||
+        (stillAt !== null && stillAt >= spanStart);
+      if (overlap >= s.num('catchup.sleep_min_hours') * HOUR && quiet) {
         return { triggered: true, reason: 'slept', awayMs: at - spanStart };
       }
     }
@@ -169,14 +168,49 @@ export class CatchupService {
     return { triggered: false };
   }
 
+  /**
+   * How long the phone was charging inside [from, to] AND the night window. Charging is a state: from a
+   * phone_charging event until the next phone_unplugged (or until `to`).
+   */
+  chargingNightMs(from: number, to: number): number {
+    const s = this.app.settings;
+    const rows = this.app.db.all<{ event: string; at: number }>(
+      "SELECT event, at FROM presence_events WHERE event IN ('phone_charging','phone_unplugged') AND at <= ? ORDER BY at, id",
+      to,
+    );
+    let since: number | null = null;
+    let total = 0;
+    const add = (a: number, b: number) => {
+      const x = Math.max(a, from);
+      const y = Math.min(b, to);
+      if (y > x)
+        total += nightOverlapMs(
+          x,
+          y,
+          s.str('catchup.night_start'),
+          s.str('catchup.night_end'),
+        );
+    };
+    for (const r of rows) {
+      if (r.event === 'phone_charging') since ??= r.at;
+      else if (since !== null) {
+        add(since, r.at);
+        since = null;
+      }
+    }
+    if (since !== null) add(since, to);
+    return total;
+  }
+
   /** Build one short brief via the agent, or nothing if irrelevant. Stores and sends it. */
   async generate(
     reason: ReturnReason | 'manual' = 'manual',
   ): Promise<{ id: string; text: string } | null> {
     const app = this.app;
     const now = app.clock.now();
+    const off = app.settings.displayOffsetMin();
     const parts: string[] = [
-      `Now: ${humanLocal(now)}. Reason for this brief: ${reason === 'slept' ? 'the user just woke up' : reason === 'away' ? 'the user is back after being away' : 'requested'}.`,
+      `Now: ${humanLocal(now, 'en', off)}. Reason for this brief: ${reason === 'slept' ? 'the user just woke up' : reason === 'away' ? 'the user is back after being away' : 'requested'}.`,
     ];
     const pending = app.inbox.pending();
     parts.push(
@@ -188,21 +222,11 @@ export class CatchupService {
               .join('\n')
         : 'Pending inbox: empty.',
     );
-    const runs = app.scheduler
-      .history(undefined, 20)
-      .filter(
-        (r) =>
-          r.status === 'ok' && r.output && Date.parse(r.startedAt) > now - DAY,
-      );
-    const userRuns = runs.filter(
-      (r) => app.scheduler.get(r.jobId)?.kind === 'user',
-    );
+    const userRuns = app.scheduler.recentUserRuns(now - DAY, 10);
     if (userRuns.length)
       parts.push(
         'Recent job results:\n' +
-          userRuns
-            .map((r) => `- ${app.scheduler.get(r.jobId)?.name}: ${r.output}`)
-            .join('\n'),
+          userRuns.map((r) => `- ${r.name}: ${r.output}`).join('\n'),
       );
     if (app.integrations.calendar) {
       const ev = await app.integrations.calendar
@@ -215,7 +239,7 @@ export class CatchupService {
               .slice(0, 4)
               .map(
                 (e) =>
-                  `- ${humanLocal(e.start).slice(-5)} ${e.title}${e.location ? ' @ ' + e.location : ''}`,
+                  `- ${humanLocal(e.start, 'en', off).slice(-5)} ${e.title}${e.location ? ' @ ' + e.location : ''}`,
               )
               .join('\n'),
         );
@@ -230,9 +254,7 @@ export class CatchupService {
     const r = await runJobPrompt(
       app,
       'Write ONE short catch-up brief (max 2 sentences, same tone as usual, no greeting fluff) from the context. Only mention what matters now. If nothing is relevant, answer exactly NOTHING. Do not create inbox items.',
-      {
-        context: parts.join('\n\n'),
-      },
+      { context: parts.join('\n\n'), noInbox: true },
     );
     if (r.nothing || !r.text.trim()) return null;
     const id = newId('brief_');

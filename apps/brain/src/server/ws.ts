@@ -4,15 +4,25 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import type { App } from '../app.ts';
 import { CancelledError } from '../agent/loop.ts';
 import { PRESENCE_EVENTS } from '../catchup.ts';
-import { isoLocal, parseIso } from '../util/clock.ts';
+import { isoLocal, parseIso, parseOffsetMin } from '../util/clock.ts';
 import { newId } from '../util/crypto.ts';
+import { MAINTAIN_WAIT_MS } from '../conversations.ts';
 import type { Conn } from './hub.ts';
 
+/** `Authorization: Bearer …` only (HTTP routes never take a token from the URL: it leaks into logs). */
 export function bearerOf(req: IncomingMessage): string | undefined {
   const h = req.headers.authorization;
   if (h?.toLowerCase().startsWith('bearer ')) return h.slice(7).trim();
-  const q = new URL(req.url ?? '/', 'http://x').searchParams.get('token');
-  return q ?? undefined;
+  return undefined;
+}
+
+/** The `/ws` upgrade also accepts `?token=` (some WebSocket clients cannot set headers). */
+function wsTokenOf(req: IncomingMessage): string | undefined {
+  return (
+    bearerOf(req) ??
+    new URL(req.url ?? '/', 'http://x').searchParams.get('token') ??
+    undefined
+  );
 }
 
 const sockets = new WeakMap<Server, WebSocketServer>();
@@ -26,21 +36,42 @@ export function closeWebSockets(server: Server): void {
 export function attachWebSocket(app: App, server: Server): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
   sockets.set(server, wss);
+  // Liveness: a phone that vanished (network gone, app killed) never sends a close. Without this the hub
+  // keeps the dead socket, pushes are sent into the void and APNs never fires.
+  const alive = new WeakMap<WebSocket, boolean>();
+  const ping = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (alive.get(ws) === false) {
+        ws.terminate(); // emits 'close' -> hub.remove
+        continue;
+      }
+      alive.set(ws, false);
+      try {
+        ws.ping();
+      } catch {
+        ws.terminate();
+      }
+    }
+  }, app.config.wsPingIntervalMs);
+  ping.unref?.();
+  server.on('close', () => clearInterval(ping));
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://x');
     if (url.pathname !== '/ws') {
       socket.destroy();
       return;
     }
-    const device = app.auth.verifyDevice(bearerOf(req));
+    const device = app.auth.verifyDevice(wsTokenOf(req));
     if (!device) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
     }
-    wss.handleUpgrade(req, socket, head, (ws) =>
-      onConnection(app, ws, device.id, device.name),
-    );
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      alive.set(ws, true);
+      ws.on('pong', () => alive.set(ws, true));
+      onConnection(app, ws, device.id, device.name);
+    });
   });
   return wss;
 }
@@ -97,6 +128,9 @@ function onConnection(
   });
 }
 
+/** How long `hello` waits for conversation maintenance before welcoming (it continues in the background). */
+export const HELLO_MAINTAIN_MS = MAINTAIN_WAIT_MS;
+
 export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
   const hub = app.hub;
   switch (msg.type) {
@@ -107,7 +141,8 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
         msg.deviceName ? String(msg.deviceName) : undefined,
         msg.apnsToken ? String(msg.apnsToken) : undefined,
       );
-      await app.conversations.maintain();
+      // Compaction / closing may wait on the LLM: the app gets its welcome after at most HELLO_MAINTAIN_MS.
+      await app.conversations.maintainBounded(HELLO_MAINTAIN_MS);
       const conv = app.conversations.current(); // may broadcast `conversation new` to the others
       conn.ready = true;
       conn.send({
@@ -139,10 +174,18 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
         msg.channel === 'glasses' ? 'glasses' : 'phone';
       const locale: 'de' | 'en' = msg.locale === 'de' ? 'de' : 'en';
       const now = parseIso(msg.now) ?? app.clock.now();
-      const ac = hub.registerAsk(id);
+      const utcOffsetMin = parseOffsetMin(msg.now);
+      if (utcOffsetMin !== null) app.settings.notePhoneOffset(utcOffsetMin);
+      const ac = hub.registerAsk(conn.id, id);
+      // First frame for this ask at once: the app treats an ask with no frame within 6 s as unreachable.
+      hub.safeSend(conn, {
+        type: 'status',
+        id,
+        text: locale === 'de' ? 'Denke nach …' : 'Thinking …',
+      });
       void (async () => {
         try {
-          await app.conversations.maintain();
+          await app.conversations.maintainBounded();
           const conv = app.conversations.current();
           hub.broadcast({
             type: 'message',
@@ -157,7 +200,9 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
             channel,
             locale,
             now,
+            ...(utcOffsetMin !== null ? { utcOffsetMin } : {}),
             askId: id,
+            connId: conn.id,
             signal: ac.signal,
             onStatus: (t) =>
               hub.safeSend(conn, { type: 'status', id, text: t }),
@@ -171,17 +216,15 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
             actions: a.actions,
             ...(a.undo ? { undo: a.undo } : {}),
           });
-          hub.broadcast(
-            {
-              type: 'message',
-              conversationId: a.conversationId,
-              role: 'assistant',
-              text: a.text,
-              channel,
-              at: isoLocal(app.clock.now()),
-            },
-            conn,
-          );
+          // To every socket, the asker too (clients filter by channel).
+          hub.broadcast({
+            type: 'message',
+            conversationId: a.conversationId,
+            role: 'assistant',
+            text: a.text,
+            channel,
+            at: isoLocal(app.clock.now()),
+          });
         } catch (e) {
           const cancelled = e instanceof CancelledError || ac.signal.aborted;
           hub.safeSend(conn, {
@@ -194,19 +237,20 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
                 : String(e),
           });
         } finally {
-          hub.finishAsk(id, ac);
+          hub.finishAsk(conn.id, id, ac);
         }
       })();
       return;
     }
     case 'cancel':
-      hub.cancelAsk(String(msg.id ?? ''));
+      hub.cancelAsk(conn.id, String(msg.id ?? ''));
       return;
     case 'tool_result':
       hub.toolResult(
         String(msg.callId ?? ''),
         !!msg.ok,
         String(msg.text ?? ''),
+        conn.id,
       );
       return;
     case 'perform': {

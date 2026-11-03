@@ -6,8 +6,9 @@ Both sides are built against this file. Change it first, then the code.
 ## Transport and auth
 
 - `GET /health` → `{"ok":true}` (no auth).
-- `POST /api/v1/pair` `{code, deviceName}` → `{token}` (no auth; the code is printed at first start, single use, and re-printable via `GET /api/v1/pair/code` only from the server logs). The app keeps the token in the Keychain.
-- Everything else needs `Authorization: Bearer <device token>` (WebSocket: header, or `?token=` query).
+- `POST /api/v1/pair` `{code, deviceName}` → `{token}` (no auth; the code is printed at first start while no device is paired, single use, valid 15 minutes; a newer code replaces older unused ones). The app keeps the token in the Keychain.
+- Everything else needs `Authorization: Bearer <device token>`. Only the WebSocket upgrade (`/ws`) also accepts a `?token=` query; HTTP routes never do.
+- The server pings every socket every 30 s and terminates one that did not answer the previous ping (WebSocket clients answer pings automatically).
 - Live socket: `GET /ws` (WebSocket upgrade). JSON text frames, one object per frame, always with `"type"`.
 - Dates are ISO 8601 with offset (`2026-11-03T08:15:00+01:00`). Ids are strings.
 
@@ -18,7 +19,7 @@ Both sides are built against this file. Change it first, then the code.
 | type          | fields                                                                                                                                                                                                                                  |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `hello`       | `appVersion`, `deviceName`, `apnsToken?`                                                                                                                                                                                                |
-| `ask`         | `id`, `text`, `channel` (`glasses`\|`phone`), `now`, `locale` (`de`/`en`)                                                                                                                                                               |
+| `ask`         | `id` (unique per socket; a UUID is fine), `text`, `channel` (`glasses`\|`phone`), `now` (ISO 8601 with the phone's offset: the server answers in that local time), `locale` (`de`/`en`)                                                |
 | `cancel`      | `id` (the ask id)                                                                                                                                                                                                                       |
 | `tool_result` | `callId`, `ok` (bool), `text` (model-readable result or error message)                                                                                                                                                                  |
 | `perform`     | `id` (client request id), `actionId` (from an answer's `actions`)                                                                                                                                                                       |
@@ -75,10 +76,11 @@ The server keeps the inbox as the source of truth. While no socket is open, `pus
 
 Where the backend is more specific than the contract above:
 
-- `GET /api/v1/pair/code` answers only requests from the server itself (loopback) and logs the code. More devices: op `pairing.new_code` (app only). Pairing link in the QR/log: `lotti://pair?url=<server>&code=<code>`. Wrong codes are rate-limited (429).
+- `GET /api/v1/pair/code` answers only requests from the server itself (loopback, no forwarded-* headers) and only while **no device is paired** (otherwise `403`, "Already paired: create a pairing code in the app"); it re-issues a code when the old one expired and logs it. More devices: op `pairing.new_code` (app only). Codes expire after 15 minutes. Pairing link in the QR/log: `lotti://pair?url=<server>&code=<code>`. Wrong codes are rate-limited (429): 10 per IP and 30 in total per 10 minutes.
 - A new `hello` is answered by `welcome`, then a full `inbox`, then one `push` per item that queued while the device was offline.
 - `cancel` makes the ask end with `error {id, message: "cancelled"}`; there is no `answer`.
-- `message` is sent to every socket for the user turn (including the asking socket, so a glasses question shows up in the phone chat; clients ignore turns of their own channel) and for the assistant turn to every socket except the asking one (it gets `answer`).
+- `message` is sent to every socket for both the user turn and the assistant turn, the asking socket included (it also gets `answer`); clients filter by channel.
+- Asks are keyed by socket + `id`: the same id from two devices does not cancel the other; `cancel` only reaches the sender's own ask. A run's phone `tool_call`s go to the socket that asked (jobs and catch-up: the most recently connected one); only that socket's `tool_result` is accepted.
 - `answer.undo` is present when the run made a `free` op change that can be undone; `performed.undo` likewise after `perform`. `undo` answers with `performed {id, ok, text}`.
 - `perform` for a `target: "phone"` action answers `performed {ok:false}`: only the app runs those.
 - A `tap` op proposed by the agent appears as an action `{target:"server", tool:"op:<name>"}`.

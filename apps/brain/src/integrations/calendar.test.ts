@@ -384,3 +384,27 @@ test('calendar: nothing connected', async () => {
   assert.equal(o.ok, false);
   assert.match(o.text, /No calendar/);
 });
+
+test('caldav: discovered calendars are cached for 1 h per account; an account edit invalidates', async () => {
+  const { t, m, id } = await caldavApp();
+  const propfinds = () => m.seen.filter((s) => s.method === 'PROPFIND').length;
+  const cal = t.app.integrations.calendar!;
+  await cal.events(t.clock.now(), t.clock.now() + 600_000);
+  const first = propfinds();
+  assert.ok(first >= 1);
+  for (let i = 0; i < 5; i++) {
+    t.clock.advanceMinutes(1);
+    await cal.events(t.clock.now(), t.clock.now() + 600_000);
+  }
+  assert.equal(propfinds(), first, 'no discovery every minute');
+  t.clock.advanceMinutes(61);
+  await cal.events(t.clock.now(), t.clock.now() + 600_000);
+  assert.equal(propfinds(), first * 2, 'rediscovered after an hour');
+  await t.app.ops.invoke(
+    'accounts.set_calendars',
+    { id, calendars: ['https://caldav.example/home/123/work/'] },
+    'app',
+  );
+  await cal.events(t.clock.now(), t.clock.now() + 600_000);
+  assert.equal(propfinds(), first * 3, 'selection change invalidates');
+});

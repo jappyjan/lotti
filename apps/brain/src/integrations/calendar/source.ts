@@ -126,10 +126,32 @@ export function davFor(app: App, acc: AccountRow): CalDav {
   return new CalDav({ url, username, password }, (...a) => app.fetch(...a));
 }
 
+/**
+ * Discovered CalDAV calendars per app + account, for 1 h (discovery is 3 PROPFINDs; meeting-soon asks every
+ * minute). Keyed on the account config, so accounts.update / set_calendars invalidate it.
+ */
+const CAL_CACHE_MS = 3_600_000;
+const calCache = new WeakMap<
+  App,
+  Map<string, { key: string; at: number; cals: DavCalendar[] }>
+>();
+
 export function caldavBackend(app: App, acc: AccountRow): CalBackend {
   const dav = () => davFor(app, acc);
+  const discover = async (): Promise<DavCalendar[]> => {
+    let m = calCache.get(app);
+    if (!m) calCache.set(app, (m = new Map()));
+    // Any account edit (url, username, selection, ...) changes the key and forces a fresh discovery.
+    const key = JSON.stringify(acc.config);
+    const hit = m.get(acc.id);
+    if (hit && hit.key === key && app.clock.now() - hit.at < CAL_CACHE_MS)
+      return hit.cals;
+    const cals = await dav().listCalendars();
+    m.set(acc.id, { key, at: app.clock.now(), cals });
+    return cals;
+  };
   const pick = async (ids: string[]): Promise<DavCalendar[]> => {
-    const all = await dav().listCalendars();
+    const all = await discover();
     return ids.length ? all.filter((c) => ids.includes(c.id)) : all;
   };
   return {

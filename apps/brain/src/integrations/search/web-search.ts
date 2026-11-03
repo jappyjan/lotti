@@ -23,7 +23,7 @@ export const webSearchTool: ToolDef = {
   async handler(a: z.infer<typeof schema>, { app, run }) {
     const key = app.secrets.get(SEARCH_SECRET);
     if (!key)
-      return 'No search API key is configured. Use the shell tool with curl (e.g. curl -s "https://duckduckgo.com/html/?q=..." | head) or web_fetch on a known URL instead. The user can add a Brave Search key in the app (secret search.brave.api_key).';
+      return 'No search API key is configured. Use the shell tool with curl (e.g. curl -s "https://duckduckgo.com/html/?q=..." | head) or web_fetch on a known URL instead. The user can add a Brave Search key in the app: Settings → AI providers → Web search.';
     const q = new URLSearchParams({ q: a.query, count: String(a.count ?? 5) });
     if (a.freshness)
       q.set(

@@ -80,6 +80,7 @@ export class ClaudeRuntime implements AgentRuntimeProvider {
       }),
       cwd: this.app.config.workspaceDir,
       input: req.prompt,
+      idleTimeoutMs: this.app.settings.num('agent.silence_timeout_sec') * 1000,
       ...(req.signal ? { signal: req.signal } : {}),
     });
     const text = stripAnsi(r.stdout).trim();

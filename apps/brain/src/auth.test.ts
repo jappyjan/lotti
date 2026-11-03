@@ -363,3 +363,77 @@ test('admin MCP: a tap op creates a proposal that shows up as an inbox item with
     await srv.close();
   }
 });
+
+test('pair/code: refused once a device is paired; codes expire after 15 min; a new code invalidates older ones', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const first = t.app.auth.ensureStartupCode()!;
+    t.clock.advanceMinutes(16);
+    assert.equal(t.app.auth.pair(first, 'late'), null, 'expired code');
+    const second = t.app.auth.ensureStartupCode()!;
+    assert.notEqual(second, first, 'a fresh startup code after expiry');
+    const r = await fetch(base(srv.port) + '/api/v1/pair/code');
+    assert.equal(r.status, 200);
+    assert.equal(((await r.json()) as any).code, second, 'still valid code');
+    t.clock.advanceMinutes(16);
+    const third = ((await (
+      await fetch(base(srv.port) + '/api/v1/pair/code')
+    ).json()) as any).code;
+    assert.notEqual(third, second, 'pair/code re-issues an expired code');
+    const fourth = t.app.auth.newPairingCode();
+    assert.equal(t.app.auth.pair(third, 'old'), null, 'older code invalidated');
+    assert.ok(t.app.auth.pair(fourth, 'Jans iPhone'));
+    const after = await fetch(base(srv.port) + '/api/v1/pair/code');
+    assert.equal(after.status, 403);
+    assert.match(((await after.json()) as any).error, /Already paired/);
+    assert.equal(t.app.auth.ensureStartupCode(), undefined);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('pairing failures: per-IP and global caps, old entries pruned', async () => {
+  const { PairFailures } = await import('./server/http.ts');
+  const f = new PairFailures();
+  const t0 = 1_000_000;
+  for (let i = 0; i < 30; i++) f.note(`10.0.0.${i}`, t0); // one each from 30 addresses
+  assert.equal(f.blocked('10.0.0.99', t0 + 1000), true, 'global cap');
+  assert.equal(f.blocked('10.0.0.99', t0 + 10 * 60_000 + 1), false);
+  assert.equal(f.size, 0, 'pruned after the window');
+  for (let i = 0; i < 10; i++) f.note('1.2.3.4', t0 + 20 * 60_000);
+  assert.equal(f.blocked('1.2.3.4', t0 + 20 * 60_000), true, 'per-IP cap');
+  assert.equal(f.blocked('5.6.7.8', t0 + 20 * 60_000), false);
+});
+
+test('?token= is accepted only on the /ws upgrade, not on HTTP routes', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const token = pairDevice(t.app);
+    assert.equal(
+      (await fetch(base(srv.port) + `/api/v1/ops?token=${token}`)).status,
+      401,
+    );
+    const { token: admin } = t.app.auth.createAdminToken('x');
+    assert.equal(
+      (
+        await fetch(
+          base(srv.port) + `/mcp/admin?token=${admin}`,
+          j({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        )
+      ).status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(base(srv.port) + '/api/v1/ops', {
+          headers: { authorization: `Bearer ${token}` },
+        })
+      ).status,
+      200,
+    );
+  } finally {
+    await srv.close();
+  }
+});

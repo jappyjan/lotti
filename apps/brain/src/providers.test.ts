@@ -238,7 +238,7 @@ test('an agent-runtime provider gets the MCP tools URL + internal token and its 
     `http://127.0.0.1:${t.app.config.port}/mcp/tools`,
   );
   assert.equal(req.mcpServers[0].bearerToken, t.app.auth.internalToken());
-  assert.equal(req.askId, 'ask-9');
+  assert.match(req.askId, /^ask-9_\w+$/, 'unique per run, derived from the ask id');
   assert.match(req.system, /Lotti/);
 });
 
@@ -278,3 +278,47 @@ test(
     assert.equal(withTool.toolCalls[0]?.name, 'weather');
   },
 );
+
+test('text(): with a subscription runtime active, background work uses a configured chat provider, else the runtime without tools, else a clear error + status warning', async () => {
+  const t = makeApp();
+  const reqs: any[] = [];
+  let rtConfigured = true;
+  t.app.providers.register({
+    kind: 'agent-runtime',
+    id: 'fake_rt',
+    label: 'Fake',
+    defaultModel: '',
+    knownModels: [],
+    configured: () => rtConfigured,
+    async run(r) {
+      reqs.push(r);
+      return { text: ' vom Runtime ' };
+    },
+  });
+  t.app.settings.set('provider.active', 'fake_rt'); // no fallback set
+  t.mock.script({ text: 'Zusammenfassung', toolCalls: [] });
+  assert.equal(await t.app.providers.text('sys', 'user'), 'Zusammenfassung');
+  assert.equal(t.mock.calls[0]!.opts.signal instanceof AbortSignal, true);
+  assert.equal(reqs.length, 0, 'chat provider preferred');
+
+  t.mock.isConfigured = false;
+  assert.equal(await t.app.providers.text('sys', 'user'), 'vom Runtime');
+  assert.deepEqual(reqs[0].mcpServers, [], 'no tools');
+  assert.equal(reqs[0].system, 'sys');
+
+  rtConfigured = false;
+  await assert.rejects(t.app.providers.text('sys', 'user'), /API-key provider/);
+  const st = t.app.providers.status().find((p) => p.id === 'fake_rt')!;
+  assert.match(st.warning!, /Background tasks/);
+  t.mock.isConfigured = true;
+  assert.equal(t.app.providers.status().find((p) => p.id === 'fake_rt')!.warning, undefined);
+});
+
+test('text() times out (default 45 s) instead of hanging background work', async () => {
+  const t = makeApp();
+  const { hang } = await import('./testing/helpers.ts');
+  t.mock.script(hang);
+  await assert.rejects(t.app.providers.text('s', 'u', undefined, 30), /timed out/);
+  const { TEXT_TIMEOUT_MS } = await import('./providers/registry.ts');
+  assert.equal(TEXT_TIMEOUT_MS, 45_000);
+});

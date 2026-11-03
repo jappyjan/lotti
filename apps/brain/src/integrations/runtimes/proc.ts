@@ -6,7 +6,10 @@ export interface ProcResult {
   stderr: string;
 }
 
-/** Run a subprocess to completion (stdin optional). Abort kills it. */
+/**
+ * Run a subprocess to completion (stdin optional). It runs in its own process group; abort, `timeoutMs`
+ * (total) or `idleTimeoutMs` (no output for that long) kill the whole group: SIGTERM, then SIGKILL after 3 s.
+ */
 export function runProc(
   bin: string,
   args: string[],
@@ -16,6 +19,7 @@ export function runProc(
     input?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
+    idleTimeoutMs?: number;
   } = {},
 ): Promise<ProcResult> {
   return new Promise((resolve, reject) => {
@@ -24,17 +28,29 @@ export function runProc(
       env: o.env,
       ...(o.cwd ? { cwd: o.cwd } : {}),
       stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
     });
     let stdout = '';
     let stderr = '';
+    let exited = false;
     const cap = (s: string, d: string) => (s + d).slice(-200_000);
-    child.stdout
-      .setEncoding('utf8')
-      .on('data', (d: string) => (stdout = cap(stdout, d)));
-    child.stderr
-      .setEncoding('utf8')
-      .on('data', (d: string) => (stderr = cap(stderr, d)));
-    const kill = () => child.kill('SIGTERM');
+    const killGroup = (sig: NodeJS.Signals) => {
+      try {
+        if (child.pid) process.kill(-child.pid, sig);
+      } catch {
+        try {
+          child.kill(sig);
+        } catch {
+          /* gone */
+        }
+      }
+    };
+    const kill = () => {
+      killGroup('SIGTERM');
+      setTimeout(() => {
+        if (!exited) killGroup('SIGKILL');
+      }, 3000).unref();
+    };
     const onAbort = () => {
       kill();
       reject(new Error('cancelled'));
@@ -48,13 +64,41 @@ export function runProc(
         ),
       );
     }, o.timeoutMs ?? 300_000);
-    child.on('error', (e) => {
+    let idle: ReturnType<typeof setTimeout> | undefined;
+    const armIdle = () => {
+      if (!o.idleTimeoutMs) return;
+      clearTimeout(idle);
+      idle = setTimeout(() => {
+        kill();
+        reject(
+          new Error(
+            `${bin} was silent for ${Math.round(o.idleTimeoutMs! / 1000)} s`,
+          ),
+        );
+      }, o.idleTimeoutMs);
+    };
+    armIdle();
+    child.stdout.setEncoding('utf8').on('data', (d: string) => {
+      stdout = cap(stdout, d);
+      armIdle();
+    });
+    child.stderr.setEncoding('utf8').on('data', (d: string) => {
+      stderr = cap(stderr, d);
+      armIdle();
+    });
+    const done = () => {
       clearTimeout(timer);
+      clearTimeout(idle);
+      o.signal?.removeEventListener('abort', onAbort);
+    };
+    child.on('exit', () => (exited = true));
+    child.on('error', (e) => {
+      done();
       reject(new Error(`Cannot run ${bin}: ${e.message}`));
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      o.signal?.removeEventListener('abort', onAbort);
+      exited = true;
+      done();
       resolve({ code, stdout, stderr });
     });
     child.stdin.on('error', () => {});

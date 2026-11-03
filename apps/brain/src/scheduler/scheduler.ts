@@ -1,6 +1,6 @@
 import type { App } from '../app.ts';
 import { runJobPrompt } from '../agent/loop.ts';
-import { MIN, isoLocal } from '../util/clock.ts';
+import { DAY, MIN, isoLocal } from '../util/clock.ts';
 import { newId } from '../util/crypto.ts';
 import { clip } from '../util/text.ts';
 import { builtinJobs } from './builtin.ts';
@@ -55,9 +55,16 @@ export interface JobRun {
 }
 
 /** SQLite-backed jobs. `tick()` is called every 30 s by main.ts (and directly by tests with a fake clock). */
+/** Run history kept per job (the meeting-soon check alone runs ~1440 times a day). */
+export const RUNS_KEPT_PER_JOB = 50;
+/** Logs and handled items older than this are deleted by the daily retention sweep. */
+export const RETENTION_DAYS = 30;
+
 export class Scheduler {
   private running = new Set<string>();
+  private ticking = false;
   private lastMaintenance = 0;
+  private lastRetention = 0;
   private timer?: ReturnType<typeof setInterval>;
   constructor(private app: App) {}
 
@@ -196,6 +203,40 @@ export class Scheduler {
     }));
   }
 
+  /** Successful user-job runs with output since `since` (for the catch-up brief), newest first. */
+  recentUserRuns(
+    since: number,
+    limit = 10,
+  ): { name: string; output: string; startedAt: number }[] {
+    return this.app.db
+      .all<{ name: string; output: string; started_at: number }>(
+        `SELECT j.name, r.output, r.started_at FROM job_runs r JOIN jobs j ON j.id = r.job_id
+         WHERE j.kind='user' AND r.status='ok' AND r.output IS NOT NULL AND r.output != '' AND r.started_at > ?
+         ORDER BY r.started_at DESC LIMIT ?`,
+        since,
+        limit,
+      )
+      .map((r) => ({
+        name: r.name,
+        output: r.output,
+        startedAt: r.started_at,
+      }));
+  }
+
+  /** Delete old logs and handled items (daily). */
+  sweepRetention(): void {
+    const cut = this.app.clock.now() - RETENTION_DAYS * DAY;
+    const db = this.app.db;
+    db.run('DELETE FROM shell_log WHERE at < ?', cut);
+    db.run('DELETE FROM location_log WHERE at < ?', cut);
+    db.run('DELETE FROM actions WHERE created_at < ?', cut);
+    db.run('DELETE FROM undos WHERE created_at < ?', cut);
+    db.run(
+      "DELETE FROM inbox WHERE status IN ('dismissed','expired') AND updated_at < ?",
+      cut,
+    );
+  }
+
   /** Run a job now (also used by the scheduler). Overlapping runs of the same job are skipped. */
   async runNow(id: string): Promise<JobRun> {
     const job = this.get(id);
@@ -209,6 +250,13 @@ export class Scheduler {
       runId,
       id,
       started,
+    );
+    this.app.db.run(
+      `DELETE FROM job_runs WHERE job_id=? AND id NOT IN
+         (SELECT id FROM job_runs WHERE job_id=? ORDER BY started_at DESC, rowid DESC LIMIT ?)`,
+      id,
+      id,
+      RUNS_KEPT_PER_JOB,
     );
     let status: JobRun['status'] = 'ok';
     let output = '';
@@ -244,20 +292,40 @@ export class Scheduler {
     return this.history(id, 1)[0]!;
   }
 
-  /** Run everything that is due, expire inbox items, maintain conversations (hourly-ish). */
+  /**
+   * Run everything that is due, expire inbox items, maintain conversations (every minute), retention (daily).
+   * A tick that starts while the previous one still runs is skipped (a slow job must not run twice).
+   */
   async tick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.doTick();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async doTick(): Promise<void> {
     const now = this.app.clock.now();
     this.app.inbox.sweepExpired();
     const due = this.app.db.all<{ id: string }>(
-      'SELECT id FROM jobs WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ?',
+      'SELECT id FROM jobs WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at',
       now,
     );
     for (const d of due) {
+      // Re-check: an earlier job of this tick may have taken long, and the job may have been run/edited meanwhile.
+      const cur = this.app.db.get<Row>('SELECT * FROM jobs WHERE id=?', d.id);
+      if (
+        !cur?.enabled ||
+        cur.next_run_at === null ||
+        cur.next_run_at > this.app.clock.now()
+      )
+        continue;
       // push next_run_at forward first so a slow job is not re-picked
-      const job = this.get(d.id)!;
       this.app.db.run(
         'UPDATE jobs SET next_run_at=? WHERE id=?',
-        nextRun(job.cron, now),
+        nextRun(cur.cron, this.app.clock.now()),
         d.id,
       );
       await this.runNow(d.id).catch((e) =>
@@ -267,6 +335,10 @@ export class Scheduler {
     if (now - this.lastMaintenance >= MIN) {
       this.lastMaintenance = now;
       await this.app.conversations.maintain();
+    }
+    if (now - this.lastRetention >= DAY) {
+      this.lastRetention = now;
+      this.sweepRetention();
     }
   }
 }

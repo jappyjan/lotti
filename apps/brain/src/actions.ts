@@ -30,6 +30,12 @@ export class ActionService {
   register(tool: string, h: ServerActionHandler): void {
     this.handlers.set(tool, h);
   }
+  unregister(tool: string): void {
+    this.handlers.delete(tool);
+  }
+  hasHandler(tool: string): boolean {
+    return this.handlers.has(tool);
+  }
 
   propose(a: Omit<ProposedAction, 'id'>): ProposedAction {
     const id = newId('act_');

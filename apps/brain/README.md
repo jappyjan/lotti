@@ -30,7 +30,7 @@ Migrations are in code (`src/db.ts`) and run at start.
 
 ## Pairing
 
-On first start (no paired device) the server prints a one-time code, the URL and an ASCII QR (`lotti://pair?url=<PUBLIC_URL>&code=<CODE>`). The app calls `POST /api/v1/pair {code, deviceName}` and keeps the returned token (stored hashed here). More devices: op `pairing.new_code` (app only). `GET /api/v1/pair/code` works from the server itself only (loopback), e.g. `docker exec`.
+On start while no device is paired the server prints a one-time code, the URL and an ASCII QR (`lotti://pair?url=<PUBLIC_URL>&code=<CODE>`). Codes are valid for 15 minutes (a restart or `GET /api/v1/pair/code` issues a fresh one) and a new code replaces older unused ones. The app calls `POST /api/v1/pair {code, deviceName}` and keeps the returned token (stored hashed here). More devices: op `pairing.new_code` (app only). `GET /api/v1/pair/code` works from the server itself only (loopback, e.g. `docker exec … curl`) and only until the first device is paired (then `403`: anything on the host, the agent's shell included, could otherwise mint a code). Wrong codes: 429 after 10 per IP or 30 in total within 10 minutes.
 
 ## Architecture
 
@@ -55,7 +55,7 @@ src/
 
 - HTTP: `GET /api/v1/ops`, `POST /api/v1/ops/<name>` -> `{ok:true,result,undo?}` / `{ok:false,error}` (device token; everything).
 - Admin MCP: `POST /mcp/admin` (streamable HTTP, JSON-RPC). **Off** until an admin token exists (`admin_token.create` in the app; the token is shown once, stored hashed). No `app_only` ops. Tool names are op names with `_` (`jobs_create`).
-- Agent: ops of the groups in setting `agent.op_tool_groups` (default memory, inbox, jobs, skills, scripts, settings, status, catchup, bring, providers, mcp; `tap` ops such as `providers.set_active`, `providers.set_model` and `mcp.*` only PROPOSE an action when the agent calls them) are tools for the internal agent loop.
+- Agent: ops of the groups in setting `agent.op_tool_groups` (default memory, inbox, jobs, skills, scripts, settings, status, catchup, bring, providers, mcp, dreaming; `tap` ops such as `providers.set_active`, `providers.set_model` and `mcp.*` only PROPOSE an action when the agent calls them) are tools for the internal agent loop.
 
 Risk rules: `app_only` never reaches MCP/agent. `tap` called by MCP/agent returns a **proposed server action** (`op:<name>`) that runs only after the app sends `perform`; from the app it runs directly. `free` ops return an `undo` handle where possible (job/memory/skill/script/inbox/setting/Bring), undone with `undo {undoId}`.
 
@@ -63,10 +63,10 @@ Risk rules: `app_only` never reaches MCP/agent. `tap` called by MCP/agent return
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status`            | `status.get`, `pairing.new_code`/`devices`/`revoke_device` (app_only)                                                                                                                                                                                                                         |
 | `providers`         | `list`, `status`, `set_active` (active + fallback), `set_model`, `models`, `set_credential`/`clear_credential` (app_only; for `claude_code` the credential is the `claude setup-token` token), `codex_login_start`/`codex_logout` (app_only), `codex_login_status`                            |
-| `settings`          | `list`, `get`, `set`, `set_safety` (tap: shell.\*, web_fetch, location, step limit, agent op groups), `reset`                                                                                                                                                                                 |
+| `settings`          | `list` (entries of `provider.*` carry `managedBy: "providers"`), `get`, `set`, `set_safety` (tap: shell.\*, web_fetch, location, step limit, agent op groups), `reset`; `set`/`reset` refuse `provider.*` (use `providers.*`)                                                                                                                                                                               |
 | `accounts`          | `list`/`check`, `add`/`update`/`delete` (tap), `set_credential` (app_only), `set_google_client`/`google_auth_url`/`google_exchange` (app_only), `calendars`/`mailboxes` (live lists), `set_calendars`/`set_mailboxes` (tap); `secrets.set`/`delete`/`list` (app_only, write-only, names only) |
 | `bring`             | `status`, `lists`, `items`, `recent`, `add`, `remove` (immediate + undo), `set_default_list`, `login` (app_only)                                                                                                                                                                              |
-| `mcp`               | `list`, `add`/`update`/`delete`/`test`/`tools`/`set_tool_confirmation` (all tap), `set_credential` (app_only: `bearer` or `env.NAME`)                                                                                                                                                         |
+| `mcp`               | `list` (with `hasCredential`), `test`/`tools` (free, read-only), `add`/`update`/`delete`/`set_tool_confirmation` (tap), `set_credential` (app_only: `bearer` or `env.NAME`), `clear_credential {id}` (app_only: deletes all of a server's secrets) |
 | `jobs`              | `list`, `create`, `update`, `delete`, `run_now`, `history` (cron or friendly: "daily at 08:00", "weekdays at 07:30", "every 30 minutes", German too)                                                                                                                                          |
 | `memory`            | `list`, `search`, `get`, `update`, `delete`, `remember`, `forget` (id or words), `restore`                                                                                                                                                                                                    |
 | `skills`, `scripts` | `list` (with last use), `get`, `put`, `delete`                                                                                                                                                                                                                                                |
@@ -88,7 +88,7 @@ System prompt (persona, date/time 24 h, channel rule: glasses = one very short s
 
 Conversations: one shared conversation; 10 min idle -> LLM summary replaces old turns in the model's context (all turns are kept, flagged `compacted`, for the history and search) and memories are extracted; 1 h idle -> closed with title + summary, a new one starts. FTS5 over titles, summaries, turns. Memory: SQLite + FTS5, `supersedes`; dreaming (nightly 03:00, `dreaming.run_now`) dedupes, resolves contradictions (newest wins), drops stale, reports unused skills/scripts, summarises, writes a report.
 
-Scheduler: SQLite jobs, `Scheduler.tick()` every 30 s. Built-ins `meeting_soon` (every minute, 10 min lookahead), `important_mail` (every 10 min, LLM triage), `dreaming` (03:00): editable/disable-able, not deletable. User jobs run the agent with a prompt: "NOTHING" or an inbox item. Catch-up: presence events -> away >= 2 h, or slept (>= 4 h of the 22:00-09:00 window without phone use while the phone was charging/still; works without wear events), once per return, all settings editable under `catchup.*`.
+Scheduler: SQLite jobs, `Scheduler.tick()` every 30 s. Built-ins `meeting_soon` (every minute, lookahead setting `jobs.meeting_soon.lead_min`, default 10), `important_mail` (every 10 min, LLM triage), `dreaming` (03:00): editable/disable-able, not deletable. User jobs run the agent with a prompt: "NOTHING" or an inbox item. Catch-up: presence events -> away >= 2 h, or slept (>= 4 h of the 22:00-09:00 window without phone use while the phone was charging/still; charging is a state from `phone_charging` to `phone_unplugged` and must cover >= 1 h of that night; works without wear events), once per return, all settings editable under `catchup.*`.
 
 ## Integrations (`src/integrations`)
 
@@ -125,7 +125,7 @@ Unofficial API, isolated in `bring/api.ts` (it can break; errors say "Bring! log
 
 ### MCP client
 
-Servers are added with `mcp.add` (http URL or stdio command + args). `mcp.set_credential {id, key: "bearer" | "env.NAME", value}` (app only) adds an `Authorization: Bearer` token or an environment variable for stdio servers (stdio servers do **not** inherit the backend environment). `mcp.test {id}` -> `{ok, tools[]|error}`; `mcp.tools {id}` -> `[{name, description, needsConfirmation}]`; `mcp.set_tool_confirmation` flips the per-tool flag (default: needs confirmation). Transports: stdio (newline-delimited JSON-RPC) and streamable HTTP (JSON or SSE replies, session id). One connection per operation. Enabled servers' tools are registered as `mcp__<server>__<tool>` (at start and after every mcp.* change; names are reduced to `[A-Za-z0-9_-]`); tools needing confirmation only PROPOSE an action (`tool: "mcp__server__tool"`, runs after `perform`), the others run at once. They also appear in `/mcp/tools` with the server's own JSON Schema.
+Servers are added with `mcp.add` (http URL or stdio command + args). Changing a server's `url` (`mcp.update`) deletes its saved bearer token and changing its `command` deletes its `env.*` secrets, so a confirmed change can never send a saved secret somewhere new; likewise `accounts.update` deletes an account's saved password when a host/url/port/TLS field changes. Confirmation titles show the target (URL or command line, changed hosts). `mcp.set_credential {id, key: "bearer" | "env.NAME", value}` (app only) adds an `Authorization: Bearer` token or an environment variable for stdio servers (stdio servers do **not** inherit the backend environment). `mcp.test {id}` -> `{ok, tools[]|error}`; `mcp.tools {id}` -> `[{name, description, needsConfirmation}]`; `mcp.set_tool_confirmation` flips the per-tool flag (default: needs confirmation). Transports: stdio (newline-delimited JSON-RPC) and streamable HTTP (JSON or SSE replies, session id). One connection per operation. Enabled servers' tools are registered as `mcp__<server>__<tool>` (at start and after every mcp.* change; names are reduced to `[A-Za-z0-9_-]`); tools needing confirmation only PROPOSE an action (`tool: "mcp__server__tool"`, runs after `perform`), the others run at once. They also appear in `/mcp/tools` with the server's own JSON Schema.
 
 ### Subscription runtimes
 
@@ -139,7 +139,7 @@ OFF until configured: `push.configure {key: <.p8 text>, keyId, teamId, topic: <b
 
 ### Web search
 
-Tool `web_search {query, count?, freshness?}` uses the Brave Search API when the secret `search.brave.api_key` exists (`secrets.set` in the app); otherwise it tells the model to use curl via the shell tool or `web_fetch`.
+Tool `web_search {query, count?, freshness?}` uses the Brave Search API when the secret `search.brave.api_key` exists (`secrets.set` in the app: Settings → AI providers → Web search); otherwise it tells the model to use curl via the shell tool or `web_fetch`.
 
 ### Extension points
 

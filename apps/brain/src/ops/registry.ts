@@ -30,6 +30,8 @@ export function out(
 export interface OpContext {
   app: App;
   caller: Caller;
+  /** The paired device that called (HTTP management API only). */
+  deviceId?: string;
 }
 
 export interface Operation<S extends z.ZodType = z.ZodType> {
@@ -38,8 +40,11 @@ export interface Operation<S extends z.ZodType = z.ZodType> {
   description: string;
   inputSchema: S;
   risk: Risk;
-  /** Title of the proposed action when a `tap` op is called by the agent. */
-  proposalTitle?: (input: z.infer<S>) => string;
+  /**
+   * Title of the proposed action when a `tap` op is called by the agent. It is all the user sees before
+   * tapping, so it must name what is security relevant (hosts, commands, recipients). Clipped to 140 chars.
+   */
+  proposalTitle?: (input: z.infer<S>, app: App) => string;
   handler(
     input: z.infer<S>,
     ctx: OpContext,
@@ -106,7 +111,7 @@ export class OpRegistry {
     name: string,
     rawInput: unknown,
     caller: Caller,
-    opts: { noUndo?: boolean } = {},
+    opts: { noUndo?: boolean; deviceId?: string } = {},
   ): Promise<OpResponse> {
     const op = this.ops.get(name);
     if (!op) return { ok: false, error: `Unknown operation: ${name}` };
@@ -126,7 +131,7 @@ export class OpRegistry {
     }
     if (caller !== 'app' && op.risk === 'tap') {
       const title = op.proposalTitle
-        ? op.proposalTitle(parsed.data)
+        ? clip(op.proposalTitle(parsed.data, this.app), 140)
         : clip(`${op.description}`, 60);
       const action = this.app.actions.propose({
         title,
@@ -142,7 +147,11 @@ export class OpRegistry {
       };
     }
     try {
-      const r = await op.handler(parsed.data, { app: this.app, caller });
+      const r = await op.handler(parsed.data, {
+        app: this.app,
+        caller,
+        ...(opts.deviceId ? { deviceId: opts.deviceId } : {}),
+      });
       const o = r instanceof OpOutput ? r : new OpOutput(r);
       const undoHandle =
         o.undo && !opts.noUndo

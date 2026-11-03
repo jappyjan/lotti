@@ -157,7 +157,11 @@ export interface AskInput {
   channel: 'glasses' | 'phone';
   locale: 'de' | 'en';
   now?: number;
+  /** The phone's UTC offset in minutes (from `ask.now`). Default: the last one seen. */
+  utcOffsetMin?: number | null;
   askId?: string;
+  /** The socket that asked (phone tools go back to it). */
+  connId?: string;
   signal?: AbortSignal;
   onStatus?: (line: string) => void;
 }
@@ -167,16 +171,20 @@ export async function ask(
   app: App,
   input: AskInput,
 ): Promise<Answer & { conversationId: string }> {
-  await app.conversations.maintain();
+  await app.conversations.maintainBounded();
   const conv = app.conversations.current();
   const history = app.conversations
     .turns(conv.id)
     .map<ChatMessage>((t) => ({ role: t.role, content: t.text }));
   app.conversations.addTurn(conv.id, 'user', input.text, input.channel);
+  const utcOffsetMin =
+    input.utcOffsetMin ?? app.settings.displayOffsetMin();
   const run = newRun({
+    utcOffsetMin,
     channel: input.channel,
     locale: input.locale,
     ...(input.askId ? { askId: input.askId } : {}),
+    ...(input.connId ? { connId: input.connId } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     status: (l) => input.onStatus?.(l),
   });
@@ -184,6 +192,7 @@ export async function ask(
   const memories = app.memory.search(input.text, 8, { touch: true });
   const system = buildSystemPrompt({
     now: input.now ?? app.clock.now(),
+    utcOffsetMin,
     locale: input.locale,
     channel: input.channel,
     userName: app.settings.str('user.name'),
@@ -204,7 +213,8 @@ export async function ask(
 export async function runAgent(app: App, input: LoopInput): Promise<Answer> {
   const active = app.providers.active();
   if (active?.kind === 'agent-runtime') {
-    const key = input.run.askId ?? `run_${Math.random().toString(36).slice(2)}`;
+    // Unique per run (ask ids are only unique per socket); the runtime sends it back as X-Lotti-Ask.
+    const key = `${input.run.askId ?? 'run'}_${Math.random().toString(36).slice(2)}`;
     app.runs.set(key, input.run);
     try {
       const prompt = input.history
@@ -256,10 +266,13 @@ export async function runAgent(app: App, input: LoopInput): Promise<Answer> {
 export async function runJobPrompt(
   app: App,
   prompt: string,
-  extra: { signal?: AbortSignal; context?: string } = {},
+  extra: { signal?: AbortSignal; context?: string; noInbox?: boolean } = {},
 ): Promise<{ text: string; nothing: boolean }> {
+  const utcOffsetMin = app.settings.displayOffsetMin();
   const system = buildSystemPrompt({
     now: app.clock.now(),
+    utcOffsetMin,
+    ...(extra.noInbox ? { noInbox: true } : {}),
     locale: 'en',
     channel: 'job',
     userName: app.settings.str('user.name'),
@@ -268,7 +281,10 @@ export async function runJobPrompt(
     conversationSummary: null,
     jobMode: true,
   });
-  const run = newRun({ ...(extra.signal ? { signal: extra.signal } : {}) });
+  const run = newRun({
+    utcOffsetMin,
+    ...(extra.signal ? { signal: extra.signal } : {}),
+  });
   const a = await runAgent(app, {
     system,
     history: [

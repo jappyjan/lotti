@@ -46,6 +46,54 @@ export function mcpToolNeedsConfirmation(
   return server.toolFlags[tool]?.needsConfirmation ?? true;
 }
 
+const mcpTarget = (i: {
+  transport?: string | null;
+  url?: string | null;
+  command?: string | null;
+  args?: string[];
+}) =>
+  i.transport === 'stdio' || (!i.url && i.command)
+    ? `stdio: ${[i.command ?? '', ...(i.args ?? [])].join(' ')}`
+    : `http: ${i.url ?? ''}`;
+
+const mcpRow = (app: App, id: string) =>
+  app.db.get<McpRow>('SELECT * FROM mcp_servers WHERE id=?', id);
+
+/** What an mcp.update would change (only real changes), for the confirmation title. */
+function mcpChanges(
+  cur: McpRow | undefined,
+  i: {
+    name?: string;
+    url?: string;
+    command?: string;
+    args?: string[];
+    enabled?: boolean;
+  },
+): string[] {
+  const out: string[] = [];
+  if (i.name !== undefined && i.name !== cur?.name) out.push(`name ${i.name}`);
+  if (i.url !== undefined && i.url !== cur?.url) out.push(`url ${i.url}`);
+  if (i.command !== undefined && i.command !== cur?.command)
+    out.push(`command ${i.command}`);
+  if (i.args && JSON.stringify(i.args) !== (cur?.args ?? '[]'))
+    out.push(`args ${i.args.join(' ')}`);
+  if (i.enabled !== undefined && i.enabled !== !!cur?.enabled)
+    out.push(i.enabled ? 'enable' : 'disable');
+  return out;
+}
+
+/** Config keys that decide where an account's password is sent. */
+const HOST_KEY = /url|host|port|secure/i;
+function accountHostChanges(
+  cur: Record<string, unknown>,
+  next: Record<string, unknown>,
+): string[] {
+  return [...new Set([...Object.keys(cur), ...Object.keys(next)])]
+    .filter((k) => HOST_KEY.test(k))
+    .filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]))
+    .map((k) => `${k} ${next[k] === undefined ? '(removed)' : String(next[k])}`);
+}
+
 const mcpFields = {
   transport: z.enum(['http', 'stdio']),
   url: z.string().url().optional(),
@@ -90,19 +138,38 @@ const bringStub = (app: App) => {
   return app.integrations.bring;
 };
 
+/** The item as it is on the list now (name match ignores case), so undo can restore it. Best effort. */
+async function bringFind(
+  b: NonNullable<App['integrations']['bring']>,
+  item: string,
+  listId?: string,
+): Promise<{ name: string; spec?: string } | undefined> {
+  try {
+    const key = item.trim().toLowerCase();
+    return (await b.items(listId)).find(
+      (x) => x.name.trim().toLowerCase() === key,
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 export const integrationOps: Operation[] = [
   // ---- mcp -----------------------------------------------------------------------------------
   defineOp({
     name: 'mcp.list',
     group: 'mcp',
     description:
-      'External MCP servers Lotti can use (config, status, per-tool confirmation flags).',
+      'External MCP servers Lotti can use (config, status, per-tool confirmation flags, whether a credential is saved).',
     inputSchema: z.object({}),
     risk: 'free',
     handler: (_i, { app }) =>
       app.db
         .all<McpRow>('SELECT * FROM mcp_servers ORDER BY created_at')
-        .map(toMcp),
+        .map((r) => ({
+          ...toMcp(r),
+          hasCredential: app.secrets.list(`mcp.${r.id}.`).length > 0,
+        })),
   }),
   defineOp({
     name: 'mcp.add',
@@ -111,7 +178,7 @@ export const integrationOps: Operation[] = [
       'Add an external MCP server (http URL or stdio command). Its tools need confirmation by default.',
     inputSchema: z.object({ name: z.string().min(1), ...mcpFields }),
     risk: 'tap',
-    proposalTitle: (i) => `Add MCP server ${i.name}`,
+    proposalTitle: (i) => `Add MCP server "${i.name}" (${mcpTarget(i)})`,
     handler(i, { app }) {
       if (i.transport === 'http' && !i.url)
         throw new Error('url is required for http.');
@@ -157,13 +224,27 @@ export const integrationOps: Operation[] = [
       enabled: z.boolean().optional(),
     }),
     risk: 'tap',
-    proposalTitle: (i) => `Change MCP server ${i.id}`,
+    proposalTitle(i, app) {
+      const cur = mcpRow(app, i.id);
+      const ch = mcpChanges(cur, i);
+      const secrets =
+        cur &&
+        ((i.url !== undefined && i.url !== cur.url) ||
+          (i.command !== undefined && i.command !== cur.command)) &&
+        app.secrets.list(`mcp.${cur.id}.`).length
+          ? ' (its saved credential is removed)'
+          : '';
+      return `Change MCP server "${cur?.name ?? i.id}": ${ch.join(', ') || 'no change'}${secrets}`;
+    },
     handler(i, { app }) {
-      const cur = app.db.get<McpRow>(
-        'SELECT * FROM mcp_servers WHERE id=?',
-        i.id,
-      );
+      const cur = mcpRow(app, i.id);
       if (!cur) throw new Error('No such MCP server.');
+      // A saved bearer / env secret must never follow the server to a new address or command.
+      if (i.url !== undefined && i.url !== cur.url)
+        app.secrets.delete(`mcp.${cur.id}.bearer`);
+      if (i.command !== undefined && i.command !== cur.command)
+        for (const x of app.secrets.list(`mcp.${cur.id}.env.`))
+          app.secrets.delete(x.name);
       app.db.run(
         'UPDATE mcp_servers SET name=?, url=?, command=?, args=?, enabled=? WHERE id=?',
         i.name ?? cur.name,
@@ -183,7 +264,8 @@ export const integrationOps: Operation[] = [
     description: 'Remove an MCP server.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'tap',
-    proposalTitle: (i) => `Remove MCP server ${i.id}`,
+    proposalTitle: (i, app) =>
+      `Remove MCP server "${mcpRow(app, i.id)?.name ?? i.id}"`,
     handler(i, { app }) {
       const r = app.db.run('DELETE FROM mcp_servers WHERE id=?', i.id);
       if (!r.changes) throw new Error('No such MCP server.');
@@ -199,8 +281,7 @@ export const integrationOps: Operation[] = [
     description:
       'Connect to an MCP server and list its tools (runs its command for stdio servers).',
     inputSchema: z.object({ id: z.string() }),
-    risk: 'tap',
-    proposalTitle: (i) => `Test MCP server ${i.id}`,
+    risk: 'free',
     async handler(i, { app }) {
       const row = app.db.get<McpRow>(
         'SELECT * FROM mcp_servers WHERE id=?',
@@ -224,8 +305,7 @@ export const integrationOps: Operation[] = [
     description:
       'Tools of an MCP server with description and whether each needs confirmation (connects to the server).',
     inputSchema: z.object({ id: z.string() }),
-    risk: 'tap',
-    proposalTitle: (i) => `List tools of MCP server ${i.id}`,
+    risk: 'free',
     async handler(i, { app }) {
       const row = app.db.get<McpRow>(
         'SELECT * FROM mcp_servers WHERE id=?',
@@ -261,6 +341,21 @@ export const integrationOps: Operation[] = [
     },
   }),
   defineOp({
+    name: 'mcp.clear_credential',
+    group: 'mcp',
+    description:
+      'Delete every stored secret of an MCP server (bearer token and env.* values).',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
+      const names = app.secrets.list(`mcp.${i.id}.`).map((x) => x.name);
+      for (const n of names) app.secrets.delete(n);
+      refreshMcp(app);
+      return { id: i.id, removed: names.length, hasCredential: false };
+    },
+  }),
+  defineOp({
     name: 'mcp.set_tool_confirmation',
     group: 'mcp',
     description:
@@ -271,8 +366,8 @@ export const integrationOps: Operation[] = [
       needsConfirmation: z.boolean(),
     }),
     risk: 'tap',
-    proposalTitle: (i) =>
-      `${i.needsConfirmation ? 'Require' : 'Skip'} confirmation for ${i.tool}`,
+    proposalTitle: (i, app) =>
+      `${i.needsConfirmation ? 'Require' : 'Skip'} confirmation for ${i.tool} on MCP server "${mcpRow(app, i.id)?.name ?? i.id}"`,
     handler(i, { app }) {
       const row = app.db.get<McpRow>(
         'SELECT * FROM mcp_servers WHERE id=?',
@@ -325,7 +420,10 @@ export const integrationOps: Operation[] = [
       config: z.record(z.string(), z.unknown()).optional(),
     }),
     risk: 'tap',
-    proposalTitle: (i) => `Add ${i.kind} account ${i.label}`,
+    proposalTitle: (i) => {
+      const hosts = accountHostChanges({}, i.config ?? {});
+      return `Add ${i.kind} account "${i.label}"${hosts.length ? `: ${hosts.join(', ')}` : ''}`;
+    },
     handler(i, { app }) {
       const id = newId('acc_');
       app.db.run(
@@ -349,10 +447,25 @@ export const integrationOps: Operation[] = [
       config: z.record(z.string(), z.unknown()).optional(),
     }),
     risk: 'tap',
-    proposalTitle: (i) => `Change account ${i.id}`,
+    proposalTitle(i, app) {
+      const cur = accountRow(app, i.id);
+      const hosts = i.config ? accountHostChanges(cur?.config ?? {}, i.config) : [];
+      const label =
+        i.label !== undefined && i.label !== cur?.label
+          ? [`label ${i.label}`]
+          : [];
+      const pw =
+        hosts.length && cur && app.secrets.get(`account.${cur.id}.password`)
+          ? ' (saved password is removed: enter it again)'
+          : '';
+      return `Change account "${cur?.label ?? i.id}": ${[...label, ...hosts].join(', ') || 'settings'}${pw}`;
+    },
     handler(i, { app }) {
       const cur = accountRow(app, i.id);
       if (!cur) throw new Error('No such account.');
+      // The saved password must never be sent to a host the user did not enter it for.
+      if (i.config && accountHostChanges(cur.config, i.config).length)
+        app.secrets.delete(`account.${cur.id}.password`);
       app.db.run(
         'UPDATE accounts SET label=?, config=? WHERE id=?',
         i.label ?? cur.label,
@@ -368,7 +481,8 @@ export const integrationOps: Operation[] = [
     description: 'Remove an account and its stored credentials.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'tap',
-    proposalTitle: (i) => `Remove account ${i.id}`,
+    proposalTitle: (i, app) =>
+      `Remove account "${accountRow(app, i.id)?.label ?? i.id}"`,
     handler(i, { app }) {
       for (const s of app.secrets.list(`account.${i.id}.`))
         app.secrets.delete(s.name);
@@ -543,17 +657,30 @@ export const integrationOps: Operation[] = [
     }),
     risk: 'free',
     async handler(i, { app }) {
-      const r = await bringStub(app).add(i.item, i.spec, i.listId, i.locale);
+      const b = bringStub(app);
+      const before = await bringFind(b, i.item, i.listId);
+      const r = await b.add(i.item, i.spec, i.listId, i.locale);
       if (!r.ok) throw new Error(r.text);
+      // Undo restores what was there: the old specification if the item was already on the list.
       return out(
         { added: i.item },
         {
           text: r.text,
-          undo: {
-            label: `Remove ${i.item} again`,
-            op: 'bring.remove',
-            input: { item: i.item, listId: i.listId },
-          },
+          undo: before
+            ? {
+                label: `${i.item} back to ${before.spec || 'no specification'}`,
+                op: 'bring.add',
+                input: {
+                  item: before.name,
+                  ...(before.spec ? { spec: before.spec } : { spec: '' }),
+                  listId: i.listId,
+                },
+              }
+            : {
+                label: `Remove ${i.item} again`,
+                op: 'bring.remove',
+                input: { item: i.item, listId: i.listId },
+              },
         },
       );
     },
@@ -570,7 +697,9 @@ export const integrationOps: Operation[] = [
     }),
     risk: 'free',
     async handler(i, { app }) {
-      const r = await bringStub(app).remove(i.item, i.listId, i.locale);
+      const b = bringStub(app);
+      const before = await bringFind(b, i.item, i.listId);
+      const r = await b.remove(i.item, i.listId, i.locale);
       if (!r.ok) throw new Error(r.text);
       return out(
         { removed: i.item },
@@ -579,7 +708,11 @@ export const integrationOps: Operation[] = [
           undo: {
             label: `Add ${i.item} again`,
             op: 'bring.add',
-            input: { item: i.item, listId: i.listId },
+            input: {
+              item: before?.name ?? i.item,
+              ...(before?.spec ? { spec: before.spec } : {}),
+              listId: i.listId,
+            },
           },
         },
       );

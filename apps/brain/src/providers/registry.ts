@@ -3,6 +3,7 @@ import { AnthropicProvider } from './anthropic.ts';
 import { stubRuntimes } from './agent-runtime.ts';
 import { OpenAiCompatProvider } from './openai-compat.ts';
 import type {
+  AgentRuntimeProvider,
   AnyProvider,
   ChatMessage,
   CompleteOptions,
@@ -27,7 +28,14 @@ export interface ProviderStatus {
   lastError: string | null;
   lastErrorAt: number | null;
   lastOkAt: number | null;
+  /** Set on the active provider when something it cannot do has nowhere else to go. */
+  warning?: string;
 }
+
+/** Background LLM work (summaries, titles, memory, triage) gives up after this. */
+export const TEXT_TIMEOUT_MS = 45_000;
+export const BACKGROUND_WARNING =
+  'Background tasks (summaries, memory, mail triage) need an API-key provider (DeepSeek, OpenAI or Anthropic), or a signed-in subscription.';
 
 /** Providers + active/fallback selection + per-provider status. */
 export class ProviderRegistry {
@@ -127,8 +135,10 @@ export class ProviderRegistry {
   }
 
   status(): ProviderStatus[] {
+    const textOk = this.textChain().length > 0 || this.textRuntime();
     return this.all().map((p) => {
       const e = this.errors.get(p.id);
+      const active = p.id === this.activeId();
       return {
         id: p.id,
         label: p.label,
@@ -140,8 +150,32 @@ export class ProviderRegistry {
         lastError: e?.error ?? null,
         lastErrorAt: e?.at ?? null,
         lastOkAt: e?.ok ?? null,
+        ...(active && !textOk ? { warning: BACKGROUND_WARNING } : {}),
       };
     });
+  }
+
+  /**
+   * Chat providers for one-shot text (no tools): active, fallback, then any other configured chat provider.
+   * Lets background work run while a subscription runtime (Codex / Claude Code) answers the questions.
+   */
+  private textChain(): Provider[] {
+    const ids = [
+      this.activeId(),
+      this.fallbackId(),
+      ...this.all().map((p) => p.id),
+    ];
+    const out: Provider[] = [];
+    for (const id of new Set(ids.filter(Boolean))) {
+      const p = this.providers.get(id);
+      if (p?.kind === 'chat' && p.configured()) out.push(p);
+    }
+    return out;
+  }
+  /** The active runtime, when no chat provider can do the text work. */
+  private textRuntime(): AgentRuntimeProvider | undefined {
+    const a = this.active();
+    return a?.kind === 'agent-runtime' && a.configured() ? a : undefined;
   }
 
   /** Order to try: active, then fallback (if different). Only chat providers here. */
@@ -209,8 +243,9 @@ export class ProviderRegistry {
     messages: ChatMessage[],
     tools: ToolSpec[],
     opts: CompleteOpts = {},
+    chainOverride?: Provider[],
   ): Promise<CompleteResult & { providerId: string }> {
-    const chain = this.chain();
+    const chain = chainOverride ?? this.chain();
     if (!chain.length)
       throw new Error(
         `Active provider "${this.activeId()}" cannot be used for chat completion.`,
@@ -240,20 +275,41 @@ export class ProviderRegistry {
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }
 
-  /** Simple helper: one prompt -> text (summaries, extraction). */
+  /**
+   * One prompt -> text (summaries, titles, extraction, triage). Uses the first configured chat provider
+   * (active, fallback, any other); with none, the active subscription runtime without tools. Times out
+   * after TEXT_TIMEOUT_MS.
+   */
   async text(
     system: string,
     user: string,
     signal?: AbortSignal,
+    timeoutMs = TEXT_TIMEOUT_MS,
   ): Promise<string> {
-    const r = await this.complete(
-      [
-        { role: 'system', content: system },
-        { role: 'user', content: user },
-      ],
-      [],
-      signal ? { signal } : {},
-    );
+    const chain = this.textChain();
+    if (chain.length) {
+      const r = await this.complete(
+        [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        [],
+        { silenceMs: timeoutMs, ...(signal ? { signal } : {}) },
+        chain,
+      );
+      return r.text.trim();
+    }
+    const rt = this.textRuntime();
+    if (!rt) throw new Error(BACKGROUND_WARNING);
+    const r = await rt.run({
+      system,
+      prompt: user,
+      mcpServers: [],
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeoutMs),
+        ...(signal ? [signal] : []),
+      ]),
+    });
     return r.text.trim();
   }
 }

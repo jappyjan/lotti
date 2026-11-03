@@ -21,16 +21,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # ---- Subscription runtimes (Codex CLI, Claude Code CLI) -------------------------------------------------
-# Used by the agent-runtime providers (src/providers/agent-runtime.ts). Installed best effort: the image
-# still builds when a package is unavailable. Integrations agent: pin versions here if you need to.
-RUN npm i -g @openai/codex @anthropic-ai/claude-code || echo "WARN: could not install Codex/Claude Code CLIs"
+# Used by the agent-runtime providers (src/integrations/runtimes/). Pinned to versions verified with Lotti;
+# the build fails loudly when they cannot be installed.
+RUN npm i -g @openai/codex@0.166.0 @anthropic-ai/claude-code@2.1.317
 # ---------------------------------------------------------------------------------------------------------
 
 ENV NODE_ENV=production DATA_DIR=/data PORT=8787
 WORKDIR /app
 COPY --from=build /out /app
-# Run as the unprivileged `node` user (uid 1000); the shell tool inherits this.
-RUN mkdir -p /data && chown -R node:node /data /app
+# Run as the unprivileged `node` user (uid 1000); the shell tool inherits this. Only /data is writable:
+# the app code stays root-owned so the agent cannot rewrite the server.
+RUN mkdir -p /data && chown -R node:node /data
 USER node
 VOLUME /data
 EXPOSE 8787

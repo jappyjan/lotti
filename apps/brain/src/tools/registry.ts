@@ -8,6 +8,10 @@ import { clip } from '../util/text.ts';
 /** State of one agent run (ask or job). Tools read it and append proposals / undo handles. */
 export interface RunState {
   askId?: string;
+  /** The socket that asked: phone tools of this run go there. */
+  connId?: string;
+  /** The user's UTC offset in minutes: tools render times in it (null = server local time). */
+  utcOffsetMin?: number | null;
   channel: 'glasses' | 'phone' | 'job';
   locale: 'de' | 'en';
   signal?: AbortSignal;

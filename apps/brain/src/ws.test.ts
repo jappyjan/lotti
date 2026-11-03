@@ -10,6 +10,7 @@ import {
   pairDevice,
   startServer,
   text,
+  until,
 } from './testing/helpers.ts';
 
 async function setup(opts: Parameters<typeof makeApp>[0] = {}) {
@@ -78,8 +79,9 @@ test('ask -> status -> answer with follow-ups and actions; turns are mirrored to
     const statuses = phone.of('status').map((s) => s.text);
     assert.ok(statuses.includes('Denke nach …'));
     assert.ok(phone.of('status').every((s) => s.id === 'a1'));
-    // mirroring: other socket sees both turns; the asking socket gets the user turn mirrored and the answer itself
+    // mirroring: every socket (the asker too) sees both turns; only the asker gets `answer`
     await second.waitFor((m) => m.type === 'message' && m.role === 'assistant');
+    await phone.waitFor((m) => m.type === 'message' && m.role === 'assistant');
     assert.deepEqual(
       second.of('message').map((m) => [m.role, m.channel, m.text]),
       [
@@ -90,7 +92,7 @@ test('ask -> status -> answer with follow-ups and actions; turns are mirrored to
     assert.equal(second.of('answer').length, 0);
     assert.deepEqual(
       phone.of('message').map((m) => m.role),
-      ['user'],
+      ['user', 'assistant'],
     );
     // phone actions are not performed by the server
     phone.send({ type: 'perform', id: 'p1', actionId: ans.actions[0].id });
@@ -364,7 +366,11 @@ test('presence over the socket drives catch-up and arrives as `catchup`', async 
       event: 'phone_unlock',
       at: '2026-11-03T06:00:30+01:00',
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await until(
+      () => t.app.settings.kvGet('presence.last_phone_use'),
+      3000,
+      'both presence events recorded',
+    );
     t.clock.set(new Date('2026-11-03T10:00:00+01:00'));
     c.send({
       type: 'presence',
@@ -441,6 +447,86 @@ test('shared conversation: glasses question then phone question see each other',
       (m) => m.role !== 'system',
     ).map((m: any) => m.content);
     assert.deepEqual(second, ['Wo wohne ich?', 'Hamburg.', 'Warum?']);
+    await c.close();
+  } finally {
+    await done();
+  }
+});
+
+test('asks are keyed per socket (same id from two devices), phone tools go to the asking socket', async () => {
+  const { t, srv, token, done } = await setup();
+  try {
+    const a = await WsClient.connect(srv, token);
+    const b = await WsClient.connect(srv, pairDevice(t.app, 'iPad')); // most recent socket
+    a.ws.on('message', (d) => {
+      const m = JSON.parse(d.toString());
+      if (m.type === 'tool_call')
+        a.send({ type: 'tool_result', callId: m.callId, ok: true, text: 'Berlin' });
+    });
+    t.mock.script(call('location', {}), answer('In Berlin.'));
+    a.send({ type: 'ask', id: 'q', text: 'Wo bin ich?', channel: 'phone', locale: 'de' });
+    const ans = await a.waitFor((m) => m.type === 'answer' && m.id === 'q');
+    assert.equal(ans.text, 'In Berlin.');
+    assert.equal(a.of('tool_call').length, 1);
+    assert.equal(b.of('tool_call').length, 0, 'not sent to the newest socket');
+
+    const slow = async () => {
+      await new Promise((r) => setTimeout(r, 80));
+      return answer('fertig');
+    };
+    t.mock.script(slow, slow);
+    for (const c of [a, b])
+      c.send({ type: 'ask', id: 'same', text: 'x', channel: 'phone', locale: 'de' });
+    const [ra, rb] = await Promise.all(
+      [a, b].map((c) => c.waitFor((m) => (m.type === 'answer' || m.type === 'error') && m.id === 'same')),
+    );
+    assert.deepEqual([ra.type, rb.type], ['answer', 'answer'], 'neither cancelled the other');
+    await a.close();
+    await b.close();
+  } finally {
+    await done();
+  }
+});
+
+test('liveness: a socket that stops answering pings is terminated, so pushes queue for APNs', async () => {
+  const { t, srv, token, done } = await setup({ wsPingMs: 40 });
+  try {
+    const live = await WsClient.connect(srv, token);
+    const dead = await WsClient.connect(srv, token);
+    assert.equal(t.app.hub.connections().length, 2);
+    (dead.ws as any)._socket.pause(); // a vanished phone: no pong ever comes back
+    await until(() => t.app.hub.connections().length === 1, 3000, 'dead socket removed');
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(t.app.hub.connections().length, 1, 'the answering socket stays');
+    await live.close();
+    await until(() => !t.app.hub.hasConnections(), 3000, 'live socket closed');
+    t.app.inbox.create({ title: 'Neu' });
+    assert.equal(t.app.inbox.queueDepth(), 1, 'queued for the offline device');
+    (dead.ws as any)._socket.destroy();
+  } finally {
+    await done();
+  }
+});
+
+test('ask: a status frame arrives at once, before conversation maintenance finishes; the ask goes on after a bounded wait', async () => {
+  const { t, srv, token, done } = await setup();
+  try {
+    const c = await WsClient.connect(srv, token);
+    let release!: () => void;
+    const slow = new Promise<void>((r) => (release = r));
+    t.app.conversations.maintain = () => slow; // a compaction hanging on the LLM
+    const { MAINTAIN_WAIT_MS } = await import('./conversations.ts');
+    assert.equal(MAINTAIN_WAIT_MS, 3000);
+    t.mock.script(answer('Hallo.'));
+    const t0 = Date.now();
+    c.send({ type: 'ask', id: 'u-1', text: 'Hallo', channel: 'phone', locale: 'de' });
+    const st = await c.waitFor((m) => m.type === 'status' && m.id === 'u-1', 1000);
+    assert.equal(st.text, 'Denke nach …');
+    assert.ok(Date.now() - t0 < 1000, 'well within the app\'s 6 s');
+    const ans = await c.waitFor((m) => m.type === 'answer' && m.id === 'u-1', 10_000);
+    assert.equal(ans.text, 'Hallo.');
+    assert.ok(Date.now() - t0 < 9000, 'maintenance wait is bounded');
+    release();
     await c.close();
   } finally {
     await done();
