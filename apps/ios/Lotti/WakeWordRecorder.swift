@@ -44,6 +44,20 @@ final class WakeWordRecorder {
         }
     }
 
+    /// `count` clips in a row, a pause between: say "Hey Lotti" at each prompt, vary tone, speed and distance.
+    func recordSeries(count: Int = 30) {
+        guard task == nil else { return }
+        task = Task {
+            for index in 1...count where !Task.isCancelled {
+                busy = "Say \"Hey Lotti\" now (\(index)/\(count))"
+                await capture(label: "hey_lotti", seconds: 2, piece: 2)
+                busy = "…"
+                try? await Task.sleep(for: .seconds(0.8))
+            }
+            finish()
+        }
+    }
+
     /// Background audio (talk, TV, noise), cut into 1 s pieces until stopped.
     func startBackground() {
         guard task == nil else { return }
@@ -55,6 +69,8 @@ final class WakeWordRecorder {
     }
 
     func stop() { task?.cancel() }
+
+    var isSeries: Bool { busy?.hasPrefix("Say") == true || busy == "…" }
 
     private func finish() {
         task = nil

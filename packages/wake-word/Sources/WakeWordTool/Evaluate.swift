@@ -11,6 +11,7 @@ enum Evaluate {
         guard FileManager.default.fileExists(atPath: Paths.model.path) else {
             throw ToolError("no \(Paths.model.path): run `wake-word train` first")
         }
+        try Generate.prepareUserClips()
         let compiled = try MLModel.compileModel(at: Paths.model)
         let model = try MLModel(contentsOf: compiled)
         let held = Clip.all().filter(\.isHeldOut)

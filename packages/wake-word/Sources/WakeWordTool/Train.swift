@@ -24,7 +24,7 @@ struct Clip {
                 let group = name.hasPrefix("pos-") ? "pos" : name.hasPrefix("near-") ? "near" : name.hasPrefix("noise-") ? "noise" : "bg"
                 clips.append(Clip(url: url, label: label, group: group))
             }
-            for url in Paths.wavs(Paths.user.appending(path: label)) { clips.append(Clip(url: url, label: label, group: "user")) }
+            for url in Paths.wavs(Paths.userPrepared.appending(path: label)) { clips.append(Clip(url: url, label: label, group: "user")) }
         }
         return clips
     }
@@ -34,6 +34,7 @@ struct Clip {
 enum Train {
     static func run() throws {
         let started = Date()
+        try Generate.prepareUserClips()
         let clips = Clip.all()
         guard clips.contains(where: { $0.label == "hey_lotti" }) else {
             throw ToolError("no training clips in data/: run `wake-word generate` first")

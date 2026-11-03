@@ -97,6 +97,9 @@ extension Conductor {
         var received = false
         var reset = false
         var reported = 0.0
+        var levelMax = 0.0
+        var activeChunks = 0
+        var chunks = 0
         let started = ContinuousClock.now
         let hub = microphone
         let limit = timing.micWatchdog
@@ -114,6 +117,17 @@ extension Conductor {
         for await chunk in subscription.stream {
             received = true
             let active = wakeGate.process(chunk)
+            levelMax = max(levelMax, wakeGate.level)
+            chunks += 1
+            if active { activeChunks += 1 }
+            if chunks == 200 {  // about every 10 s
+                let stats = wakeDetector?.takeStats() ?? (windows: 0, maxScore: 0)
+                wakeLog(String(format: "audio level max %.3f, gate at %.3f, loud %d/200 chunks, %d windows scored, best %.2f",
+                               levelMax, wakeGate.threshold, activeChunks, stats.windows, stats.maxScore))
+                levelMax = 0
+                activeChunks = 0
+                chunks = 0
+            }
             if let session = wakeSession {
                 feedWake(session, chunk, active: active)
                 continue

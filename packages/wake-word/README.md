@@ -28,21 +28,25 @@ xcrun devicectl device copy from --device <id> --domain-type appDataContainer \
 pnpm nx run wake-word:train
 ```
 
-`train` picks up `data/user/hey_lotti/` and `data/user/background/` by itself. About 100 "Hey Lotti" clips in different places and 15 minutes of background is plenty.
+`train` picks up `data/user/hey_lotti/` and `data/user/background/` by itself (any depth), trims each phrase clip to the loud part and makes a few level and noise variants. Debug → "Record 30 × Hey Lotti in a row" is the quick way. About 100 "Hey Lotti" clips in different places and 15 minutes of background is plenty.
 
 Everything in `data/` is gitignored: no raw audio, and not your voice, goes into git.
 
 ## Results
 
-Synthetic clips only, held out, threshold 0.8 (run on 2026-11-03, 1304 held-out clips; the synthetic voices are the same ones the model trained on, so this is optimistic for the real glasses):
+**On the real glasses (2026-11-03):** a model trained on synthetic voices only scored real G2 audio near 0 (best 0.47 in a minute of speech). After adding 30 recorded phrases and 94 one-second background pieces and retraining, 8 of 10 spoken "Hey Lotti, wie wird das Wetter?" woke Lotti (candidates scored 0.94–1.00 and were confirmed), and about 11 minutes of nearby talk gave one classifier hit (0.82), rejected by the speech confirm. Record more clips (Debug → Record 30 × "Hey Lotti") if it misses in a new place.
 
-| Group                                | Result                       | Target |
-| ------------------------------------ | ---------------------------- | ------ |
-| `hey_lotti` fires (recall)           | 95.1% (548 of 576)           | ≥ 95%  |
-| near misses rejected                 | **96.9%** (189 of 195)       | ≥ 98%  |
-| other speech rejected                | 99.0% (491 of 496)           | ≥ 98%  |
-| noise, silence, babble rejected      | 100% (37 of 37)              | ≥ 98%  |
+Final model, held-out clips (1374), threshold 0.8, 2026-11-03. The synthetic voices are the ones the model trained on, so those rows are optimistic for the real glasses:
 
-The near-miss target is missed: "Hey Bobby", "Hey Loki", "Hotti Lotti" and "Hallo Lotto" still fire now and then. The speech confirm in the app drops those. The recall misses are mostly "Hallo Lotti" in a few voices. Recall on real glasses audio is not measured; that needs the on-device check and probably a round of your own clips.
+| Group                                  | Result                  | Target |
+| -------------------------------------- | ----------------------- | ------ |
+| synthetic `hey_lotti` fires (recall)   | 97.7% (563 of 576)      | ≥ 95%  |
+| recorded `hey_lotti` fires (tiny set)  | 89.6% (43 of 48)        | –      |
+| near misses rejected                   | **96.9%** (189 of 195)  | ≥ 98%  |
+| other speech rejected                  | **96.8%** (480 of 496)  | ≥ 98%  |
+| noise, silence, babble rejected        | 100% (37 of 37)         | ≥ 98%  |
+| recorded background rejected (tiny set)| 86.4% (19 of 22)        | –      |
+
+Rejection of near misses and other speech is just under 98% (the version before the recordings were added had 99.0% for other speech but fired on almost nothing real). The speech confirm in the app drops what slips through. "Hey Bobby", "Hey Loki", "Hotti Lotti" and "Hallo Lotto" are the usual near-miss hits.
 
 Timing on an M-series Mac: `generate` about 16 minutes the first time (3800 `say` calls; the load on the Mac decides), seconds when the `say` output is cached; `train` about 3.5 minutes. The model is about 30 MB (it carries the VGGish feature extractor).

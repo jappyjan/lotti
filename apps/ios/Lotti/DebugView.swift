@@ -50,6 +50,11 @@ struct DebugView: View {
             Section {
                 Button("Record \"Hey Lotti\" (2 s)") { recorder.recordPhrase() }
                     .disabled(recorder.busy != nil || !link.status.isConnected)
+                Button("Record 30 × \"Hey Lotti\" in a row") { recorder.recordSeries() }
+                    .disabled(recorder.busy != nil || !link.status.isConnected)
+                if recorder.isSeries {
+                    Button("Stop", role: .destructive) { recorder.stop() }
+                }
                 if recorder.busy == "Recording background…" {
                     Button("Stop background", role: .destructive) { recorder.stop() }
                 } else {

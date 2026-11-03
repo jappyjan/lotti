@@ -35,6 +35,9 @@ public final class WakeWordDetector {
     public private(set) var lastScore: Double?
     /// Audio seconds the classifier was awake for, to judge battery.
     public private(set) var classifiedSeconds = 0.0
+    /// Windows scored and the highest score since the last `takeStats()`, for the log.
+    private var windows = 0
+    private var maxScore = 0.0
 
     public init(
         classifier: any SoundClassifier, threshold: Double = 0.8, window: Duration = .seconds(1),
@@ -46,6 +49,11 @@ public final class WakeWordDetector {
         hopSamples = max(Int(Double(windowSamples) * (1 - overlap)), 1)
         preRollSamples = Int(preRoll.seconds * Double(Self.sampleRate))
         ring = AudioRingBuffer(capacity: max(windowSamples, preRollSamples))
+    }
+
+    public func takeStats() -> (windows: Int, maxScore: Double) {
+        defer { windows = 0; maxScore = 0 }
+        return (windows, maxScore)
     }
 
     /// Forget buffered audio (after the stream was paused).
@@ -66,6 +74,8 @@ public final class WakeWordDetector {
         classifiedSeconds += Double(hopSamples) / Double(Self.sampleRate)
         let score = await classifier.score(ring.last(windowSamples))
         lastScore = score
+        windows += 1
+        maxScore = max(maxScore, score)
         guard score >= threshold else { return nil }
         // Start over, so the same phrase doesn't fire again on the next window.
         let preRoll = ring.last(preRollSamples)

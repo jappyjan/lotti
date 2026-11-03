@@ -93,6 +93,45 @@ enum Generate {
         print("wrote \(written) clips to \(Paths.synthetic.path) in \(seconds) s")
     }
 
+    /// Your recordings (`data/user/<class>/*.wav`, found at any depth) cut down to the phrase, with a
+    /// few level and noise variants each, into `data/user-prepared/`. They are already LC3 audio.
+    static func prepareUserClips() throws {
+        let manager = FileManager.default
+        try? manager.removeItem(at: Paths.userPrepared)
+        for label in Paths.classes {
+            let out = Paths.userPrepared.appending(path: label)
+            try manager.createDirectory(at: out, withIntermediateDirectories: true)
+            guard let walker = manager.enumerator(at: Paths.user, includingPropertiesForKeys: nil) else { continue }
+            let files = walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "wav" && $0.pathComponents.contains(label) }
+            for url in files.sorted(by: { $0.path < $1.path }) {
+                var rng = Random(seed: url.lastPathComponent)
+                var piece = try Audio.read(url)
+                let name = url.deletingPathExtension().lastPathComponent
+                if label == "hey_lotti" {
+                    // The phrase is the loud part; keep a little room around it, at least one window.
+                    let peak = Int(piece.map { abs(Int($0)) }.max() ?? 0)
+                    let limit = max(peak / 12, 60)
+                    guard let first = piece.firstIndex(where: { abs(Int($0)) > limit }),
+                          let last = piece.lastIndex(where: { abs(Int($0)) > limit }) else { continue }
+                    piece = Array(piece[max(first - 1600, 0)...min(last + 1600, piece.count - 1)])
+                    if piece.count < Audio.rate { piece += [Int16](repeating: 0, count: Audio.rate - piece.count) }
+                }
+                for variant in 0..<(label == "hey_lotti" ? 6 : 2) {
+                    var signal = piece.map { Double($0) / 32768 }
+                    if variant > 0 {
+                        let gain = Double.random(in: 0.4...1.6, using: &rng)
+                        let power = (signal.map { $0 * $0 }.reduce(0, +) / Double(max(signal.count, 1))).squareRoot()
+                        let hiss = coloredNoise(count: signal.count, &rng)
+                        let level = power / pow(10, Double.random(in: 10...30, using: &rng) / 20)
+                        for index in signal.indices { signal[index] = (signal[index] + hiss[index] * level) * gain }
+                    }
+                    let pcm = signal.map { Int16(max(min($0, 0.999), -0.999) * 32767) }
+                    try Audio.write(pcm, to: out.appending(path: "user-\(name)~\(variant).wav"))
+                }
+            }
+        }
+    }
+
     // MARK: say
 
     static func speak(_ jobs: [Job]) throws {

@@ -26,7 +26,8 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 
 - **Wake word "Hey Lotti"** (2026-11-03): say it with the glasses on and the phone in your pocket, no gesture. Energy gate, Create ML sound classifier and Apple speech confirm on the shared glasses mic; ends on 1.5 s of quiet. Setting on the status screen (default on), Debug section with score and recorder. See [architecture.md](architecture.md#wake-word).
-  - Known gaps: the model starts from synthetic voices and probably needs a round of clips recorded with the real glasses (Debug → Record); not yet checked with the phone locked, nor for battery (item 9); one language-agnostic phrase only.
+  - Checked on the phone and glasses (2026-11-03): 8 of 10 "Hey Lotti, wie wird das Wetter?" woke Lotti and were answered; about 11 minutes of talk nearby gave one classifier hit (0.82) that the speech confirm rejected, so no false wake. The first, synthetic-only model scored real glasses audio near 0; it was retrained with 30 recorded phrases and ~1.5 min of background.
+  - Known gaps: few real recordings (more clips from Debug → Record will help); the "phone locked" and background run were seen in the log but not measured over a day; battery is unmeasured (item 8); rejection targets (98%) are just missed on held-out clips (96.9% near misses, 96.8% other speech).
 
 ---
 

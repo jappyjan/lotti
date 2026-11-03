@@ -73,6 +73,8 @@ enum Paths {
     static let synthetic = data.appending(path: "synthetic")
     /// Clips recorded with the glasses' mic in the app's Debug screen, copied here by hand.
     static let user = data.appending(path: "user")
+    /// `user` after trimming and augmenting (derived, regenerated on every train).
+    static let userPrepared = data.appending(path: "user-prepared")
     static let model = URL(fileURLWithPath: "HeyLotti.mlmodel")
     static let appModel = URL(fileURLWithPath: "../../apps/ios/Lotti/HeyLotti.mlmodel")
     static let classes = ["hey_lotti", "background"]
