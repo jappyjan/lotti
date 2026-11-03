@@ -73,6 +73,9 @@ public final class NavigationSession {
         phase = .navigating
         self.mode = mode
         link.displaySuspended = true
+        // Subscribe before anything is sent: an event from the glasses right after the screen
+        // opens (or a slow task start) must not be lost.
+        let events = link.navigationEvents()
 
         do {
             let reply = try await link.navigationRequest(G2Navigation.start(magic: nextMagic()))
@@ -92,7 +95,7 @@ public final class NavigationSession {
         await link.sendNavigation(placeholder)
 
         startHeartbeat()
-        eventsTask = Task { @MainActor [weak self] in await self?.handleEvents() }
+        eventsTask = Task { @MainActor [weak self] in await self?.handleEvents(events) }
         await run(locations: locations)
     }
 
@@ -137,8 +140,8 @@ public final class NavigationSession {
         }
     }
 
-    private func handleEvents() async {
-        for await event in link.navigationEvents() {
+    private func handleEvents(_ events: AsyncStream<G2NavigationEvent>) async {
+        for await event in events {
             guard isRunning else { return }
             switch event {
             case .notifyExit, .endSessionReq:
