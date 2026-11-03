@@ -193,7 +193,7 @@ A small raccoon in the phone app that wears glasses when yours are on. Purely co
 - **Head:** while the glasses are worn and the mascot is on screen in the foreground, the raccoon's head follows yours: nod (about ±20°) and tilt (about ±15°), eased between the roughly once-a-second samples. It never turns sideways (see IMU findings).
 - **Without a usable IMU** (no samples within 5 s): the head stays neutral, the glasses still follow wear state, one log line, no error.
 - **Settings:** a switch in Settings > Glasses turns the mascot off (it then costs no IMU traffic).
-- **Art:** the drawings live in `apps/ios/Lotti/Mascot/Art/` and are produced separately; logic is in `packages/lotti-kit/Sources/LottiKit/Mascot/` (`MascotController`, `MascotWearMapper`, `HeadAngleMapper`). To change the look, replace the art; the logic doesn't care.
+- **Art:** drawn by an Opus 5.5 (extra-high effort) subagent and approved by a second, separate Opus 5.5 reviewer after 2 rounds (previews in `docs/mascot/`, preview tool `apps/ios/scripts/render-mascot/`); the drawings live in `apps/ios/Lotti/Mascot/Art/`; logic is in `packages/lotti-kit/Sources/LottiKit/Mascot/` (`MascotController`, `MascotWearMapper`, `HeadAngleMapper`). To change the look, replace the art; the logic doesn't care.
 
 ### IMU findings
 
