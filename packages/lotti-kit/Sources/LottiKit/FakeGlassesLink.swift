@@ -18,6 +18,9 @@ public final class FakeGlassesLink: GlassesLink {
     /// Makes `startMicrophone()` throw, to test the phone-mic fallback.
     public var microphoneError: Error?
     public private(set) var microphoneOn = false
+    /// How often the mic was switched on and off, to check streams are shared, not restarted.
+    public private(set) var microphoneStarts = 0
+    public private(set) var microphoneStops = 0
     public private(set) var headTracking = false
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
@@ -53,16 +56,26 @@ public final class FakeGlassesLink: GlassesLink {
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
         if let microphoneError { throw microphoneError }
+        mic?.finish()
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream()
         mic = continuation
         microphoneOn = true
+        microphoneStarts += 1
         return stream
     }
 
     public func stopMicrophone() async {
+        microphoneStops += 1
         microphoneOn = false
         mic?.finish()
         mic = nil
+    }
+
+    /// Ends the open microphone stream as if the firmware stopped the mic (the link stays up).
+    public func dropMicrophone() {
+        mic?.finish()
+        mic = nil
+        microphoneOn = false
     }
 
     /// Deliver PCM to the open microphone stream.

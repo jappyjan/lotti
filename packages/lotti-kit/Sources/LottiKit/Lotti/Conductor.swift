@@ -31,11 +31,27 @@ public final class Conductor {
         /// For questions Hermes gets by default: the phone answers if Hermes is silent for this long.
         /// Progress (status lines, tool calls) restarts the clock, so a slow answer isn't cut off.
         public var remoteFallback: Duration
+        /// "Hey Lotti" must be confirmed by the speech recognizer within this long after the classifier fires.
+        public var wakeConfirm: Duration
+        /// A wake-started command ends after this much quiet.
+        public var wakeSilence: Duration
+        /// Nothing said after "Hey Lotti" for this long: the display goes off, quietly.
+        public var wakeNoCommand: Duration
+        /// A wake-started command is cut off after this long.
+        public var wakeCap: Duration
+        /// No microphone data for this long while wake word is on: restart the mic.
+        public var micWatchdog: Duration
+        /// Retries of a failed mic start back off from `micRetry`, doubling up to `micRetryMax`.
+        public var micRetry: Duration
+        public var micRetryMax: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20)
+            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20),
+            wakeConfirm: Duration = .seconds(3), wakeSilence: Duration = .milliseconds(1500),
+            wakeNoCommand: Duration = .seconds(5), wakeCap: Duration = .seconds(15),
+            micWatchdog: Duration = .seconds(3), micRetry: Duration = .seconds(1), micRetryMax: Duration = .seconds(30)
         ) {
             self.idle = idle
             self.done = done
@@ -44,6 +60,13 @@ public final class Conductor {
             self.conversation = conversation
             self.remote = remote
             self.remoteFallback = remoteFallback
+            self.wakeConfirm = wakeConfirm
+            self.wakeSilence = wakeSilence
+            self.wakeNoCommand = wakeNoCommand
+            self.wakeCap = wakeCap
+            self.micWatchdog = micWatchdog
+            self.micRetry = micRetry
+            self.micRetryMax = micRetryMax
         }
     }
 
@@ -60,44 +83,60 @@ public final class Conductor {
 
     /// What the glasses show right now; nil when the display is off. The phone mirrors it.
     public private(set) var screen: Screen?
-    public private(set) var mode: Mode = .off
+    public internal(set) var mode: Mode = .off
     /// The last thing you said, for the phone's log.
-    public private(set) var lastHeard: String?
+    public internal(set) var lastHeard: String?
     /// Where the last voice input came from ("glasses" / "phone"), for the status screen.
-    public private(set) var microphoneSource: String?
+    public internal(set) var microphoneSource: String?
     public private(set) var lastError: String?
 
-    @ObservationIgnored private let link: any GlassesLink
+    @ObservationIgnored let link: any GlassesLink
     @ObservationIgnored private let brain: any Brain
     @ObservationIgnored private let hermes: (any RemoteBrain)?
     @ObservationIgnored private let toolbox: Toolbox
-    @ObservationIgnored private let speech: any SpeechRecognizer
+    @ObservationIgnored let speech: any SpeechRecognizer
     @ObservationIgnored private let phoneMicrophone: (any Microphone)?
     @ObservationIgnored private let todayProvider: any TodayProvider
     @ObservationIgnored private let composer: TodayComposer
     @ObservationIgnored private var renderer: ScreenRenderer
-    @ObservationIgnored private let timing: Timing
+    @ObservationIgnored let timing: Timing
     @ObservationIgnored private let now: @Sendable () -> Date
 
-    @ObservationIgnored private var backStack: [Screen] = []
+    @ObservationIgnored var backStack: [Screen] = []
     @ObservationIgnored private var today: TodayInfo?
-    @ObservationIgnored private var timer: Task<Void, Never>?
-    @ObservationIgnored private var listening: Task<String, Never>?
-    @ObservationIgnored private var thinking: Task<Void, Never>?
+    @ObservationIgnored var timer: Task<Void, Never>?
+    @ObservationIgnored var listening: Task<String, Never>?
+    @ObservationIgnored var thinking: Task<Void, Never>?
     @ObservationIgnored private var usingPhoneMic = false
     /// When Jan last asked anything: the on-device brain's clock for `timing.conversation`.
     /// Hermes has no such clock: it continues one session forever.
-    @ObservationIgnored private var lastAsked: Date?
+    @ObservationIgnored var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
     /// When Hermes last made progress, so the fallback waits for silence, not a fixed total time.
     @ObservationIgnored private var hermesActivity = ContinuousClock.now
 
+    /// The glasses' mic, shared by hold-to-talk, the wake word and the recorder.
+    @ObservationIgnored public let microphone: MicrophoneHub
+    @ObservationIgnored let wakeDetector: WakeWordDetector?
+    @ObservationIgnored var wakeGate = EnergyGate()
+    @ObservationIgnored var wakeTask: Task<Void, Never>?
+    @ObservationIgnored var wakeSession: WakeSession?
+    @ObservationIgnored var holdSubscription: MicrophoneHub.Subscription?
+    @ObservationIgnored var wakeEnabled = false
+    @ObservationIgnored var wakeStage2Seconds = 0.0
+    /// What the "Hey Lotti" listener is doing, for the status and Debug screens.
+    public internal(set) var wakeState: WakeState = .off
+    /// The newest candidate and how it ended ("0.91 confirmed: …", "0.85 rejected: …").
+    public internal(set) var wakeLast: String?
+    /// Minutes the classifier and the speech confirm ran, to judge battery.
+    public internal(set) var wakeMinutes: (stage1: Double, stage2: Double) = (0, 0)
+
     public init(
         link: any GlassesLink, brain: any Brain, hermes: (any RemoteBrain)? = nil, toolbox: Toolbox = Toolbox(),
         speech: any SpeechRecognizer, phoneMicrophone: (any Microphone)? = nil, today: any TodayProvider,
         composer: TodayComposer = TodayComposer(), renderer: ScreenRenderer = ScreenRenderer(),
-        timing: Timing = Timing(), now: @escaping @Sendable () -> Date = { Date() }
+        timing: Timing = Timing(), wakeDetector: WakeWordDetector? = nil, now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.link = link
         self.brain = brain
@@ -109,6 +148,8 @@ public final class Conductor {
         self.composer = composer
         self.renderer = renderer
         self.timing = timing
+        self.wakeDetector = wakeDetector
+        microphone = MicrophoneHub(link: link)
         self.now = now
     }
 
@@ -134,6 +175,7 @@ public final class Conductor {
         shownFrame = nil
         await link.setHeadTracking(headTracking)
         draw()
+        restartWake()
     }
 
     /// Switch the layout variant for the choices. The frame carries the style, so the link
@@ -236,7 +278,7 @@ public final class Conductor {
         }
     }
 
-    private func turnOff() {
+    func turnOff() {
         let hadConversation = lastAsked != nil
         timer?.cancel()
         backStack = []
@@ -254,7 +296,7 @@ public final class Conductor {
         brain.endConversation()
     }
 
-    private func show(_ next: Screen, timeout: Bool = true) {
+    func show(_ next: Screen, timeout: Bool = true) {
         screen = next
         draw()
         if next.kind == .done {
@@ -309,8 +351,9 @@ public final class Conductor {
 
     // MARK: - Voice
 
-    private func startListening() {
+    func startListening() {
         guard mode != .listening else { return }
+        abortWakeSession(reason: "hold-to-talk started")
         timer?.cancel()
         thinking?.cancel()
         backStack = []
@@ -324,7 +367,9 @@ public final class Conductor {
     private func listen() async -> String {
         let audio: AsyncStream<[Int16]>
         do {
-            audio = try await link.startMicrophone()
+            let subscription = try await microphone.subscribe()
+            holdSubscription = subscription
+            audio = subscription.stream
             usingPhoneMic = false
             microphoneSource = "glasses"
         } catch {
@@ -353,6 +398,7 @@ public final class Conductor {
     }
 
     private func stopListening() {
+        if let session = wakeSession, session.confirmed { return endWakeCommand(session) }
         guard let listening else { return }
         mode = .working
         show(Screen(.working, "Let me think…"), timeout: false)
@@ -373,25 +419,32 @@ public final class Conductor {
     }
 
     /// The latest partial transcript, used if the final one doesn't arrive in time.
-    @ObservationIgnored private var lastPartial = ""
+    @ObservationIgnored var lastPartial = ""
     /// Set when you let go (or cancel) before the microphone finished starting.
-    @ObservationIgnored private var micStopRequested = false
+    @ObservationIgnored var micStopRequested = false
 
-    private func cancelListening() {
+    func cancelListening() {
+        abortWakeSession(reason: "cancelled")
         listening?.cancel()
         listening = nil
         Task { await stopMicrophone() }
     }
 
-    private func stopMicrophone() async {
+    func stopMicrophone() async {
         micStopRequested = true
-        if usingPhoneMic { await phoneMicrophone?.stop() } else { await link.stopMicrophone() }
+        if usingPhoneMic {
+            await phoneMicrophone?.stop()
+        } else if let subscription = holdSubscription {
+            holdSubscription = nil
+            await microphone.unsubscribe(subscription)
+        }
     }
 
     // MARK: - Chat
 
     /// Ask Lotti something (from voice or a rail follow-up). `onHermes` sends it straight to Hermes.
     public func ask(_ question: String, onHermes toHermes: Bool = false) {
+        abortWakeSession(reason: "a question was asked")
         timer?.cancel()
         listening?.cancel()
         thinking?.cancel()
@@ -404,7 +457,7 @@ public final class Conductor {
     /// Routes a question (see `Router`): simple tasks the phone's rules recognise go to the
     /// on-device brain; everything else to Hermes, with the phone as the fallback when Hermes is
     /// missing, failing or too slow. "Ask Hermes" and "Hermes, …" go to Hermes without fallback.
-    private func answer(_ question: String, onHermes toHermes: Bool = false) async {
+    func answer(_ question: String, onHermes toHermes: Bool = false) async {
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
             endConversation()
         }
@@ -568,7 +621,7 @@ public final class Conductor {
         }
     }
 
-    private func log(_ message: String) {
+    func log(_ message: String) {
         print("[Lotti] \(message)")
     }
 }

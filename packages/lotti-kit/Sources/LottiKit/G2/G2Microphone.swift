@@ -70,3 +70,61 @@ public final class LC3Decoder {
         G2Microphone.frames(in: packet).flatMap { decode($0) }
     }
 }
+
+/// Encodes 16 kHz mono PCM to LC3 (10 ms frames, 40 bytes each), the way the glasses do. Only for
+/// training data: the wake word model is trained on audio that went through the same codec as the
+/// G2 microphone. Not thread-safe.
+public final class LC3Encoder {
+    private let memory: UnsafeMutableRawPointer
+    private let encoder: lc3_encoder_t
+    public let samplesPerFrame: Int
+    public let frameBytes: Int
+
+    public init?(
+        frameDurationMicroseconds: Int32 = G2Microphone.frameDurationMicroseconds,
+        sampleRate: Int32 = Int32(G2Microphone.sampleRate), frameBytes: Int = G2Microphone.frameBytes
+    ) {
+        let size = Int(lc3_encoder_size(frameDurationMicroseconds, sampleRate))
+        let samples = Int(lc3_frame_samples(frameDurationMicroseconds, sampleRate))
+        guard size > 0, samples > 0 else { return nil }
+        memory = .allocate(byteCount: size, alignment: 16)
+        guard let encoder = lc3_setup_encoder(frameDurationMicroseconds, sampleRate, 0, memory) else {
+            memory.deallocate()
+            return nil
+        }
+        self.encoder = encoder
+        samplesPerFrame = samples
+        self.frameBytes = frameBytes
+    }
+
+    deinit { memory.deallocate() }
+
+    /// Encodes one frame of `samplesPerFrame` samples.
+    public func encode(_ frame: [Int16]) -> [UInt8]? {
+        guard frame.count == samplesPerFrame else { return nil }
+        var out = [UInt8](repeating: 0, count: frameBytes)
+        let result = frame.withUnsafeBufferPointer { pcm in
+            out.withUnsafeMutableBytes { bytes in
+                lc3_encode(encoder, LC3_PCM_FORMAT_S16, pcm.baseAddress, 1, Int32(frameBytes), bytes.baseAddress)
+            }
+        }
+        return result == 0 ? out : nil
+    }
+
+    /// Sends `samples` through encode and decode, as if they came from the glasses. A partial last
+    /// frame is padded with silence; the result has the same length as the input.
+    public static func roundTrip(_ samples: [Int16]) -> [Int16] {
+        guard let encoder = LC3Encoder(), let decoder = LC3Decoder() else { return samples }
+        var output: [Int16] = []
+        output.reserveCapacity(samples.count)
+        var index = 0
+        while index < samples.count {
+            var frame = Array(samples[index..<min(index + encoder.samplesPerFrame, samples.count)])
+            frame += [Int16](repeating: 0, count: encoder.samplesPerFrame - frame.count)
+            guard let bytes = encoder.encode(frame) else { return samples }
+            output += decoder.decode(bytes[...])
+            index += encoder.samplesPerFrame
+        }
+        return Array(output.prefix(samples.count))
+    }
+}
