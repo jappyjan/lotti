@@ -278,3 +278,28 @@ test('mcp http: auth failure is clear', async () => {
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
   assert.match(r.result.error, /bearer token/);
 });
+
+test('refresh keeps the old tools until the new set is ready (no "unknown tool" window) and rejects duplicate names', async () => {
+  const t = makeApp();
+  registerIntegrations(t.app);
+  const stdio = (name: string) => ({
+    name,
+    transport: 'stdio' as const,
+    command: process.execPath,
+    args: [
+      '-e',
+      `const rl=require('readline').createInterface({input:process.stdin});rl.on('line',l=>{const m=JSON.parse(l);const s=o=>console.log(JSON.stringify(o));if(m.method==='initialize')s({jsonrpc:'2.0',id:m.id,result:{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'x',version:'1'}}});else if(m.method==='tools/list')setTimeout(()=>s({jsonrpc:'2.0',id:m.id,result:{tools:[{name:'echo',inputSchema:{type:'object'}}]}}),300)})`,
+    ],
+  });
+  const add = await t.app.ops.invoke('mcp.add', stdio('slow'), 'app');
+  assert.equal(add.ok, true);
+  await t.app.integrations.mcp.refresh!();
+  assert.ok(t.app.tools.get('mcp__slow__echo'));
+  const dup = await t.app.ops.invoke('mcp.add', stdio('slow'), 'app');
+  assert.equal(dup.ok, false);
+  assert.match((dup as { error: string }).error, /already exists/);
+  const p = t.app.integrations.mcp.refresh!();
+  assert.ok(t.app.tools.get('mcp__slow__echo'), 'still there while refreshing');
+  await p;
+  assert.ok(t.app.tools.get('mcp__slow__echo'));
+});

@@ -137,6 +137,12 @@ class HttpSession implements Session {
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
+    }).catch((e: unknown) => {
+      const why =
+        e instanceof Error
+          ? ((e.cause as Error | undefined)?.message ?? e.message)
+          : String(e);
+      throw new Error(`Cannot reach the MCP server at ${this.url}: ${why}`);
     });
     this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
     if (res.status === 401 || res.status === 403)
@@ -290,10 +296,24 @@ export class McpClientImpl implements McpClient {
     });
   }
 
-  /** (Re)register the tools of all enabled servers as `mcp__<server>__<tool>`. */
-  async refresh(): Promise<void> {
-    for (const n of this.registered) this.app.tools.unregister(n);
-    this.registered.clear();
+  private refreshing: Promise<void> = Promise.resolve();
+
+  /**
+   * (Re)register the tools of all enabled servers as `mcp__<server>__<tool>`. The new set is
+   * collected first and swapped in at once (tools never vanish while a slow server answers);
+   * overlapping refreshes run one after the other.
+   */
+  refresh(): Promise<void> {
+    const run = this.refreshing.then(() => this.doRefresh());
+    this.refreshing = run.catch(() => undefined);
+    return run;
+  }
+
+  private async doRefresh(): Promise<void> {
+    const staged: {
+      server: McpServerConfig;
+      tools: { name: string; description?: string; inputSchema?: unknown }[];
+    }[] = [];
     for (const server of loadMcpServers(this.app).filter((s) => s.enabled)) {
       try {
         const tools = await this.listTools(server);
@@ -301,7 +321,7 @@ export class McpClientImpl implements McpClient {
           "UPDATE mcp_servers SET status='ok', last_error=NULL WHERE id=?",
           server.id,
         );
-        for (const t of tools) this.registerTool(server, t);
+        staged.push({ server, tools });
       } catch (e) {
         this.app.log.warn(`MCP server ${server.name} unavailable`, String(e));
         this.app.db.run(
@@ -311,6 +331,10 @@ export class McpClientImpl implements McpClient {
         );
       }
     }
+    for (const n of this.registered) this.app.tools.unregister(n);
+    this.registered.clear();
+    for (const { server, tools } of staged)
+      for (const t of tools) this.registerTool(server, t);
   }
 
   private registerTool(

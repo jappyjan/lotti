@@ -117,6 +117,8 @@ export const integrationOps: Operation[] = [
         throw new Error('url is required for http.');
       if (i.transport === 'stdio' && !i.command)
         throw new Error('command is required for stdio.');
+      if (app.db.get('SELECT 1 AS x FROM mcp_servers WHERE name=?', i.name))
+        throw new Error(`An MCP server named "${i.name}" already exists.`);
       const id = newId('mcp_');
       app.db.run(
         'INSERT INTO mcp_servers(id,name,transport,url,command,args,enabled,created_at) VALUES(?,?,?,?,?,?,?,?)',
