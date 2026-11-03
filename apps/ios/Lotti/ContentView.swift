@@ -10,6 +10,7 @@ struct ContentView: View {
     let hermesClient: HermesClient
     let toolbox: Toolbox
     @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
+    @AppStorage(Settings.wakeWordKey) private var wakeWord = Settings.wakeWordEnabled
 
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
@@ -36,6 +37,11 @@ struct ContentView: View {
                         speech.locale = Locale(identifier: new)
                         Task { await speech.prepare() }
                     }
+                    Toggle("Listen for \"Hey Lotti\"", isOn: $wakeWord)
+                        .onChange(of: wakeWord) { _, on in conductor.setWakeWord(enabled: on) }
+                    if wakeWord {
+                        LabeledContent("Hey Lotti", value: wakeStatus)
+                    }
                 }
 
                 lookUpSection
@@ -47,6 +53,14 @@ struct ContentView: View {
             .navigationTitle("Lotti")
         }
         .tint(.green)
+    }
+
+    private var wakeStatus: String {
+        switch conductor.wakeState {
+        case .off: link.status.isConnected ? "Off" : "Waiting for glasses"
+        case .listening: "Listening"
+        case .unavailable: "Glasses mic unavailable"
+        }
     }
 
     @ViewBuilder private var glassesSection: some View {

@@ -37,7 +37,7 @@ The **phone is the hub.** It owns the glasses and ring connection, gathers signa
 | Glasses link     | iOS    | BLE connection, auth handshake, display commands, mic stream, touchpad events                                                     |
 | Ring input       | iOS    | R1 gestures. The ring is linked to the glasses, which relay its gestures through the glasses link ([S2](spikes/s2-ring.md))       |
 | Renderer         | iOS    | Turns a schema screen into G2 containers; pagination, focus, gesture → action mapping                                             |
-| Voice            | iOS    | Push-to-talk, on-device speech-to-text (`SpeechAnalyzer`), wake word spotter                                                      |
+| Voice            | iOS    | Push-to-talk, "Hey Lotti" wake word (energy gate + sound classifier + speech confirm), on-device speech-to-text (`SpeechAnalyzer`)                                                      |
 | Signals          | iOS    | Notifications (`AccessoryNotifications`, EU), location, calendar, battery and connection state                                    |
 | Messaging        | iOS    | Quick replies to forwarded notifications for the five messengers (see below)                                                      |
 | Navigation       | iOS    | Routing, step tracking, rerouting, `nav` screens on the glasses (see below)                                                       |
@@ -83,7 +83,7 @@ The one genuinely open piece is the foreground notification body: it travels ove
 | Task                                                        | On-device?  | Notes                                                                                                                                       |
 | ----------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | Speech-to-text (dictation, push-to-talk)                    | ✅          | `SpeechAnalyzer` (iOS 26+), on-device and fast                                                                                              |
-| Wake word "Hey Lotti"                                       | ✅ but DIY  | No iOS API; small keyword-spotting model on the glasses mic stream. Battery is the open question; only built if push-to-talk feels limiting |
+| Wake word "Hey Lotti"                                       | ✅ built    | No iOS API, and Foundation Models is text-only. Energy gate → Create ML sound classifier → Apple speech confirm on the glasses mic. Battery unmeasured ([Wake word](#wake-word)) |
 | Notification triage (show / ignore / priority)              | ✅          | Small classification task, a good fit for a ~3B model                                                                                       |
 | Quick replies for messages                                  | ✅          | Short generation, user tone from a few examples                                                                                             |
 | Choosing and filling a screen template                      | ✅          | Guided generation (`@Generable`) produces valid screens directly                                                                            |
@@ -165,6 +165,22 @@ A single session with tool calling failed on the ~3B model: it made up a free ca
 Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
 
 Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Directions use MapKit on the phone, not Hermes: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. An answer that says "I don't know" goes to Hermes. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
+
+## Wake word
+
+"Hey Lotti, …" with no gesture. Works in every mode, display off and phone locked included, as long as the glasses are connected and the setting "Listen for 'Hey Lotti'" is on (default on). Glasses mic only: the phone is in a pocket.
+
+- **One shared mic.** With the setting on, the glasses' mic stays on. `MicrophoneHub` hands the same stream to the wake listener, hold-to-talk and the Debug recorder, so holding doesn't switch the mic off and on. With the setting off, the mic is on only while you hold, as before.
+- **Stage 0, energy gate** (`EnergyGate`): RMS of each chunk against an adaptive noise floor. Quiet audio never reaches the classifier.
+- **Stage 1, sound classifier** (`WakeWordDetector`, `SoundAnalysisClassifier`): a Create ML model (`HeyLotti.mlmodel`, classes `hey_lotti` and `background`) on 1 s windows with 50% overlap. A score of 0.8 or more (Debug slider) is a candidate.
+- **Stage 2, speech confirm** (`Conductor`): `SpeechAnalyzer` gets the last 2 s before the hit (`AudioRingBuffer`), then the live audio. Within 3 s the transcript must hold a fuzzy "Hey Lotti" (`WakeWordMatcher`: hey/hei/hi/hallo plus a name within one edit of "lotti", so not "lotta", "lotte", "lotto"). Otherwise the candidate is dropped, silently, and logged.
+- **On confirm** it acts like a hold: running answer cancelled, back stack cleared, "Listening…", then your words without the wake phrase. A command in the same breath is kept by the pre-roll.
+- **End of command** (`Endpointer`): 1.5 s of quiet after speech, or 15 s at most, then it answers like a released hold. Nothing said within 5 s: the display goes off, no "Sorry".
+- **Staying alive:** the listener restarts on reconnect; no mic packets for 3 s restarts the mic, retrying after 1, 2, 4 … 30 s.
+- **Log:** `[Wake]` lines in `lotti.log`: mic on/off, candidates with scores, confirm or reject with the transcript, and minutes the classifier and the speech recognizer ran, to judge battery.
+- **Model:** trained by `packages/wake-word` from synthetic `say` voices through an LC3 round trip (the G2's codec), plus clips you record with the glasses in Debug. See its README.
+
+Not measured yet: whether iOS keeps SoundAnalysis and `SpeechAnalyzer` running with the phone locked, and what the always-on mic costs the glasses and the phone.
 
 ## Hermes connector
 
@@ -277,6 +293,7 @@ apps/
 packages/
   ui-schema/    Screen schema (source of truth) + JSON Schema + fixtures
   persona/      Lotti's system prompt and voice
+  wake-word/    macOS tool that trains the "Hey Lotti" classifier (Create ML)
   lotti-kit/    Swift package: glasses link, ring, renderer, brain, signals, messaging,
                 navigation, voice, Hermes connector
 docs/           vision, architecture, roadmap
@@ -289,7 +306,7 @@ docs/           vision, architecture, roadmap
 | D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
 | D2  | On-device first, Hermes for escalation                                                                                                                                                  | ✅ decided ([S3](spikes/s3-brain.md)) |
 | D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                                     | ✅ decided                            |
-| D4  | Push-to-talk after the MVP; wake word only if push-to-talk feels limiting (then check battery)                                                                                          | ✅ decided                            |
+| D4  | Push-to-talk after the MVP; wake word built (2026-11-03): energy gate + Create ML classifier + Apple speech confirm, default on ([Wake word](#wake-word))                                | ✅ built                              |
 | D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
 | D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                | ✅ decided                            |
 | D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |

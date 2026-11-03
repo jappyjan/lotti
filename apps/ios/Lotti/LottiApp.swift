@@ -1,3 +1,4 @@
+import CoreML
 import LottiKit
 import SwiftUI
 import UIKit
@@ -31,7 +32,7 @@ struct LottiApp: App {
             isConfigured: { Settings.hermesConfig != nil },
             store: UserDefaultsHermesSessionStore())
         let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
-                                  phoneMicrophone: PhoneMicrophone(), today: today)
+                                  phoneMicrophone: PhoneMicrophone(), today: today, wakeDetector: Self.wakeDetector())
         conductor.setDisplayStyle(Settings.displayStyle)
         self.speech = speech
         self.brain = brain
@@ -39,6 +40,16 @@ struct LottiApp: App {
         self.hermesClient = hermesClient
         self.toolbox = toolbox
         _model = State(initialValue: AppModel(link: link, conductor: conductor))
+    }
+
+    /// The "Hey Lotti" classifier from the bundled model, or nil if it isn't there.
+    private static func wakeDetector() -> WakeWordDetector? {
+        guard let url = Bundle.main.url(forResource: "HeyLotti", withExtension: "mlmodelc"),
+              let classifier = try? SoundAnalysisClassifier(contentsOf: url) else {
+            print("[Wake] HeyLotti model missing, wake word off")
+            return nil
+        }
+        return WakeWordDetector(classifier: classifier, threshold: Settings.wakeThreshold)
     }
 
     var body: some Scene {
@@ -51,6 +62,7 @@ struct LottiApp: App {
                     await model.launch()
                 }
                 .task { await model.keepConnected() }
+                .task { model.conductor.setWakeWord(enabled: Settings.wakeWordEnabled) }
                 .task { await model.conductor.run() }
                 .task { await model.receiveInputs() }
                 .task { await model.runLaunchArguments() }
@@ -87,6 +99,21 @@ enum Settings {
     static var headUpEnabled: Bool {
         get { UserDefaults.standard.object(forKey: headUpEnabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: headUpEnabledKey) }
+    }
+
+    static let wakeWordKey = "wakeWordEnabled"
+    static let wakeThresholdKey = "wakeThreshold"
+
+    /// Listen for "Hey Lotti" whenever the glasses are connected. On by default.
+    static var wakeWordEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: wakeWordKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: wakeWordKey) }
+    }
+
+    /// How sure the sound classifier must be to start checking a candidate (Debug).
+    static var wakeThreshold: Double {
+        get { UserDefaults.standard.object(forKey: wakeThresholdKey) as? Double ?? 0.8 }
+        set { UserDefaults.standard.set(newValue, forKey: wakeThresholdKey) }
     }
 
     static let speechLanguageKey = "speechLanguage"

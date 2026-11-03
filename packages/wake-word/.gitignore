@@ -1,0 +1,5 @@
+# Training audio, synthetic and personal (your voice stays out of git). Only HeyLotti.mlmodel is committed.
+data/
+.build/
+# train writes it here and copies it to apps/ios/Lotti/HeyLotti.mlmodel, which is the committed one
+/HeyLotti.mlmodel

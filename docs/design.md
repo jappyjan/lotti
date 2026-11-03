@@ -59,6 +59,7 @@ The same on the R1 ring and both temple touchpads.
 | Tap               | Do the highlighted thing. On its own (display off) it does nothing                        |
 | Double tap        | Back or dismiss. With the display off: the today view                                     |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
+| "Hey Lotti"       | Not a gesture, but the same as a hold, from any state (display off, phone locked): Listening starts by itself and ends after 1.5 s of quiet. Double tap cancels |
 | Look up           | The look-up view; look down to hide it                                                    |
 
 ## Without voice
@@ -99,7 +100,7 @@ Lotti composes every screen from these. Layout always comes from the design lang
 | **List**       | Pick one of many: places, people, the rest of today. One line each                                |
 | **Reading**    | A longer answer, page by page ("Read on" in the rail)                                             |
 | **Working**    | Lotti is on it, and says what she's doing ("Sniffing around… checking the BVG"). Double tap stops |
-| **Listening**  | Your words appearing as you speak, while you hold                                                 |
+| **Listening**  | Your words appearing as you speak, while you hold (or, after "Hey Lotti", until you go quiet for 1.5 s) |
 | **Card**       | A few facts at a glance (label + value), optionally one big number                                |
 | **Done**       | One line that disappears after 2 s ("Told Mara.")                                                 |
 

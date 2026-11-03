@@ -13,13 +13,20 @@ struct ConductorWakeTests {
 
     init() async {
         await link.connect(DiscoveredGlasses(id: "32", name: "G2"))
-        conductor = Conductor(
+        conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: classifier)
+    }
+
+    static func makeConductor(
+        link: FakeGlassesLink, brain: FakeBrain, speech: FakeSpeech, phoneMic: FakeMicrophone, classifier: FakeClassifier,
+        watchdog: Duration = .seconds(30)
+    ) -> Conductor {
+        Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date())),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
                           finalTranscript: .milliseconds(200), wakeConfirm: .milliseconds(300),
                           wakeSilence: .milliseconds(100), wakeNoCommand: .milliseconds(200), wakeCap: .seconds(1),
-                          micWatchdog: .milliseconds(150), micRetry: .milliseconds(20), micRetryMax: .milliseconds(100)),
+                          micWatchdog: watchdog, micRetry: .milliseconds(20), micRetryMax: .milliseconds(100)),
             wakeDetector: WakeWordDetector(classifier: classifier))
     }
 
@@ -199,7 +206,10 @@ struct ConductorWakeTests {
     }
 
     @Test func theWatchdogRestartsAMicThatWentQuiet() async throws {
-        try await wakeOn()
+        let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic,
+                                           classifier: classifier, watchdog: .milliseconds(150))
+        conductor.setWakeWord(enabled: true)
+        try await eventually { conductor.wakeState == .listening }
         #expect(link.microphoneStarts == 1)
         // No packets: after 150 ms the mic is switched off and on again.
         try await eventually(timeout: 3) { link.microphoneStarts >= 2 }

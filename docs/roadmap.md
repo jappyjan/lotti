@@ -25,6 +25,9 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
   - **`Documents/lotti.log`** on the phone, readable with `devicectl`, for checking runs afterwards.
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 
+- **Wake word "Hey Lotti"** (2026-11-03): say it with the glasses on and the phone in your pocket, no gesture. Energy gate, Create ML sound classifier and Apple speech confirm on the shared glasses mic; ends on 1.5 s of quiet. Setting on the status screen (default on), Debug section with score and recorder. See [architecture.md](architecture.md#wake-word).
+  - Known gaps: the model starts from synthetic voices and probably needs a round of clips recorded with the real glasses (Debug → Record); not yet checked with the phone locked, nor for battery (item 9); one language-agnostic phrase only.
+
 ---
 
 ## MVP — "Talk to Lotti"
@@ -59,8 +62,7 @@ Rough order, to be re-sorted by what real use shows:
 5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app.
 6. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
 7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
-8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-9. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
+8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 

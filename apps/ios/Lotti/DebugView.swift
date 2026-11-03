@@ -11,10 +11,60 @@ struct DebugView: View {
     private var conductor: Conductor { model.conductor }
 
     @State private var displayStyle: DisplayStyle = Settings.displayStyle
+    @State private var threshold = Settings.wakeThreshold
+    @State private var recorder: WakeWordRecorder?
 
     private func setDisplayStyle(_ style: DisplayStyle) {
         Settings.displayStyle = style
         conductor.setDisplayStyle(style)
+    }
+
+    private var wakeStateText: String {
+        switch conductor.wakeState {
+        case .off: "Off"
+        case .listening: "Listening"
+        case .unavailable(let reason): "Glasses mic unavailable (\(reason))"
+        }
+    }
+
+    @ViewBuilder private var wakeSection: some View {
+        Section {
+            LabeledContent("State", value: wakeStateText)
+            LabeledContent("Last score", value: conductor.wakeScore.map { String(format: "%.2f", $0) } ?? "–")
+            LabeledContent("Last candidate", value: conductor.wakeLast ?? "–")
+            LabeledContent("Ran", value: String(format: "%.1f min classifier, %.1f min speech",
+                                                conductor.wakeMinutes.stage1, conductor.wakeMinutes.stage2))
+            VStack(alignment: .leading) {
+                Text(String(format: "Threshold %.2f", threshold))
+                Slider(value: $threshold, in: 0.5...0.99, step: 0.01)
+                    .onChange(of: threshold) { _, value in
+                        Settings.wakeThreshold = value
+                        conductor.wakeThreshold = value
+                    }
+            }
+        } header: {
+            Text("Hey Lotti")
+        }
+
+        if let recorder {
+            Section {
+                Button("Record \"Hey Lotti\" (2 s)") { recorder.recordPhrase() }
+                    .disabled(recorder.busy != nil || !link.status.isConnected)
+                if recorder.busy == "Recording background…" {
+                    Button("Stop background", role: .destructive) { recorder.stop() }
+                } else {
+                    Button("Record background") { recorder.startBackground() }
+                        .disabled(recorder.busy != nil || !link.status.isConnected)
+                }
+                if let busy = recorder.busy { Text(busy).foregroundStyle(.secondary) }
+                if let error = recorder.error { Text(error).foregroundStyle(.red) }
+                LabeledContent("Saved", value: "\(recorder.counts["hey_lotti"] ?? 0) Hey Lotti, \(recorder.counts["background"] ?? 0) background")
+            } header: {
+                Text("Record training clips")
+            } footer: {
+                Text("From the glasses' mic, saved in Documents/wakeword. Copy them to packages/wake-word/data/user and retrain.")
+            }
+        }
     }
 
     var body: some View {
@@ -53,6 +103,8 @@ struct DebugView: View {
                     Text(error).foregroundStyle(.red)
                 }
             }
+
+            wakeSection
 
             Section("On-device brain, last answer") {
                 if brain.trace.isEmpty { Text("Nothing asked yet.").foregroundStyle(.secondary) }
@@ -107,5 +159,6 @@ struct DebugView: View {
             }
         }
         .navigationTitle("Debug")
+        .onAppear { if recorder == nil { recorder = WakeWordRecorder(hub: conductor.microphone) } }
     }
 }
