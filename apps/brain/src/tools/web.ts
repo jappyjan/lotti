@@ -67,6 +67,9 @@ export function isPrivateAddress(ip: string): boolean {
   if (zeros(7) && h[7] === 1) return true; // ::1
   if (zeros(5) && h[5] === 0xffff) return embedded(h[6]!, h[7]!); // ::ffff:a.b.c.d
   if (zeros(6)) return embedded(h[6]!, h[7]!); // ::a.b.c.d (IPv4-compatible)
+  if (zeros(4) && h[4] === 0xffff && h[5] === 0) return embedded(h[6]!, h[7]!); // ::ffff:0:a.b.c.d (SIIT)
+  if (h[0] === 0x64 && h[1] === 0xff9b && h[2] === 1) return true; // 64:ff9b:1::/48 (local NAT64)
+  if (h[0] === 0x2001 && h[1] === 0) return true; // Teredo 2001::/32
   if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0))
     return embedded(h[6]!, h[7]!); // NAT64
   if (h[0] === 0x2002) return embedded(h[1]!, h[2]!); // 6to4
@@ -74,6 +77,7 @@ export function isPrivateAddress(ip: string): boolean {
   return (
     (first & 0xfe00) === 0xfc00 || // fc00::/7
     (first & 0xffc0) === 0xfe80 || // fe80::/10
+    (first & 0xffc0) === 0xfec0 || // fec0::/10 (site-local)
     (first & 0xff00) === 0xff00 // ff00::/8
   );
 }
@@ -172,7 +176,8 @@ export const webFetchTool: ToolDef = {
     }
     const ct = res.headers.get('content-type') ?? '';
     const max = args.maxChars ?? 12_000;
-    const read = await readCapped(res, max * 4);
+    // Raw HTML is mostly markup: cap the download, not the text (truncated after stripping).
+    const read = await readCapped(res, 4_000_000);
     let body = read.text;
     if (/html/i.test(ct)) body = stripHtml(body);
     const cut = read.cut || body.length > max;

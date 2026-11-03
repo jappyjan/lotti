@@ -56,6 +56,14 @@ const mcpTarget = (i: {
     ? `stdio: ${[i.command ?? '', ...(i.args ?? [])].join(' ')}`
     : `http: ${i.url ?? ''}`;
 
+/** Env secrets belong to one program: a new command or new args drop them. */
+const stdioTargetChanged = (
+  cur: McpRow,
+  i: { command?: string; args?: string[] },
+) =>
+  (i.command !== undefined && i.command !== cur.command) ||
+  (i.args !== undefined && JSON.stringify(i.args) !== (cur.args ?? '[]'));
+
 const mcpRow = (app: App, id: string) =>
   app.db.get<McpRow>('SELECT * FROM mcp_servers WHERE id=?', id);
 
@@ -230,7 +238,7 @@ export const integrationOps: Operation[] = [
       const secrets =
         cur &&
         ((i.url !== undefined && i.url !== cur.url) ||
-          (i.command !== undefined && i.command !== cur.command)) &&
+          stdioTargetChanged(cur, i)) &&
         app.secrets.list(`mcp.${cur.id}.`).length
           ? ' (its saved credential is removed)'
           : '';
@@ -242,7 +250,7 @@ export const integrationOps: Operation[] = [
       // A saved bearer / env secret must never follow the server to a new address or command.
       if (i.url !== undefined && i.url !== cur.url)
         app.secrets.delete(`mcp.${cur.id}.bearer`);
-      if (i.command !== undefined && i.command !== cur.command)
+      if (stdioTargetChanged(cur, i))
         for (const x of app.secrets.list(`mcp.${cur.id}.env.`))
           app.secrets.delete(x.name);
       app.db.run(

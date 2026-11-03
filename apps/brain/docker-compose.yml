@@ -13,6 +13,7 @@ services:
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
       # PUBLIC_URL: https://brain.example.com   # shown in the pairing QR; default http://localhost:8787
       # TZ: Europe/Berlin                       # cron schedules and the night window use this
+      # LOTTI_RESET_PAIRING: '1'               # lost your only phone: revokes all devices and prints a new code; remove after pairing
       # APNS_KEY_ID / APNS_TEAM_ID / APNS_KEY / APNS_TOPIC   # optional push (integrations agent)
     volumes:
       - lotti-data:/data

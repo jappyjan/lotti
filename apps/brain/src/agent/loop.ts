@@ -178,7 +178,7 @@ export async function ask(
     .map<ChatMessage>((t) => ({ role: t.role, content: t.text }));
   app.conversations.addTurn(conv.id, 'user', input.text, input.channel);
   const utcOffsetMin =
-    input.utcOffsetMin ?? app.settings.displayOffsetMin();
+    process.env.TZ ? null : (input.utcOffsetMin ?? app.settings.displayOffsetMin());
   const run = newRun({
     utcOffsetMin,
     channel: input.channel,

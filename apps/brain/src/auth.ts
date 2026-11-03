@@ -141,6 +141,14 @@ export class Auth {
     );
   }
 
+  /** Recovery when the only phone is lost: revoke every device (startup flag LOTTI_RESET_PAIRING=1). */
+  revokeAllDevices(): number {
+    return this.app.db.run(
+      'UPDATE devices SET revoked_at=? WHERE revoked_at IS NULL',
+      this.app.clock.now(),
+    ).changes;
+  }
+
   // ---- admin tokens (Lotti admin MCP) ----------------------------------
   createAdminToken(name: string): { id: string; token: string } {
     const token = randomToken('la_');

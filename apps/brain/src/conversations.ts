@@ -251,10 +251,13 @@ export class ConversationService {
       id,
     );
     if (!c || c.status === 'closed') return;
+    // Closed before the LLM calls: an ask arriving meanwhile starts the next conversation instead of
+    // adding turns to one that is about to be summarised.
+    this.app.db.run("UPDATE conversations SET status='closed' WHERE id=?", id);
     const { title, summary, body } = await this.titleAndSummary(c);
     if (body) await this.app.memory.extractFrom(body, id);
     this.app.db.run(
-      "UPDATE conversations SET status='closed', title=?, summary=? WHERE id=?",
+      'UPDATE conversations SET title=?, summary=? WHERE id=?',
       title,
       summary,
       id,

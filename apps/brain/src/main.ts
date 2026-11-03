@@ -13,6 +13,14 @@ async function main(): Promise<void> {
   app.log.info(
     `Lotti Brain ${config.version} listening on :${srv.port} (data: ${config.dataDir})`,
   );
+  // Lost the only phone? Start once with LOTTI_RESET_PAIRING=1 (container env, out of the agent's
+  // reach): every device is revoked and a fresh pairing code is printed. Remove the flag afterwards.
+  if (process.env.LOTTI_RESET_PAIRING === '1') {
+    const n = app.auth.revokeAllDevices();
+    app.log.warn(
+      `LOTTI_RESET_PAIRING=1: revoked ${n} device(s). Pair again, then remove the flag (it revokes on every start).`,
+    );
+  }
   const code = app.auth.ensureStartupCode();
   if (code) await printPairingBanner(app, code);
   else

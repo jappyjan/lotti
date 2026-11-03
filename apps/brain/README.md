@@ -30,7 +30,7 @@ Migrations are in code (`src/db.ts`) and run at start.
 
 ## Pairing
 
-On start while no device is paired the server prints a one-time code, the URL and an ASCII QR (`lotti://pair?url=<PUBLIC_URL>&code=<CODE>`). Codes are valid for 15 minutes (a restart or `GET /api/v1/pair/code` issues a fresh one) and a new code replaces older unused ones. The app calls `POST /api/v1/pair {code, deviceName}` and keeps the returned token (stored hashed here). More devices: op `pairing.new_code` (app only). `GET /api/v1/pair/code` works from the server itself only (loopback, e.g. `docker exec … curl`) and only until the first device is paired (then `403`: anything on the host, the agent's shell included, could otherwise mint a code). Wrong codes: 429 after 10 per IP or 30 in total within 10 minutes.
+On start while no device is paired the server prints a one-time code, the URL and an ASCII QR (`lotti://pair?url=<PUBLIC_URL>&code=<CODE>`). Codes are valid for 15 minutes (a restart or `GET /api/v1/pair/code` issues a fresh one) and a new code replaces older unused ones. The app calls `POST /api/v1/pair {code, deviceName}` and keeps the returned token (stored hashed here). More devices: op `pairing.new_code` (app only). `GET /api/v1/pair/code` works from the server itself only (loopback, e.g. `docker exec … curl`) and only until the first device is paired (then `403`: anything on the host, the agent's shell included, could otherwise mint a code). Wrong codes: 429 after 10 per IP within 10 minutes. **Lost your only phone?** Restart the container once with `LOTTI_RESET_PAIRING=1`: every device is revoked and a fresh code is printed. Remove the flag again (it revokes on every start).
 
 ## Architecture
 

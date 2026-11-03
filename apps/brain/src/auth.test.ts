@@ -393,12 +393,12 @@ test('pair/code: refused once a device is paired; codes expire after 15 min; a n
   }
 });
 
-test('pairing failures: per-IP and global caps, old entries pruned', async () => {
+test('pairing failures: per-IP cap only (no global lockout), old entries pruned', async () => {
   const { PairFailures } = await import('./server/http.ts');
   const f = new PairFailures();
   const t0 = 1_000_000;
   for (let i = 0; i < 30; i++) f.note(`10.0.0.${i}`, t0); // one each from 30 addresses
-  assert.equal(f.blocked('10.0.0.99', t0 + 1000), true, 'global cap');
+  assert.equal(f.blocked('10.0.0.99', t0 + 1000), false, 'others can still pair');
   assert.equal(f.blocked('10.0.0.99', t0 + 10 * 60_000 + 1), false);
   assert.equal(f.size, 0, 'pruned after the window');
   for (let i = 0; i < 10; i++) f.note('1.2.3.4', t0 + 20 * 60_000);
@@ -436,4 +436,13 @@ test('?token= is accepted only on the /ws upgrade, not on HTTP routes', async ()
   } finally {
     await srv.close();
   }
+});
+
+test('lost phone recovery: revokeAllDevices (LOTTI_RESET_PAIRING) makes the server print a code again', () => {
+  const t = makeApp();
+  pairDevice(t.app);
+  assert.equal(t.app.auth.ensureStartupCode(), undefined);
+  assert.equal(t.app.auth.revokeAllDevices(), 1);
+  assert.equal(t.app.auth.hasDevices(), false);
+  assert.match(t.app.auth.ensureStartupCode() ?? '', /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
 });

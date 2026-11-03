@@ -76,7 +76,7 @@ The server keeps the inbox as the source of truth. While no socket is open, `pus
 
 Where the backend is more specific than the contract above:
 
-- `GET /api/v1/pair/code` answers only requests from the server itself (loopback, no forwarded-* headers) and only while **no device is paired** (otherwise `403`, "Already paired: create a pairing code in the app"); it re-issues a code when the old one expired and logs it. More devices: op `pairing.new_code` (app only). Codes expire after 15 minutes. Pairing link in the QR/log: `lotti://pair?url=<server>&code=<code>`. Wrong codes are rate-limited (429): 10 per IP and 30 in total per 10 minutes.
+- `GET /api/v1/pair/code` answers only requests from the server itself (loopback, no forwarded-* headers) and only while **no device is paired** (otherwise `403`, "Already paired: create a pairing code in the app"); it re-issues a code when the old one expired and logs it. More devices: op `pairing.new_code` (app only). Codes expire after 15 minutes. Pairing link in the QR/log: `lotti://pair?url=<server>&code=<code>`. Wrong codes are rate-limited (429): 10 per IP per 10 minutes. Lost the only phone: start the server once with `LOTTI_RESET_PAIRING=1` (revokes every device and prints a new code), then remove the flag.
 - A new `hello` is answered by `welcome`, then a full `inbox`, then one `push` per item that queued while the device was offline.
 - `cancel` makes the ask end with `error {id, message: "cancelled"}`; there is no `answer`.
 - `message` is sent to every socket for both the user turn and the assistant turn, the asking socket included (it also gets `answer`); clients filter by channel.

@@ -53,24 +53,19 @@ export interface RunningServer {
 
 const FAIL_WINDOW_MS = 10 * 60_000;
 const FAIL_PER_IP = 10;
-/** Across all addresses (a reverse proxy makes every client look like one IP, or many). */
-const FAIL_GLOBAL = 30;
 
 /** Wrong pairing codes per IP and in total, over a sliding 10 minute window. Old entries are pruned. */
 export class PairFailures {
   private perIp = new Map<string, number[]>();
-  private all: number[] = [];
   blocked(ip: string, now: number): boolean {
     this.prune(now);
-    return (
-      (this.perIp.get(ip)?.length ?? 0) >= FAIL_PER_IP ||
-      this.all.length >= FAIL_GLOBAL
-    );
+    // Per IP only: a global cap would let anyone block pairing for everyone. Brute force stays
+    // out of reach anyway (single-use 8-character codes that expire after 15 minutes).
+    return (this.perIp.get(ip)?.length ?? 0) >= FAIL_PER_IP;
   }
   note(ip: string, now: number): void {
     this.prune(now);
     this.perIp.set(ip, [...(this.perIp.get(ip) ?? []), now]);
-    this.all.push(now);
   }
   /** Number of IPs tracked (for tests). */
   get size(): number {
@@ -78,7 +73,6 @@ export class PairFailures {
   }
   private prune(now: number): void {
     const cut = now - FAIL_WINDOW_MS;
-    this.all = this.all.filter((t) => t > cut);
     for (const [ip, ts] of this.perIp) {
       const keep = ts.filter((t) => t > cut);
       if (keep.length) this.perIp.set(ip, keep);

@@ -227,6 +227,8 @@ test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirec
     '[::1]',
   ])
     assert.equal(isPrivateAddress(ip), true, ip);
+  for (const ip of ['::ffff:0:127.0.0.1', '64:ff9b:1::1', 'fec0::1', '2001:0:4136:e378::1'])
+    assert.equal(isPrivateAddress(ip), true, ip);
   for (const ip of ['8.8.8.8', '100.128.0.1', '172.32.0.1', '2606:4700::1111', '::ffff:8.8.8.8'])
     assert.equal(isPrivateAddress(ip), false, ip);
 
@@ -276,7 +278,7 @@ test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirec
   );
 });
 
-test('web_fetch reads at most ~maxChars*4 bytes of the body', async () => {
+test('web_fetch caps the download (4 MB) and the returned text (maxChars)', async () => {
   let pulled = 0;
   const t = makeApp({
     fetch: async () =>
@@ -284,7 +286,7 @@ test('web_fetch reads at most ~maxChars*4 bytes of the body', async () => {
         new ReadableStream({
           pull(c) {
             pulled += 1000;
-            if (pulled > 1_000_000) c.close();
+            if (pulled > 50_000_000) c.close();
             else c.enqueue(new TextEncoder().encode('y'.repeat(1000)));
           },
         }),
@@ -293,7 +295,7 @@ test('web_fetch reads at most ~maxChars*4 bytes of the body', async () => {
   });
   const r = await run(t, 'web_fetch', { url: 'https://example.com/big', maxChars: 1000 });
   assert.match(r.text, /truncated at 1000/);
-  assert.ok(pulled < 20_000, `pulled ${pulled} bytes`);
+  assert.ok(pulled <= 4_100_000, `pulled ${pulled} bytes`);
 });
 
 test('phone action proposals use exactly the phone tool schemas (apps/ios/Lotti/PhoneTools.swift)', async () => {
