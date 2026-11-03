@@ -4,10 +4,12 @@ import Foundation
 public enum G2Service {
     /// App launch / session prelude.
     public static let appLaunch: UInt8 = 0x01
-    /// Device config: auth, arm roles, time sync.
-    public static let deviceConfig: UInt8 = 0x80
+    /// Navigation: the firmware's turn-by-turn screen (see `G2Navigation`).
+    public static let navigation: UInt8 = 0x08
     /// Glasses settings (brightness, head-up, wear detection).
     public static let settings: UInt8 = 0x09
+    /// Device config: auth, arm roles, time sync.
+    public static let deviceConfig: UInt8 = 0x80
     /// EvenHub: pages, text/list/image containers, heartbeat.
     public static let evenHub: UInt8 = 0xE0
 }

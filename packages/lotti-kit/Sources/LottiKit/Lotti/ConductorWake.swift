@@ -143,7 +143,12 @@ extension Conductor {
                 reset = false
             }
             if let candidate = await detector.process(chunk, active: active), mode != .listening, wakeSession == nil {
-                beginWakeSession(candidate)
+                // The firmware's navigation screen is up: there is no Lotti screen to listen on.
+                if link.displaySuspended {
+                    wakeLog(String(format: "candidate %.2f ignored: navigation screen is up", candidate.score))
+                } else {
+                    beginWakeSession(candidate)
+                }
             }
             if detector.classifiedSeconds - reported >= 30 {
                 reported = detector.classifiedSeconds

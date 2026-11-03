@@ -9,6 +9,7 @@ struct ContentView: View {
     let hermes: HermesBrain
     let hermesClient: HermesClient
     let toolbox: Toolbox
+    let navigation: NavigationController
     @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
     @AppStorage(Settings.wakeWordKey) private var wakeWord = Settings.wakeWordEnabled
 
@@ -47,7 +48,7 @@ struct ContentView: View {
                 lookUpSection
 
                 Section {
-                    NavigationLink("Debug") { DebugView(model: model, brain: brain, hermes: hermes) }
+                    NavigationLink("Debug") { DebugView(model: model, brain: brain, hermes: hermes, navigation: navigation) }
                 }
             }
             .navigationTitle("Lotti")

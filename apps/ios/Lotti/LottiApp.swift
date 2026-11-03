@@ -11,6 +11,7 @@ struct LottiApp: App {
     private let hermes: HermesBrain
     private let hermesClient: HermesClient
     private let toolbox: Toolbox
+    private let navigation: NavigationController
 
     init() {
         LogFile.start()
@@ -22,7 +23,11 @@ struct LottiApp: App {
         link.headUpSettings = Settings.headUp
         let speech = AppleSpeechRecognizer(locale: Locale(identifier: Settings.speechLanguage))
         let today = DeviceToday()
-        let tools = PhoneTools.all(today: today)
+        let navigation = NavigationController(link: link, today: today)
+        let tools = PhoneTools.all(today: today, startNavigation: { [weak navigation] destination, mode in
+            guard let navigation else { throw ToolError("Navigation is not available.") }
+            return try await navigation.start(destination: destination, mode: mode)
+        })
         let toolbox = Toolbox(tools)
         let brain = AppleBrain(tools: Toolbox(tools.filter { PhoneTools.onDevice.contains($0.spec.name) }))
         let hermesClient = HermesClient { Settings.hermesConfig }
@@ -39,6 +44,7 @@ struct LottiApp: App {
         self.hermes = hermes
         self.hermesClient = hermesClient
         self.toolbox = toolbox
+        self.navigation = navigation
         _model = State(initialValue: AppModel(link: link, conductor: conductor))
     }
 
@@ -55,7 +61,7 @@ struct LottiApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model, speech: speech, brain: brain, hermes: hermes, hermesClient: hermesClient,
-                        toolbox: toolbox)
+                        toolbox: toolbox, navigation: navigation)
                 .task { await PhoneTools.requestAccess() }
                 .task {
                     await model.conductor.setHeadTracking(Settings.headUpEnabled)

@@ -14,9 +14,14 @@ public struct ChatMessage: Equatable, Sendable, Codable {
 
 /// Sends the newest message to Hermes and returns its reply text. `session` is sent as
 /// `X-Hermes-Session-Id`: Hermes keeps the history. `progress` gets Hermes's own tool activity
-/// ("web_search") while it works.
+/// ("web_search", a raw command name) while it works; `activity` fires on any data from Hermes —
+/// progress, answer tokens, keepalives — so the caller can tell "working" from "silent".
 public protocol HermesTransport: Sendable {
-    func complete(_ messages: [ChatMessage], session: String, progress: @escaping @Sendable (String) -> Void) async throws -> String
+    func complete(
+        _ messages: [ChatMessage], session: String,
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String
 }
 
 /// Where your Hermes is: its API server (`hermes gateway` with `API_SERVER_ENABLED=true`).
@@ -99,7 +104,11 @@ public struct HermesClient: HermesTransport {
         return URLSession(configuration: configuration)
     }()
 
-    public func complete(_ messages: [ChatMessage], session id: String, progress: @escaping @Sendable (String) -> Void) async throws -> String {
+    public func complete(
+        _ messages: [ChatMessage], session id: String,
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void = {}
+    ) async throws -> String {
         guard let config = config() else { throw HermesError.notConfigured }
         var request = URLRequest(url: config.endpoint("chat/completions"))
         request.httpMethod = "POST"
@@ -120,7 +129,7 @@ public struct HermesClient: HermesTransport {
         // then closes the stream.
         try Task.checkCancellation()
         let run = Run()
-        let stream = Task { try await read(request, run: run, progress: progress) }
+        let stream = Task { try await read(request, run: run, progress: progress, activity: activity) }
         let stopping: @Sendable () -> Task<Void, Never> = {
             run.stopping {
                 Task {
@@ -142,7 +151,11 @@ public struct HermesClient: HermesTransport {
         return try result.get()
     }
 
-    private func read(_ request: URLRequest, run: Run, progress: @escaping @Sendable (String) -> Void) async throws -> String {
+    private func read(
+        _ request: URLRequest, run: Run,
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String {
         defer { run.end() }
         let (bytes, response) = try await session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -161,6 +174,7 @@ public struct HermesClient: HermesTransport {
         var parser = ServerSentEvents()
         for try await line in bytes.lines {
             try Task.checkCancellation()
+            activity()  // any data from Hermes — a token, a tool step, a keepalive — means it's alive
             let signal = parser.feed(line)
             run.update(id: parser.completionID, started: !parser.text.isEmpty)
             switch signal {

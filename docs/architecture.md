@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: living document. Built so far: glasses link, ring input, the hand-coded screen and today view, on-device chat and voice, phone tools and the Hermes connector. The UI schema, simulator, messaging and navigation are still plans.
+Status: living document. Built so far: glasses link, ring input, the hand-coded screen and today view, on-device chat and voice, phone tools, the Hermes connector, and turn-by-turn navigation on the glasses (arrow + text; see [Navigation](#navigation-port-from-the-even-app)). The UI schema, simulator and messaging are still plans.
 
 ## Big picture
 
@@ -116,18 +116,18 @@ Known limits (from S3):
 - Rail choices are the weakest output. Fill fixed choices from the template and let the model add one or two.
 - Running in the background (locked phone, BLE wake-ups) is still unmeasured. Measure it once the MVP runs all day and something drains or gets killed.
 
-**Routing (`Router`): Hermes by default, the phone for simple tasks and as the fallback.**
+**Routing (`Router`): Hermes first.**
 
-| Question                                                                                                         | Who answers                                  | If Hermes fails or goes quiet 20 s |
-| ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ---------------------------------- |
-| A rule recognises a simple task: weather, timer, new reminder, reminder list, calendar, "where am I", directions | the phone                                    | –                                  |
-| … weather or directions for another place ("in Lissabon", "from Berlin")                                         | Hermes (it can still call the phone's tools) | the phone                          |
-| Anything else: small talk, open questions, knowledge                                                             | Hermes                                       | the phone                          |
-| Only Hermes can know: news, prices, opening hours, results, search                                               | Hermes                                       | an error with "Try again"          |
-| You ask for Hermes: "Hermes, …", "Dig into …", "Ask Hermes" in the rail                                          | Hermes, waits up to 2 minutes                | an error with "Try again"          |
-| Hermes isn't set up                                                                                              | the phone, for everything                    | –                                  |
+Hermes is the brain. When it's set up, every question goes to it — it has the phone's tools, so the simple tasks work there too, and it can research what the phone can't. The on-device brain answers only when Hermes isn't set up, and hands a question back to Hermes if one ever lands there.
 
-The local set is the tasks the on-device eval passes reliably (`Router.localTools`). When the phone stands in for Hermes and can't answer, it says so instead of handing back to Hermes. When the phone answers a simple task and finds it can't (an "I don't know"), it hands the question to Hermes. The fallback only kicks in when Hermes has actually stopped: an error, or 20 s of silence — status lines and tool calls restart that clock, so a long answer keeps working. Deterministic rules come before all of this: ring "back", gestures, the today view.
+| Situation                                                                     | Who answers                             |
+| ----------------------------------------------------------------------------- | --------------------------------------- |
+| Hermes is set up (any question)                                                | Hermes                                  |
+| Hermes isn't set up                                                            | the on-device brain                     |
+| You ask for Hermes: "Hermes, …", "Dig into …"                                 | Hermes (says so if it isn't set up)     |
+| Hermes set up but errors or goes silent for `timing.remote` (2 min of silence) | an error with "Try again"               |
+
+The Hermes timeout counts silence, not total time: any traffic from Hermes (answer tokens, keepalives, tool progress) restarts the clock, so a long research answer isn't cut off. Hermes's own tool steps ("web_search", raw commands) are logged, never shown on the glasses; only the phone's tool statuses ("Checking your calendar…") show. Deterministic rules still come before all of this: ring "back", gestures, the today view.
 
 ## Phone tools
 
@@ -139,7 +139,7 @@ One set of tools on the phone, used by the on-device brain, by Hermes and later 
 | `weather`         | read   | Open-Meteo at your location                                                      | ✅              | ✅ if shared      |
 | `location`        | read   | CoreLocation + MapKit address                                                    | ✅              | ✅ if shared      |
 | `reminders`       | read   | EventKit reminders                                                               | ✅              | ✅ if shared      |
-| `directions`      | read   | MapKit: place search near Jan (~30 km), travel times on foot, bike, transit, car | ✅              | ✅ if shared      |
+| `start_navigation` | action | MapKit: place search near Jan (~30 km), turn-by-turn on the glasses' nav screen | ✅              | ✅ (suggest only) |
 | `set_timer`       | action | AlarmKit (rings in silent mode)                                                  | ✅              | ✅ (suggest only) |
 | `create_reminder` | action | EventKit reminders                                                               | ✅              | ✅ (suggest only) |
 
@@ -155,7 +155,7 @@ Rules (enforced by `Toolbox`, not by prompts):
 
 A single session with tool calling failed on the ~3B model: it made up a free calendar instead of calling the tool, answered as if it were Jan, claimed a timer was set, and broke its output format. One step per job works far better (`LocalPipeline`, `AppleBrain`):
 
-1. **Choose tools.** Rules first. Questions only Hermes can answer (news, prices, opening hours, "who won", search) go straight to Hermes; Hermes asks the phone for the location itself when "here" matters. Then clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", …) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
+1. **Choose tools.** The local brain only runs when Hermes isn't set up (see Routing above). Rules first: questions the phone can never answer (news, prices, opening hours, "who won", search) get the fixed "Ich frag Hermes" handoff. Then clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", navigation) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
 2. **Fill in arguments,** one small step per chosen tool, with only that tool's parameters and no date in the prompt (the model copies a date instead of writing "tomorrow").
 3. **Actions are only prepared** and get a fixed sentence ("Bereit: Timer 10 min. Tipp zum Starten."), so the model can't claim they're done. A hand-off gets "Ich frag Hermes."
 4. **Run the reads** in parallel; the glasses show what's being checked.
@@ -164,7 +164,7 @@ A single session with tool calling failed on the ~3B model: it made up a free ca
 
 Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
 
-Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Directions use MapKit on the phone, not Hermes: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. An answer that says "I don't know" goes to Hermes. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
+Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Navigation uses MapKit on the phone, not Hermes: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. An answer that says "I don't know" goes to Hermes. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
 
 ## Wake word
 
@@ -177,6 +177,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 - **On confirm** it acts like a hold: running answer cancelled, back stack cleared, "Listening…", then your words without the wake phrase. A command in the same breath is kept by the pre-roll.
 - **End of command** (`Endpointer`): 1.5 s of quiet after speech, or 15 s at most, then it answers like a released hold. Nothing said within 5 s: the display goes off, no "Sorry".
 - **Staying alive:** the listener restarts on reconnect; no mic packets for 3 s restarts the mic, retrying after 1, 2, 4 … 30 s.
+- **Navigation:** while the firmware's navigation screen is up (`displaySuspended`), a classifier hit is ignored and logged, because Lotti has no screen to listen on. Whether the glasses keep the mic stream during navigation is not checked.
 - **Log:** `[Wake]` lines in `lotti.log`: mic on/off, candidates with scores, confirm or reject with the transcript, and minutes the classifier and the speech recognizer ran, to judge battery.
 - **Model:** trained by `packages/wake-word` from synthetic `say` voices through an LC3 round trip (the G2's codec), plus clips you record with the glasses in Debug. See its README.
 
@@ -270,17 +271,17 @@ Per messenger:
 
 ## Navigation (port from the Even app)
 
-The Even app's turn-by-turn navigation is the one stock feature we need to keep. Plan:
+The Even app's turn-by-turn navigation is the one stock feature we need to keep. Built so far (arrow + text):
 
-- **Start:** by voice ("Hey Lotti, walk me to Mauerpark"), from a `list`/`card` action, or from a shared location on the phone (share sheet → Lotti).
-- **Routing:** Apple MapKit (`MKDirections`): walking, driving, cycling (MapKit availability per region: check), transit only as overview. It's free, on the phone, no extra account. Alternatives if MapKit isn't good enough: Mapbox, GraphHopper, or offline routing (Valhalla with downloaded regions) later.
-- **Guidance:** iOS has no turn-by-turn API for third-party apps, so Lotti tracks progress itself: background location, distance to the next step, announce at fixed distances, reroute when off-route.
-- **On the glasses: use the firmware's built-in navigation screen.** The G2 has a native navigation mini-app on its own BLE service (sid `0x08`, `g2.navigation` protobuf, decoded from the Even app; see [g2-kit](https://github.com/Commute773/g2-kit), [even-g2-protocol `apps/navigation.py`](https://github.com/ithinkthisiscool/even-g2-protocol)). The phone sends an arrow ID (1–35: turns, U-turns, roundabouts, forks…) plus short text fields (distance, road, time, remaining distance, ETA, speed), and the firmware lays out the screen. The phone sends maps (mini map and full map) as bitmaps. The firmware handles the heading-up rotation and the compass, and reports view changes and exit back to the phone. This is what Even's own app uses, so we get Even's layout without drawing it ourselves.
-  - Plan: arrow and text first; maps once their format is known (capture BLE traffic from the Even app during a real walk).
-  - Decoded: the `g2.navigation` proto is complete (arrow ID, text fields, mini/max map bitmap streaming, compass events); see [apk-recon](spikes/apk-recon.md). The Even app itself routes with Mapbox and streams the arrow + bitmaps to the glasses, confirming the approach. Nobody has confirmed it live on our side yet; fallback: our own `nav` screen in containers.
-  - Even's nav supports walking and cycling only; driving would need our own screen.
+- **Start:** by voice ("Hey Lotti, walk me to Mauerpark") — the brains suggest the `start_navigation` action (destination, mode walk/bike), which runs after a tap on the glasses. From a shared location (share sheet → Lotti) and from the glasses' own menu (favorites) are still open.
+- **Routing:** Apple MapKit (`MKDirections`): walking and cycling (what the firmware's screen supports). Free, on the phone, no extra account — and no HERE SDK for the tiles, which is what the Even app uses (`RoutePlanner`, D10 confirmed). Alternatives if MapKit isn't good enough: Mapbox, GraphHopper, or offline routing (Valhalla with downloaded regions) later.
+- **Guidance:** iOS has no turn-by-turn API for third-party apps, so Lotti tracks progress itself (`StepTracker`): a location stream (`CLLocationUpdate.liveUpdates(.otherNavigation)`) snapped onto the route, distance to the next maneuver, cards refreshed on every step change and at least every 5 s, reroute when off-route (with `RECALCULATING` on the screen meanwhile).
+- **On the glasses: the firmware's built-in navigation screen** (sid `0x08`, `g2.navigation` protobuf, decoded from the Even app; see [g2-kit](https://github.com/Commute773/g2-kit), [even-g2-protocol `apps/navigation.py`](https://github.com/ithinkthisiscool/even-g2-protocol)). The phone sends an arrow ID (1–35: turns, U-turns, roundabouts, forks…) plus short text fields (distance, road, time, remaining distance, ETA, speed), and the firmware lays out the screen and rotates it heading-up. `G2Navigation` builds the payloads and decodes the screen's events; `NavigationSession` drives the whole trip: `START` → a `HEARTBEAT` every 5 s → `BASIC_INFO` cards → `ARRIVE`/`STOP`/`RECALCULATING`, and it answers the screen's `NOTIFY_EXIT`, `END_SESSION_REQ` and `SWITCH_TRANSPORT_REQ` (walk ↔ bike replans the route). While the nav screen is up, the link suspends Lotti's own page (`displaySuspended`).
+- **Not confirmed live:** everything on sid 0x08 is decoded from the Even app's decompile and g2-kit; the arrow/text session has not been seen working on real glasses yet. First walk is the test. Fallback if the native screen won't take it: our own `nav` screen in containers.
+- **Map bitmaps (mini map, full map):** the Even app's format is fully reconstructed (see [~/lotti-recon/map-image-push.md](https://gist.github.com/jappyjan/c97da0c4ed718799e51197522df9a5ef), verified against the decompiled app): the phone streams a **4 bpp BMP of the road network** (green roads, the active route red, everything else transparent; rows bottom-up, 64-byte palette with `biClrUsed = 3`, pixel data at 0x76; **max 576×188, mini 170×170**), **LZ4-compressed** — `compressMode` **4 = LZ4, 0 = raw** when LZ4 doesn't shrink it. The max map fragments at **4096** bytes (`mapSessionId`, `mapFragmentIndex`, `mapFragmentPacketSize`, `mapRawData`); the **mini map has its own schema** (`mapSize=1, compressMode=2, mapRawData=3, errorCode=4, rotationAngle=5(heading mod 360), miniMapBorderEn=6, sessionId=7, index=8, packetSize=9`) and ≤ 8192 bytes goes in **one message without the session fields**. The firmware **answers every fragment with an errorCode** (0 = success; 5 = protobuf error, 11 = invalid length, 13 = duplicate). The glasses' view switch picks the stream: view 1 gets the mini map, view 2/3 the max map. Lotti draws with `NavMapRenderer` + `NavMapBmp`. **Open:** Lotti has no road-network source, so only the route (red) and markers (green) are drawn — a road tile source (e.g. OSM vector tiles) would fill in the roads.
+- **Turn arrows:** MapKit gives no maneuver type, so `RoutePlanner` classifies each step from the route geometry (bearing change: straight / slight / turn / sharp / U-turn). Roundabout arrows (11–29) stay unused until roundabout exits can be detected.
 - **Heading:** the native nav screen uses the glasses' compass (it sends compass events back). Outside native nav: phone compass.
-- **Battery:** navigation is location-heavy. Measure it when navigation is built.
+- **Battery:** navigation is location-heavy. Measure it now that navigation is built.
 
 ## Planned repo layout
 
@@ -304,7 +305,7 @@ docs/           vision, architecture, roadmap
 | #   | Decision                                                                                                                                                                                | Status                                |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
-| D2  | On-device first, Hermes for escalation                                                                                                                                                  | ✅ decided ([S3](spikes/s3-brain.md)) |
+| D2  | Hermes first: every question goes to Hermes when it's set up; the on-device brain answers only without Hermes (was: on-device first, Hermes for escalation) | ✅ decided (2026-11-02)                 |
 | D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                                     | ✅ decided                            |
 | D4  | Push-to-talk after the MVP; wake word built (2026-11-03): energy gate + Create ML classifier + Apple speech confirm, default on ([Wake word](#wake-word))                                | ✅ built                              |
 | D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
@@ -312,6 +313,6 @@ docs/           vision, architecture, roadmap
 | D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |
 | D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                                                                                    | ⏳ open, revisit after M6             |
 | D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
-| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ proposed (pending S8)              |
+| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ decided (M5; no HERE/Mapbox anywhere) |
 | D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
 | D12 | A second display layer for popups. Confirmed via `g2.service_id_def.SID` (background vs foreground). The menu widget's content command is mapped: `g2.menu` (sid 0x03) `APP_SEND_MENU_INFO` with selectable items, picks back via EvenHub Cmd 0x15. But the menu is opened by the firmware (Cmd 17 is OS→app); no app-side open command is known. Open: how to open a foreground popup on demand — likely needs a live BLE capture (notification-widget JSON schema, sid 0x04) ([apk-recon](spikes/apk-recon.md)) | ✅ mapped (menu content); ⏳ open-on-demand |

@@ -15,18 +15,33 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     private(set) var requests: [[ChatMessage]] = []
     /// The session id of every request, in order.
     private(set) var sessions: [String] = []
+    private let activityLock = NSLock()
+    private var activityCount = 0
+
+    /// How many times the transport reported activity (any data from Hermes).
+    var activities: Int { activityLock.withLock { activityCount } }
 
     init(_ replies: [String]) { self.replies = replies }
 
-    func complete(_ messages: [ChatMessage], session: String, progress report: @escaping @Sendable (String) -> Void) async throws -> String {
+    func complete(
+        _ messages: [ChatMessage], session: String,
+        progress report: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String {
         requests.append(messages)
         sessions.append(session)
         onRequest?()
         if !failures.isEmpty { throw failures.removeFirst() }
-        for line in progress { report(line) }
+        for line in progress {
+            report(line)
+            activityLock.withLock { activityCount += 1 }
+            activity()
+        }
         if let delay { try await Task.sleep(for: delay) }
         if let error { throw error }
         guard !replies.isEmpty else { throw HermesError.empty }
+        activityLock.withLock { activityCount += 1 }
+        activity()
         return replies.removeFirst()
     }
 }
@@ -39,7 +54,8 @@ final class SlowToCancelHermes: HermesTransport, @unchecked Sendable {
 
     init(_ replies: [String]) { self.replies = replies }
 
-    func complete(_ messages: [ChatMessage], session: String, progress report: @escaping @Sendable (String) -> Void) async throws -> String {
+    func complete(_ messages: [ChatMessage], session: String, progress report: @escaping @Sendable (String) -> Void,
+                  activity: @escaping @Sendable () -> Void) async throws -> String {
         requests.append(messages)
         if requests.count == 1 {
             do { try await Task.sleep(for: .seconds(30)) } catch {
@@ -179,11 +195,14 @@ struct HermesBrainTests {
             #"{"type":"call","status":"Checking your morning","calls":[{"id":"c1","tool":"calendar","args":{"from":"2026-11-02"}},{"id":"c2","tool":"weather","args":{}}]}"#,
             #"{"type":"answer","sentence":"Standup at 9:30, take an umbrella.","followUps":["Later?"]}"#,
         ])
+        // Each call takes 1 s: one after the other would take 2 s. The margin is for slow CI machines.
+        calendar.delay = .seconds(1)
+        weather.delay = .seconds(1)
         let brain = brain(hermes)
         var statuses: [String] = []
         let started = Date()
         let answer = try await brain.answer("How's tomorrow?", context: "Now: Sunday") { statuses.append($0) }
-        #expect(Date().timeIntervalSince(started) < 0.3)  // both calls ran together
+        #expect(Date().timeIntervalSince(started) < 1.8)  // both calls ran together
         #expect(answer == Answer(sentence: "Standup at 9:30, take an umbrella.", followUps: ["Later?"]))
         #expect(statuses == ["Checking your morning"])
 
@@ -247,13 +266,35 @@ struct HermesBrainTests {
         #expect(answer.sentence == "The museum opens at 10.")
     }
 
-    @Test func passesHermesProgressOn() async throws {
+    @Test func hermesToolProgressIsLoggedNotShown() async throws {
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Hi."}"#])
+        hermes.progress = ["web_search", "curl -s https://example.com/news"]
+        var statuses: [String] = []
+        let brain = brain(hermes)
+        _ = try await brain.answer("What's new?", context: "") { statuses.append($0) }
+        #expect(statuses.isEmpty)  // Hermes's own tool activity never reaches the glasses
+        #expect(brain.trace.contains { $0.hasPrefix("· web_search") })
+        #expect(hermes.activities == 3)  // both progress lines plus the reply itself
+    }
+
+    @Test func progressNotesAreCapped() async throws {
+        let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Hi."}"#])
+        hermes.progress = (0..<50).map { "step \($0)" }
+        let brain = brain(hermes)
+        _ = try await brain.answer("Hi", context: "") { _ in }
+        #expect(brain.trace.filter { $0.hasPrefix("· ") }.count == 10)
+    }
+
+    @Test func activityReachesTheCallerButProgressDoesnt() async throws {
         let hermes = ScriptedHermes([#"{"type":"answer","sentence":"Done."}"#])
         hermes.progress = ["Searching the web"]
         hermes.delay = .milliseconds(50)
         var statuses: [String] = []
-        _ = try await brain(hermes).answer("News?", context: "") { statuses.append($0) }
-        #expect(statuses == ["Searching the web"])
+        var pulses = 0
+        _ = try await brain(hermes).answer("News?", context: "") { statuses.append($0) } activity: { pulses += 1 }
+        try? await Task.sleep(for: .milliseconds(50))  // activity hops to the main actor through a task
+        #expect(statuses.isEmpty)  // tool progress is not a status line
+        #expect(pulses == 2)  // one for the progress line, one for the reply
     }
 
     // MARK: Session
@@ -476,7 +517,8 @@ final class PerRequestHermes: HermesTransport, @unchecked Sendable {
 
     init(_ steps: [@Sendable () async throws -> String]) { self.steps = steps }
 
-    func complete(_ messages: [ChatMessage], session: String, progress: @escaping @Sendable (String) -> Void) async throws -> String {
+    func complete(_ messages: [ChatMessage], session: String, progress: @escaping @Sendable (String) -> Void,
+                  activity: @escaping @Sendable () -> Void) async throws -> String {
         sessions.append(session)
         return try await steps.removeFirst()()
     }
@@ -497,32 +539,21 @@ struct RouterTests {
     @Test(arguments: [
         "Brauche ich heute einen Schirm?", "Wie wird das Wetter?", "Stell einen Timer auf 10 Minuten",
         "Erinner mich morgen an die Wäsche", "Was steht morgen an?", "Wo bin ich?", "Wie komme ich zum Hauptbahnhof?",
+        "Navigation zu Media Markt.", "Walk me home", "Wie geht's dir?", "Wie hoch ist der Eiffelturm?",
+        "Wie ist das Wetter in Lissabon?", "Stell einen Timer für Pasta",
     ])
-    func simpleTasksStayLocal(_ question: String) {
-        #expect(Router.route(question, hermesAvailable: true) == .local)
+    func everythingGoesToHermesWhenItsSetUp(_ question: String) {
+        #expect(Router.route(question, hermesAvailable: true) == .hermes(question))
     }
 
-    @Test func everythingElseGoesToHermesWithTheFallback() {
-        #expect(Router.route("Wie geht's dir?", hermesAvailable: true) == .hermes("Wie geht's dir?", fallback: true))
-        #expect(Router.route("Wie hoch ist der Eiffelturm?", hermesAvailable: true)
-                == .hermes("Wie hoch ist der Eiffelturm?", fallback: true))
-    }
-
-    @Test func anotherPlaceGoesToHermes() {
-        #expect(Router.route("Wie ist das Wetter in Lissabon?", hermesAvailable: true)
-                == .hermes("Wie ist das Wetter in Lissabon?", fallback: true))
-        #expect(Router.route("How far is it to Hamburg Airport from Berlin?", hermesAvailable: true) != .local)
-        #expect(Router.route("Stell einen Timer für Pasta", hermesAvailable: true) == .local)  // actions stay local
-        #expect(Router.route("Wie wird das Wetter morgen?", hermesAvailable: true) == .local)
-    }
-
-    @Test func onlyHermesKnowsSoNoFallback() {
-        #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: true) == .hermes("Was kostet ein Bitcoin?", fallback: false))
-        #expect(Router.route("Hermes, plan my week", hermesAvailable: true) == .hermes("plan my week", fallback: false))
+    @Test func explicitHermesAsksGoToHermesEitherWay() {
+        #expect(Router.route("Hermes, plan my week", hermesAvailable: true) == .hermes("plan my week"))
+        #expect(Router.route("Hermes, plan my week", hermesAvailable: false) == .hermes("plan my week"))
     }
 
     @Test func withoutHermesEverythingIsLocal() {
         #expect(Router.route("Wie geht's dir?", hermesAvailable: false) == .local)
         #expect(Router.route("Was kostet ein Bitcoin?", hermesAvailable: false) == .local)
+        #expect(Router.route("Brauche ich heute einen Schirm?", hermesAvailable: false) == .local)
     }
 }

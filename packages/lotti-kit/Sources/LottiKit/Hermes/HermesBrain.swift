@@ -26,6 +26,9 @@ public final class HermesBrain: RemoteBrain {
     /// Bumped by every new question. A question that finds it changed has been superseded (Jan
     /// asked again meanwhile) and sends nothing more.
     @ObservationIgnored private var turn = 0
+    /// How many of Hermes's own tool-progress lines were logged this question (the rest are
+    /// dropped: they'd flood the log, and they're never shown on the glasses anyway).
+    @ObservationIgnored private var progressNotes = 0
 
     /// - Parameters:
     ///   - allowedReads: the read tools you share with Hermes (Settings), read at every call.
@@ -52,19 +55,24 @@ public final class HermesBrain: RemoteBrain {
     /// The Hermes session being continued, nil before the very first question.
     public var sessionID: String? { session }
 
-    public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+    public func answer(
+        _ message: String, context: String,
+        status: @escaping @MainActor (String) -> Void,
+        activity: @escaping @MainActor () -> Void = {}
+    ) async throws -> Answer {
         turn += 1
+        progressNotes = 0
         let mine = turn
         var used = currentSession()
         do {
             do {
-                return try await run(message, context: context, session: used, turn: mine, status: status)
+                return try await run(message, context: context, session: used, turn: mine, status: status, activity: activity)
             } catch HermesError.sessionGone where mine == turn && session == used {
                 // Deleted at Hermes (its id stays retired): continue in a new session, asking again.
                 note("✕ Hermes lost the session, starting a new one")
                 startNewSession()
                 used = currentSession()
-                return try await run(message, context: context, session: used, turn: mine, status: status)
+                return try await run(message, context: context, session: used, turn: mine, status: status, activity: activity)
             }
         } catch {
             // Stuck behind a turn that never finishes (Hermes restarted mid-question): the next
@@ -105,7 +113,8 @@ public final class HermesBrain: RemoteBrain {
     /// One question: each request carries the system prompt and only the newest message (the
     /// question, then the phone's results); Hermes adds it to the session's history.
     private func run(_ message: String, context: String, session: String, turn mine: Int,
-                     status: @escaping @MainActor (String) -> Void) async throws -> Answer {
+                     status: @escaping @MainActor (String) -> Void,
+                     activity: @escaping @MainActor () -> Void) async throws -> Answer {
         // A superseded question (a newer one, or double tap) stops before its next request.
         func checkCurrent() throws {
             try Task.checkCancellation()
@@ -123,8 +132,16 @@ public final class HermesBrain: RemoteBrain {
             let allowed = allowedReads()
             let reads = toolbox.reads.filter { allowed.contains($0.name) }
             let system = ChatMessage(.system, HermesFormat.instructions(reads: reads, actions: toolbox.actions))
-            let text = try await transport.complete([system, latest], session: session) { progress in
-                Task { @MainActor in status(progress) }
+            // Hermes's own tool activity ("web_search", a raw command) goes to the log only:
+            // it's noise on the glasses. But every byte restarts the caller's quiet clock.
+            let text = try await transport.complete([system, latest], session: session) { [weak self] progress in
+                Task { @MainActor in
+                    guard let self, self.progressNotes < 10 else { return }
+                    self.progressNotes += 1
+                    self.note("· \(String(progress.prefix(60)))")
+                }
+            } activity: {
+                Task { @MainActor in activity() }
             }
             try checkCurrent()
 
@@ -147,6 +164,7 @@ public final class HermesBrain: RemoteBrain {
                 }
                 note("← call " + calls.map { "\($0.tool)\(JSONValue.object($0.arguments).json)" }.joined(separator: ", "))
                 status(statusText ?? toolbox.progress(for: calls))
+                activity()
                 let results = await toolbox.run(calls, allowed: allowed)
                 try checkCurrent()
                 note("→ results " + results.map { "\($0.id) \($0.ok ? "ok" : "✕ \($0.content)")" }.joined(separator: ", "))

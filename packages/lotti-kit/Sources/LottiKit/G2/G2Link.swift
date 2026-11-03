@@ -67,6 +67,10 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var deduplicator = InputDeduplicator()
     @ObservationIgnored private var microphone: MicSession?
     @ObservationIgnored private var strayMicPackets = 0
+    @ObservationIgnored private let navigationBroadcast = Broadcast<G2NavigationEvent>()
+    /// While the firmware's own navigation screen is up, Lotti's page stays down: `show` is a
+    /// no-op and a taken-over page is not redrawn.
+    public var displaySuspended = false
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -165,8 +169,27 @@ public final class G2Link: NSObject, GlassesLink {
         inputBroadcast.stream()
     }
 
+    // MARK: Navigation (service 0x08)
+
+    public func sendNavigation(_ payload: [UInt8]) async {
+        guard status.isConnected, let right = arms[.right] else { return }
+        await send(payload, sid: G2Service.navigation, flag: G2Flag.request, to: right)
+    }
+
+    public func navigationRequest(_ payload: [UInt8]) async throws -> G2Message {
+        guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
+        let magic = ProtoReader.varintFields(payload)[2] ?? 0
+        return try await request(payload, sid: G2Service.navigation, flag: G2Flag.request,
+                                 magic: magic, to: right, step: "navigation request")
+    }
+
+    public func navigationEvents() -> AsyncStream<G2NavigationEvent> {
+        navigationBroadcast.stream()
+    }
+
     public func show(_ frame: GlassesFrame) async throws {
         guard status.isConnected, let right = arms[.right] else { throw GlassesLinkError.notConnected }
+        guard !displaySuspended else { return }
         lastFrame = frame
         do {
             try await draw(frame, on: right)
@@ -227,6 +250,7 @@ public final class G2Link: NSObject, GlassesLink {
     /// The firmware switched to one of its own screens (dashboard, menu), which shuts our page
     /// down. Rebuild it with the last frame shortly after.
     private func pageTakenOver() {
+        guard !displaySuspended else { return }
         guard let frame = lastFrame else { return }
         page.markUnknown()
         redraw?.cancel()
@@ -697,6 +721,13 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         if let magic = message.magic {
             let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
             replyWaiters.removeValue(forKey: key)?.resume(.success(message))
+        }
+        if message.sid == G2Service.navigation {
+            let navEvent = G2NavigationEvent.decode(message.payload)
+            log("nav event: \(navEvent)")
+            // Replies echo our own cmd and decode to `.other`; only broadcast what the glasses
+            // started themselves.
+            if case .other = navEvent {} else { navigationBroadcast.send(navEvent) }
         }
         switch event {
         case .input(let input):

@@ -39,13 +39,20 @@ public struct PhoneToolSpec: Equatable, Sendable {
     public var effect: Effect
     /// Shown on the glasses while the tool runs, e.g. "Checking your calendar…".
     public var progress: String
+    /// How long a run may take; nil means `Toolbox.callTimeout`. Slow actions (navigation
+    /// planning needs a location fix plus MapKit) give themselves more room.
+    public var timeout: Duration?
 
-    public init(name: String, description: String, parameters: [ToolParameter] = [], effect: Effect, progress: String) {
+    public init(
+        name: String, description: String, parameters: [ToolParameter] = [], effect: Effect,
+        progress: String, timeout: Duration? = nil
+    ) {
         self.name = name
         self.description = description
         self.parameters = parameters
         self.effect = effect
         self.progress = progress
+        self.timeout = timeout
     }
 
     /// Checks `arguments` against the parameters and returns them cleaned up: numbers given as

@@ -36,8 +36,10 @@ struct LiveModelTests {
         Case(question: "Erinner mich morgen um 9 an die Wäsche", action: "create_reminder"),
         Case(question: "What's the latest news about the Bundestag?", handoff: true),
         Case(question: "Hermes, find me a cheap flight to Lisbon", handoff: true),
-        Case(question: "Wie komme ich von hier zum Media Markt Altenach?", reads: ["directions"], mentions: ["min"]),
-        Case(question: "How long does it take to get to Media Markt?", reads: ["directions"], mentions: ["min"]),
+        Case(question: "Wie komme ich von hier zum Media Markt Altenach?", action: "start_navigation"),
+        Case(question: "Walk me home", action: "start_navigation"),
+        Case(question: "Bring mich mit dem Rad zum Mauerpark", action: "start_navigation"),
+        Case(question: "How long does it take to get to Media Markt?", handoff: true),
         Case(question: "Wie hoch ist der Eiffelturm?", handoff: true),
         Case(question: "Was kostet gerade ein Bitcoin?", handoff: true),
         Case(question: "Wer hat gestern in der Bundesliga gewonnen?", handoff: true),
@@ -52,8 +54,10 @@ struct LiveModelTests {
     func tools() -> (Toolbox, [String: FakeTool]) {
         let fakes: [FakeTool] = [
             FakeTool("location", result: "Große Elbstraße 39, 22767 Hamburg-Altona, Germany"),
-            FakeTool("directions", parameters: [ToolParameter("destination", .string, "the place as Jan said it")],
-                     result: "MediaMarkt, Hamburg: 5.5 km away. On foot 26 min, by bike 9 min, by public transport 14 min, by car 8 min."),
+            FakeTool("start_navigation", .action, parameters: [
+                ToolParameter("destination", .string, "the place as Jan said it"),
+                ToolParameter("mode", .oneOf(["walk", "bike"]), "how Jan wants to go", optional: true),
+            ]),
             FakeTool("calendar", parameters: [
                 ToolParameter("from", .string, "first day: today, tomorrow, a weekday like monday, or YYYY-MM-DD", optional: true),
                 ToolParameter("days", .integer, "how many days, 1 to 14; default 1", optional: true),

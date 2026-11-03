@@ -158,6 +158,21 @@ struct ConductorWakeTests {
         #expect(conductor.wakeLast == nil)
     }
 
+    @Test func aCandidateIsIgnoredWhileTheNavigationScreenIsUp() async throws {
+        speech.script = [Transcript("Hey Lotti, what")]
+        link.displaySuspended = true
+        try await wakeOn()
+        sayHeyLotti()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(conductor.mode == .off)
+        #expect(conductor.wakeLast == nil)
+        // Navigation ends: the next one wakes.
+        link.displaySuspended = false
+        hush(40)
+        sayHeyLotti()
+        try await eventually(timeout: 2) { conductor.mode == .listening }
+    }
+
     // MARK: The shared mic
 
     @Test func holdToTalkReusesTheOpenStream() async throws {
