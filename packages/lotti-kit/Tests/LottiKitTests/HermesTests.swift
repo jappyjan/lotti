@@ -8,6 +8,10 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     var progress: [String] = []
     var error: Error?
     var delay: Duration?
+    /// Thrown by the next requests, one each, before the script answers.
+    var failures: [Error] = []
+    /// Called at every request, before it answers.
+    var onRequest: (@Sendable () -> Void)?
     private(set) var requests: [[ChatMessage]] = []
     /// The session id of every request, in order.
     private(set) var sessions: [String] = []
@@ -17,6 +21,8 @@ final class ScriptedHermes: HermesTransport, @unchecked Sendable {
     func complete(_ messages: [ChatMessage], session: String, progress report: @escaping @Sendable (String) -> Void) async throws -> String {
         requests.append(messages)
         sessions.append(session)
+        onRequest?()
+        if !failures.isEmpty { throw failures.removeFirst() }
         for line in progress { report(line) }
         if let delay { try await Task.sleep(for: delay) }
         if let error { throw error }
@@ -361,6 +367,96 @@ struct HermesBrainTests {
         _ = try await second.value
         #expect(hermes.requests.count == 2)  // the first one's results never went out
         #expect(hermes.requests[1].last?.content.hasSuffix("Jan: Never mind, weather?") == true)
+    }
+
+    @Test func theIdIsStoredBeforeTheFirstRequestGoesOut() async throws {
+        let store = FakeHermesSessionStore()
+        let hermes = ScriptedHermes([])
+        hermes.failures = [HermesError.http(500, "boom")]
+        let storedAtRequest = Locked<String?>(nil)
+        hermes.onRequest = { storedAtRequest.value = store.stored }
+        let brain = brain(hermes, store: store)
+        await #expect(throws: HermesError.http(500, "boom")) { try await brain.answer("Hi", context: "") { _ in } }
+        #expect(storedAtRequest.value == hermes.sessions.first)
+        #expect(store.stored == hermes.sessions.first)  // a failed first question still keeps it
+    }
+
+    @Test(arguments: ["", " ", "lotti-a/../b", "lotti a", String(repeating: "x", count: 300)])
+    func anUnusableStoredIdIsReplaced(_ stored: String) async throws {
+        let store = FakeHermesSessionStore(stored: stored)
+        let hermes = ScriptedHermes([Self.plainReply])
+        let brain = brain(hermes, store: store)
+        #expect(brain.sessionID == nil)
+        _ = try await brain.answer("Hi", context: "") { _ in }
+        #expect(hermes.sessions.first?.hasPrefix("lotti-") == true)
+        #expect(store.saves == hermes.sessions)
+    }
+
+    @Test func aSessionHermesLostIsReplacedAndTheQuestionAskedAgain() async throws {
+        // Deleted in Hermes's dashboard: its id stays retired, so only a new one works again.
+        let store = FakeHermesSessionStore(stored: "lotti-old")
+        let hermes = ScriptedHermes([Self.plainReply, Self.plainReply])
+        hermes.failures = [HermesError.sessionGone]
+        let brain = brain(hermes, store: store)
+        let answer = try await brain.answer("Hi", context: "Now: Monday") { _ in }
+        #expect(answer.sentence == "yep.")
+        #expect(hermes.sessions.count == 2)
+        #expect(hermes.sessions[0] == "lotti-old")
+        #expect(hermes.sessions[1] != "lotti-old" && hermes.sessions[1].hasPrefix("lotti-"))
+        #expect(hermes.requests[1].last?.content == "Now: Monday\n\nJan: Hi")  // the same question, asked anew
+        #expect(store.stored == hermes.sessions[1])
+
+        _ = try await brain.answer("Then", context: "") { _ in }
+        #expect(hermes.sessions[2] == hermes.sessions[1])  // and kept from then on
+    }
+
+    @Test func aSessionLostTwiceIsNotRetriedForever() async throws {
+        let hermes = ScriptedHermes([])
+        hermes.failures = [HermesError.sessionGone, HermesError.sessionGone]
+        await #expect(throws: HermesError.sessionGone) { try await brain(hermes).answer("Hi", context: "") { _ in } }
+        #expect(hermes.requests.count == 2)
+    }
+
+    @Test func aStuckSessionIsReplacedForTheNextQuestion() async throws {
+        // Hermes restarted mid-question and paused the session: questions just wait in its queue.
+        let store = FakeHermesSessionStore(stored: "lotti-old")
+        let hermes = ScriptedHermes([Self.plainReply])
+        hermes.failures = [HermesError.sessionStuck]
+        let brain = brain(hermes, store: store)
+        await #expect(throws: HermesError.sessionStuck) { try await brain.answer("Hi", context: "") { _ in } }
+        let new = try #require(brain.sessionID)
+        #expect(new != "lotti-old")
+        #expect(store.stored == new)  // saved right away, so a restart doesn't reload the stuck one
+        _ = try await brain.answer("Again", context: "") { _ in }
+        #expect(hermes.sessions == ["lotti-old", new])
+    }
+
+    @Test func aReadHiddenDuringAQuestionIsGoneFromTheNextRequest() async throws {
+        let allowed = Locked<Set<String>>(["calendar", "weather"])
+        let hermes = ScriptedHermes([Self.callReply, Self.plainReply])
+        hermes.onRequest = { allowed.value = ["weather"] }  // hidden while the first request runs
+        _ = try await brain(hermes) { allowed.value }.answer("Weather?", context: "") { _ in }
+        #expect(try #require(hermes.requests[0].first?.content).contains("- calendar("))
+        #expect(!(try #require(hermes.requests[1].first?.content)).contains("- calendar("))
+    }
+
+    @Test func theInstructionsKeepEverythingInTheReply() async throws {
+        let hermes = ScriptedHermes([Self.plainReply])
+        _ = try await brain(hermes).answer("Hi", context: "") { _ in }
+        let system = try #require(hermes.requests.first?.first?.content)
+        #expect(system.contains("never leave work running in the background"))
+        #expect(system.contains("Answer Jan's newest message"))
+    }
+}
+
+/// A value shared with a `@Sendable` closure in tests.
+final class Locked<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value: Value
+    init(_ value: Value) { _value = value }
+    var value: Value {
+        get { lock.withLock { _value } }
+        set { lock.withLock { _value = newValue } }
     }
 }
 

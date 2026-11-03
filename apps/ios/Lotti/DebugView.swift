@@ -63,7 +63,9 @@ struct DebugView: View {
 
             Section("Hermes") {
                 if let session = hermes.sessionID {
-                    LabeledContent("Session", value: session).font(.caption.monospaced())
+                    LabeledContent("Session") {
+                        Text(session).font(.caption.monospaced()).textSelection(.enabled)
+                    }
                 }
                 if hermes.trace.isEmpty {
                     Text(hermes.isConfigured ? "Nothing asked since launch." : "Not set up.").foregroundStyle(.secondary)

@@ -20,7 +20,9 @@ public final class HermesBrain: RemoteBrain {
     /// history, tool rounds and its own tool results, and compacts it when it gets long; the phone
     /// only remembers which session to continue. Made once, at the first question, then kept forever:
     /// nothing resets it (not inactivity, not glasses-off, not a changed address or hidden read).
-    @ObservationIgnored private var session: String?
+    /// Only a dead end replaces it: Hermes no longer has the session, or it is stuck behind a turn
+    /// that will never finish (see `HermesError.sessionGone`, `.sessionStuck`).
+    private var session: String?
     /// Bumped by every new question. A question that finds it changed has been superseded (Jan
     /// asked again meanwhile) and sends nothing more.
     @ObservationIgnored private var turn = 0
@@ -38,7 +40,11 @@ public final class HermesBrain: RemoteBrain {
         self.configured = isConfigured
         self.maxRounds = maxRounds
         self.store = store
-        if let id = try? store?.load(), !id.isEmpty { self.session = id }
+        do {
+            if let id = try store?.load(), Self.isUsable(id) { self.session = id }
+        } catch {
+            print("[Hermes] ✕ couldn't load the session: \(error.localizedDescription)")
+        }
     }
 
     public var isConfigured: Bool { configured() }
@@ -47,20 +53,51 @@ public final class HermesBrain: RemoteBrain {
     public var sessionID: String? { session }
 
     public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
-        let session = self.session ?? "lotti-\(UUID().uuidString.lowercased())"
-        if self.session == nil {
-            self.session = session
-            try? store?.save(session)  // before the first request, so a restart continues it
-        }
         turn += 1
+        let mine = turn
         do {
-            return try await run(message, context: context, session: session, turn: turn, status: status)
+            do {
+                return try await run(message, context: context, session: currentSession(), turn: mine, status: status)
+            } catch HermesError.sessionGone where mine == turn {
+                // Deleted at Hermes (its id stays retired): continue in a new session, asking again.
+                note("✕ Hermes lost the session, starting a new one")
+                startNewSession()
+                return try await run(message, context: context, session: currentSession(), turn: mine, status: status)
+            }
         } catch {
+            // Stuck behind a turn that never finishes (Hermes restarted mid-question): the next
+            // question goes to a new session.
+            if case HermesError.sessionStuck = error {
+                note("✕ the session is stuck, the next question starts a new one")
+                startNewSession()
+            }
             // Hermes may keep what it got of a failed or cancelled question; "Try again" asks anew
             // in the same session.
             note("✕ \(error.localizedDescription)")
             throw error
         }
+    }
+
+    /// The session to continue, made (and saved, before the first request, so a restart
+    /// continues it) when there is none yet.
+    private func currentSession() -> String {
+        if let session { return session }
+        let new = "lotti-\(UUID().uuidString.lowercased())"
+        session = new
+        do { try store?.save(new) } catch { note("✕ couldn't save the session: \(error.localizedDescription)") }
+        return new
+    }
+
+    /// Replaces a dead-end session right away (saved), so a restart doesn't reload it.
+    private func startNewSession() {
+        session = nil
+        _ = currentSession()
+    }
+
+    /// What Hermes accepts as a session id (no spaces, path characters or control characters, at
+    /// most 256 long); anything else in the store is replaced by a new id.
+    static func isUsable(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 256 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
     }
 
     /// One question: each request carries the system prompt and only the newest message (the
@@ -72,11 +109,6 @@ public final class HermesBrain: RemoteBrain {
             try Task.checkCancellation()
             guard mine == turn else { throw CancellationError() }
         }
-        let allowed = allowedReads()
-        // Sent with every request (Hermes applies it on top of the session on every request), so a changed "Hermes may read"
-        // applies at the next question.
-        let reads = toolbox.reads.filter { allowed.contains($0.name) }
-        let system = ChatMessage(.system, HermesFormat.instructions(reads: reads, actions: toolbox.actions))
         // Every question carries a fresh time line, so a follow-up an hour later knows "now".
         var latest = ChatMessage(.user, HermesFormat.question(message, context: context))
         note("→ \(message)")
@@ -84,6 +116,11 @@ public final class HermesBrain: RemoteBrain {
         var rounds = 0
         while true {
             try checkCurrent()
+            // Hermes doesn't store the system prompt; it is rebuilt for every request, so a changed
+            // "Hermes may read" applies at the next request (and a hidden read can't run).
+            let allowed = allowedReads()
+            let reads = toolbox.reads.filter { allowed.contains($0.name) }
+            let system = ChatMessage(.system, HermesFormat.instructions(reads: reads, actions: toolbox.actions))
             let text = try await transport.complete([system, latest], session: session) { progress in
                 Task { @MainActor in status(progress) }
             }

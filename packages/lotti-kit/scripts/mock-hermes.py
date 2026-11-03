@@ -9,13 +9,15 @@ Like Hermes, it keeps sessions: with an `X-Hermes-Session-Id` header it holds th
 itself and uses only the last message of the body as the new turn (earlier messages in the body
 are ignored). Answers say how many earlier questions the session has seen, so a follow-up shows
 the history continued. Without the header it is stateless. `GET /v1/capabilities` advertises
-`session_continuity_header`.
+`session_continuity_header`, and `POST /v1/runs/{id}/stop` answers "stopping".
 
     python3 scripts/mock-hermes.py [port]      # default 8642, key "test"
     HERMES_URL=http://127.0.0.1:8642 HERMES_KEY=test HERMES_MOCK=1 swift test --filter LiveHermes
 """
 import json
+import re
 import sys
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 KEY = "test"
@@ -44,16 +46,23 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") in ("/health", "/v1/health"):
             return self.reply(200, {"status": "ok"})
-        if self.path == "/v1/models" and self.authorized():
+        if self.path in ("/v1/models", "/v1/capabilities") and not self.authorized():
+            return
+        if self.path == "/v1/models":
             return self.reply(200, {"object": "list", "data": [{"id": "hermes-agent", "object": "model"}]})
-        if self.path == "/v1/capabilities" and self.authorized():
-            return self.reply(200, {"object": "capabilities", "session_continuity_header": True,
-                                    "features": {"chat_completions": True, "streaming": True}})
+        if self.path == "/v1/capabilities":
+            return self.reply(200, {"object": "capabilities", "session_continuity_header": "X-Hermes-Session-Id",
+                                    "features": {"chat_completions": True, "streaming": True, "run_stop": True}})
         self.reply(404, {"error": {"message": "not found"}})
 
     def do_POST(self):
-        if self.path != "/v1/chat/completions" or not self.authorized():
+        if not self.authorized():
             return
+        stop = re.fullmatch(r"/v1/runs/([^/]+)/stop", self.path)
+        if stop:  # the mock answers at once, so there is never anything left to stop
+            return self.reply(200, {"run_id": stop.group(1), "status": "stopping"})
+        if self.path != "/v1/chat/completions":
+            return self.reply(404, {"error": {"message": "not found"}})
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         last = body["messages"][-1]["content"]
         session = self.headers.get("X-Hermes-Session-Id")
@@ -87,8 +96,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b": keepalive\n\n")
         self.wfile.write(b'event: hermes.tool.progress\ndata: {"tool":"web_search","label":"Searching the web"}\n\n')
+        completion = f"chatcmpl-{uuid.uuid4().hex[:29]}"  # also the run id, as at Hermes
         for i in range(0, len(text), 20):
-            chunk = {"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text[i:i + 20]}}]}
+            chunk = {"id": completion, "object": "chat.completion.chunk",
+                     "choices": [{"index": 0, "delta": {"content": text[i:i + 20]}}]}
             self.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
         self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
