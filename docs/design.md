@@ -53,13 +53,13 @@ In use the choices on the right were too small and too short: the rail got 176 o
 
 The same on the R1 ring and both temple touchpads.
 
-| Gesture           | Meaning everywhere                                                                        |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                             |
-| Tap               | Do the highlighted thing. On its own (display off) it does nothing                        |
-| Double tap        | Back or dismiss. With the display off: the today view                                     |
+| Gesture           | Meaning everywhere                                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                                                                                                                                 |
+| Tap               | Do the highlighted thing. On its own (display off) it does nothing                                                                                                                            |
+| Double tap        | Back or dismiss. With the display off: the today view                                                                                                                                         |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
-| Look up           | The look-up view; look down to hide it                                                    |
+| Look up           | The look-up view; look down to hide it                                                                                                                                                        |
 
 ## Without voice
 
@@ -169,12 +169,39 @@ Lotti keeps memories, and you can always ask about them.
 
 ## Phone app
 
-Plain native iOS look: standard lists and controls, one accent colour (the same green). The goal is that you never need it day to day.
+**AI-first:** the app opens to a chat with Lotti, like the ChatGPT or Claude apps: text input, a hold-to-talk mic, streamed status lines, answers, follow-up chips, action buttons (tap = approve, Undo where available), and inline inbox items and catch-up briefs. Questions asked on the glasses appear in the same conversation; a list holds past conversations. Settings sit behind a gear. Plain native iOS look: standard grouped lists and controls, one accent colour (the same green).
+
+### Attention and location indicators (glasses)
+
+Incoming things never appear as full notifications. A **small image indicator** at an edge of the view shows a kind icon (mail, calendar, job, reminder, info) plus a count, and stays in the display-off state. It never covers Lotti's sentence or choices and never opens by itself. The today view gives a one-line summary ("2 Mails, Termin in 10 min") and a choice for the full list; each item opens in full with Dismiss and its actions. A second small icon, a location pin, shows while the phone's location is read and briefly after. Icons are images (EvenHub image containers), not letters.
+
+### Catch-up brief
+
+When Jan comes back after sleep or ≥ 2 h away, putting the glasses on (or opening the app first) gives one short catch-up: what happened, what is next, anything weather-relevant. Nothing relevant means nothing shown. Once per return.
 
 - **Setup:** pair glasses and ring
 - **Status:** connected, batteries
-- **Settings:** Hermes, messengers, privacy
+- **Settings:** a grouped page for everything: Lotti Brain, providers, accounts, MCP servers, jobs, memory, skills and scripts, inbox and catch-up, glasses, phone tools, privacy, push, debug
 - **Memory & log:** what Lotti remembers, what she showed or held back and why. Read and delete only; teaching happens by talking to her.
+
+## Mascot
+
+A small raccoon in the phone app that wears glasses when yours are on. Purely cosmetic: it carries no information and nothing depends on it.
+
+- **Placement:** large (200 pt) and centred above the greeting in the empty-chat state, and as a small 32 pt head-only avatar in the chat header once the conversation has messages. Nowhere else in the app, apart from the Settings > Glasses switch. Never on the glasses.
+- **Glasses:** on only while the glasses are connected and reported worn; off when unknown or disconnected. Changes shorter than about 1 s are ignored. The first state shown on appearing is not animated.
+- **Head:** while the glasses are worn and the mascot is on screen in the foreground, the raccoon's head follows yours: nod (about ±20°) and tilt (about ±15°), eased between the roughly once-a-second samples. It never turns sideways (see IMU findings).
+- **Without a usable IMU** (no samples within 5 s): the head stays neutral, the glasses still follow wear state, one log line, no error.
+- **Settings:** a switch in Settings > Glasses turns the mascot off (it then costs no IMU traffic).
+- **Art:** drawn by an Opus 5.5 (extra-high effort) subagent and approved by a second, separate Opus 5.5 reviewer after 2 rounds (previews in `docs/mascot/`, preview tool `apps/ios/scripts/render-mascot/`); the drawings live in `apps/ios/Lotti/Mascot/Art/`; logic is in `packages/lotti-kit/Sources/LottiKit/Mascot/` (`MascotController`, `MascotWearMapper`, `HeadAngleMapper`). To change the look, replace the art; the logic doesn't care.
+
+### IMU findings
+
+- **Source:** `G2Event.imu(x:y:z:)`, a gravity-normalised vector (|v| about 1 at rest) from the Sys event type 8 (`IMU_Report_Data {1 x, 2 y, 3 z}`, 32-bit floats). There is **no gyroscope, magnetometer or heading field** in what the app decodes, so **yaw is not observable**: gravity doesn't change when you turn your head. The mascot's yaw stays 0.
+- **Axes:** the x axis tilts with the head (`HeadUpDetector`, calibrated on a worn G2): nod = asin(x / |v|), positive looking up, straight ahead reads about 0 to 25° (`HeadUpSettings.straightAhead` is the neutral). Tilt is atan2(lateral, vertical) in the remaining axes; which of y/z is lateral, and the sign, are **unverified on hardware** (defaults y lateral, z vertical, configurable in `HeadAngleMapper.Config`). When x dominates (looking straight up or down) tilt is held.
+- **Rate:** the app asks for pace code 200, but the G2 sends about one sample per second (comment in `HeadUpDetector`). Hence the targets are smoothed (low-pass, dead zone 2°) and the view eases over about one sample interval (`animationDuration`, measured, 0.2 to 1.5 s).
+- **Arming:** reporting only works with a live EvenHub page (a dark one is shown if none exists) and is re-armed after every page rebuild and reconnect. Field 20 is tried first, then 22.
+- **Battery and traffic:** the feed is requested only while someone needs it. `IMUDemand` is reference-counted: head-up detection and the mascot each hold a token; the glasses get "on" for the first and "off" after the last release. A second user adds no link traffic, and one turning off never cuts the other. The mascot holds its token only while visible in the foreground and worn. Head-up gestures are ignored in the Conductor while head-up is switched off, even if the mascot keeps the feed on.
 
 ## Open questions
 

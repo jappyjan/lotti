@@ -1,4 +1,4 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !LOTTI_SKIP_FOUNDATION_MODELS
 import Foundation
 import FoundationModels
 import Testing
@@ -17,7 +17,8 @@ struct LiveModelTests {
         var reads: Set<String> = []
         /// Action that must be prepared.
         var action: String?
-        var handoff = false
+        /// Beyond the offline brain: must answer with the offline sentence and call nothing.
+        var offline = false
         /// One of these must be in the answer (case-insensitive).
         var mentions: [String] = []
         /// None of these may be in the answer.
@@ -26,27 +27,24 @@ struct LiveModelTests {
     }
 
     nonisolated static let cases: [Case] = [
-        Case(question: "Wo bin ich?", reads: ["location"], mentions: ["Hamburg", "Altona", "Elbstraße"],
-             never: ["Berlin", "ich bin"]),
-        Case(question: "Where am I right now?", reads: ["location"], mentions: ["Hamburg", "Altona"], never: ["Berlin"]),
+        Case(question: "Wo bin ich?", offline: true),
+        Case(question: "Where am I right now?", offline: true),
         Case(question: "What's on tomorrow?", reads: ["calendar"], mentions: ["Standup", "9:30", "Ben"]),
         Case(question: "Was steht morgen an?", reads: ["calendar"], mentions: ["Standup", "9:30", "Ben"]),
-        Case(question: "Brauche ich heute einen Schirm?", reads: ["weather"], mentions: ["Regen", "regnet", "regnen", "Schirm", "15"]),
+        Case(question: "Brauche ich heute einen Schirm?", offline: true),
         Case(question: "Set a timer for 10 minutes for the pasta", action: "set_timer", never: ["is set", "started"]),
         Case(question: "Erinner mich morgen um 9 an die Wäsche", action: "create_reminder"),
-        Case(question: "What's the latest news about the Bundestag?", handoff: true),
-        Case(question: "Hermes, find me a cheap flight to Lisbon", handoff: true),
+        Case(question: "What's the latest news about the Bundestag?", offline: true),
         Case(question: "Wie komme ich von hier zum Media Markt Altenach?", action: "start_navigation"),
         Case(question: "Walk me home", action: "start_navigation"),
         Case(question: "Bring mich mit dem Rad zum Mauerpark", action: "start_navigation"),
-        Case(question: "How long does it take to get to Media Markt?", handoff: true),
-        Case(question: "Wie hoch ist der Eiffelturm?", handoff: true),
-        Case(question: "Was kostet gerade ein Bitcoin?", handoff: true),
-        Case(question: "Wer hat gestern in der Bundesliga gewonnen?", handoff: true),
-        Case(question: "Wann macht der Edeka hier zu?", handoff: true),
-        Case(question: "Gibt es was Neues?", handoff: true),
-        Case(question: "How are you?", never: ["Hallo", "Berlin"]),
-        Case(question: "Wie spät ist es?", mentions: ["14"]),
+        Case(question: "How long does it take to get to Media Markt?", offline: true),
+        Case(question: "Wie hoch ist der Eiffelturm?", offline: true),
+        Case(question: "Was kostet gerade ein Bitcoin?", offline: true),
+        Case(question: "Wer hat gestern in der Bundesliga gewonnen?", offline: true),
+        Case(question: "Wann macht der Edeka hier zu?", offline: true),
+        Case(question: "Gibt es was Neues?", offline: true),
+        Case(question: "How are you?", offline: true),
     ]
 
     let now = "Now: Sunday 1 November 2026, 14:05"
@@ -86,7 +84,8 @@ struct LiveModelTests {
         #expect(called.isSuperset(of: test.reads), "called \(called)")
         #expect(fakes.values.filter { $0.spec.effect == .action }.allSatisfy { $0.runs.isEmpty }, "an action ran")
         if let action = test.action { #expect(answer.actions.map(\.tool).contains(action), "actions \(answer.actions)") }
-        #expect((answer.handoff != nil) == test.handoff, "handoff \(answer.handoff ?? "-")")
+        let isOffline = answer.sentence == LocalPipeline.offlineSentence(language: LocalPipeline.language(of: test.question))
+        #expect(isOffline == test.offline, "offline sentence: \(answer.sentence)")
         let text = answer.sentence.lowercased()
         if !test.mentions.isEmpty {
             #expect(test.mentions.contains { text.contains($0.lowercased()) }, "\(answer.sentence)")

@@ -19,9 +19,15 @@ public final class FakeGlassesLink: GlassesLink {
     public var microphoneError: Error?
     public private(set) var microphoneOn = false
     public private(set) var headTracking = false
+    /// Every `setHeadTracking` call, oldest first.
+    public private(set) var headTrackingCalls: [Bool] = []
+    /// How long `setHeadTracking` takes, like the BLE round trip (zero by default).
+    public var headTrackingDelay: Duration = .zero
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
+    public private(set) var wearState: WearState = .unknown
 
+    @ObservationIgnored private let imuBroadcast = Broadcast<IMUSample>()
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var mic: AsyncStream<[Int16]>.Continuation?
     @ObservationIgnored private let navigationBroadcast = Broadcast<G2NavigationEvent>()
@@ -62,6 +68,12 @@ public final class FakeGlassesLink: GlassesLink {
     /// Deliver a gesture to every `inputs()` stream.
     public func send(_ event: InputEvent) { inputBroadcast.send(event) }
 
+    /// The glasses report being put on or taken off: updates `wearState` and sends the input.
+    public func sendWear(_ worn: Bool) {
+        wearState = worn ? .worn : .removed
+        inputBroadcast.send(InputEvent(worn ? .worn : .removed, from: .glasses))
+    }
+
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
         if let microphoneError { throw microphoneError }
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream()
@@ -79,7 +91,20 @@ public final class FakeGlassesLink: GlassesLink {
     /// Deliver PCM to the open microphone stream.
     public func sendAudio(_ samples: [Int16]) { mic?.yield(samples) }
 
-    public func setHeadTracking(_ enabled: Bool) async { headTracking = enabled }
+    public func setHeadTracking(_ enabled: Bool) async {
+        if headTrackingDelay > .zero { try? await Task.sleep(for: headTrackingDelay) }
+        headTracking = enabled
+        headTrackingCalls.append(enabled)
+    }
+
+    public func imuSamples() -> AsyncStream<IMUSample> { imuBroadcast.stream() }
+
+    /// Deliver a gravity sample to every `imuSamples()` stream (only while head tracking is on,
+    /// like the real link).
+    public func sendIMU(x: Float, y: Float, z: Float) {
+        guard headTracking else { return }
+        imuBroadcast.send(IMUSample(x: x, y: y, z: z))
+    }
 
     // MARK: Navigation
 

@@ -63,7 +63,8 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.heartbeatInterval = .milliseconds(30)
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(150))
+        // Poll instead of one fixed sleep: a loaded CI runner can starve the session's timer task.
+        try? await eventually(timeout: 5) { commands(link).filter { $0 == G2Navigation.cmdHeartbeat }.count >= 2 }
         #expect(commands(link).filter { $0 == G2Navigation.cmdHeartbeat }.count >= 2)
         feed.finish()
         await task.value
@@ -76,10 +77,12 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.onEnd = { ended = $0 }
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }
         session.setRoute(route())
         feed.yield(fix(52.5209, 13.4023))  // near the destination
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) {
+            ended == .arrived && commands(link).contains(G2Navigation.cmdArrive) && !link.displaySuspended
+        }
         #expect(ended == .arrived)
         #expect(commands(link).contains(G2Navigation.cmdArrive))
         #expect(!link.displaySuspended)
@@ -94,9 +97,9 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.onEnd = { ended = $0 }
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }  // subscribed to the glasses' events by then
         link.sendNavEvent(.notifyExit)
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { ended == .stopped }
         #expect(ended == .stopped)
         #expect(!link.displaySuspended)
         feed.finish()
@@ -197,7 +200,7 @@ struct NavigationSessionTests {
         -> (Task<Void, Never>, AsyncStream<CLLocation>.Continuation) {
         let (stream, feed) = AsyncStream<CLLocation>.makeStream()
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }
         session.setRoute(route())
         feed.yield(fix(52.5203, 13.40))  // a location fix, so there's something to map
         try? await Task.sleep(for: .milliseconds(100))
@@ -253,7 +256,7 @@ struct NavigationSessionTests {
 
         // Any view but 1 is the full map.
         link.sendNavEvent(.viewChanged(view: 2))
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { frames(link).contains { $0.cmd == G2Navigation.cmdMaxMap } }
         #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMaxMap }.count == 1)
 
         // Standing still: frames keep coming, the full map isn't resent.
@@ -264,7 +267,7 @@ struct NavigationSessionTests {
         // Back to the arrow view: the mini map again.
         let before = frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count
         link.sendNavEvent(.viewChanged(view: 1))
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count > before }
         #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count > before)
 
         feed.finish()
@@ -311,7 +314,7 @@ struct NavigationSessionTests {
         session.frameInterval = .zero
         let (task, feed) = await startRouted(link, session)
         link.sendNavEvent(.viewChanged(view: 2))
-        try? await Task.sleep(for: .milliseconds(200))
+        try? await eventually(timeout: 5) { frames(link).contains { $0.cmd == G2Navigation.cmdMaxMap } }
 
         let sessions = frames(link).compactMap { frame -> UInt64? in
             switch frame.cmd {

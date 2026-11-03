@@ -1,11 +1,10 @@
 import LottiKit
 import SwiftUI
 
-/// What's going on inside: the glasses' screen, voice, brain, head angle, gestures, test buttons.
+/// What's going on inside: the glasses' screen, voice, brains, head angle, gestures, test buttons (Settings → Debug).
 struct DebugView: View {
     let model: AppModel
     let brain: AppleBrain
-    let hermes: HermesBrain
     let navigation: NavigationController
 
     private var link: any GlassesLink { model.link }
@@ -50,6 +49,8 @@ struct DebugView: View {
                 LabeledContent("Microphone", value: conductor.microphoneSource ?? "Not used yet")
                 LabeledContent("Last heard", value: conductor.lastHeard.map { $0.isEmpty ? "(nothing)" : $0 } ?? "–")
                 LabeledContent("Reconnects", value: "\(model.reconnects)")
+                LabeledContent("Lotti Brain", value: model.isPaired ? String(describing: model.backend.state) : "Not paired")
+                if let problem = model.backend.lastError { Text(problem).font(.caption).foregroundStyle(.secondary) }
                 if let error = conductor.lastError {
                     Text(error).foregroundStyle(.red)
                 }
@@ -58,20 +59,6 @@ struct DebugView: View {
             Section("On-device brain, last answer") {
                 if brain.trace.isEmpty { Text("Nothing asked yet.").foregroundStyle(.secondary) }
                 ForEach(Array(brain.trace.enumerated()), id: \.offset) { _, line in
-                    Text(line).font(.caption.monospaced())
-                }
-            }
-
-            Section("Hermes") {
-                if let session = hermes.sessionID {
-                    LabeledContent("Session") {
-                        Text(session).font(.caption.monospaced()).textSelection(.enabled)
-                    }
-                }
-                if hermes.trace.isEmpty {
-                    Text(hermes.isConfigured ? "Nothing asked since launch." : "Not set up.").foregroundStyle(.secondary)
-                }
-                ForEach(Array(hermes.trace.enumerated()), id: \.offset) { _, line in
                     Text(line).font(.caption.monospaced())
                 }
             }
@@ -87,9 +74,6 @@ struct DebugView: View {
                     Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
                     Button("Ask \"What's on today?\"") { conductor.ask("What's on today?") }
                     Button("Ask \"Timer for 10 minutes\"") { conductor.ask("Set a timer for 10 minutes") }
-                    if hermes.isConfigured {
-                        Button("Ask Hermes about tomorrow") { conductor.ask("How does tomorrow look?", onHermes: true) }
-                    }
                 }
             }
 

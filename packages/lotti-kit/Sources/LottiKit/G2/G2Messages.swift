@@ -114,10 +114,14 @@ public enum G2Payload {
     /// Cmd 0, CreateStartUpPage with several text containers. Only valid once per session; use
     /// `rebuildPage` to change the layout afterwards.
     /// `{1: container count, 3: TextObject (repeated), 5: widget id}`
-    public static func createPage(magic: UInt64, boxes: [G2TextBox]) -> [UInt8] {
+    ///
+    /// With `images`, each image container goes in field 4 (`ImageContainerProperty`) and counts in
+    /// field 1. **Unverified on hardware** (see `imageObject`).
+    public static func createPage(magic: UInt64, boxes: [G2TextBox], images: [G2ImageBox] = []) -> [UInt8] {
         evenHub(command: 0, magic: magic, field: 3) {
-            $0.varint(1, boxes.count)
+            $0.varint(1, boxes.count + images.count)
             for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
+            for image in images { $0.message(4) { imageObject(image, into: &$0) } }
             $0.varint(5, 10000)  // widget id, as used by every known client
         }
     }
@@ -126,10 +130,11 @@ public enum G2Payload {
     /// in envelope field 7 and without a widget id (field 5 is a MenuObject here). The glasses
     /// ack with Cmd 8 `{8: {1: 6 success / 7 failed}}`. Layout from even-g2-protocol
     /// `build_rebuild_page` and MentraOS `rebuildPageMessage`.
-    public static func rebuildPage(magic: UInt64, boxes: [G2TextBox]) -> [UInt8] {
+    public static func rebuildPage(magic: UInt64, boxes: [G2TextBox], images: [G2ImageBox] = []) -> [UInt8] {
         evenHub(command: 7, magic: magic, field: 7) {
-            $0.varint(1, boxes.count)
+            $0.varint(1, boxes.count + images.count)
             for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
+            for image in images { $0.message(4) { imageObject(image, into: &$0) } }
         }
     }
 
@@ -150,6 +155,56 @@ public enum G2Payload {
         w.string(10, box.name)
         if box.capturesEvents { w.varint(11, 1) }
         w.string(12, box.text)
+    }
+
+    /// ImageContainerProperty `{1 x, 2 y, 3 w, 4 h, 5 id, 6 name}`: the image counterpart of
+    /// `textObject`. **Unverified on hardware:** field numbers follow the Even Hub schema as
+    /// remembered from even-g2-protocol (images are the fourth container list of the page, after
+    /// lists and text); no capture of a page with an image container exists yet.
+    private static func imageObject(_ image: G2ImageBox, into w: inout ProtoWriter) {
+        w.varint(1, image.x)
+        w.varint(2, image.y)
+        w.varint(3, image.width)
+        w.varint(4, image.height)
+        w.varint(5, image.id)
+        w.string(6, image.name)
+    }
+
+    /// Largest chunk of image data per message.
+    public static let imageFragmentSize = 4096
+
+    /// Cmd 3, image raw data: upload (part of) an image container's pixels. The glasses ack with
+    /// Cmd 4. The body follows the nav-map upload (`G2Navigation.maxMapFragment`) with the
+    /// container's id and name in front:
+    /// `{1 containerID, 2 containerName, 3 sessionID, 4 totalSize, 5 compressMode,
+    /// 6 fragmentIndex, 7 fragmentSize, 8 rawData}` in envelope field 5.
+    /// **Unverified on hardware:** the Cmd number (3, acked as 4, like the 0/1, 5/6, 7/8 pairs)
+    /// and the field numbers are inferred, not captured.
+    public static func imageUpdate(
+        magic: UInt64, image: G2ImageBox, sessionID: Int, fragmentIndex: Int, fragment: [UInt8]
+    ) -> [UInt8] {
+        evenHub(command: 3, magic: magic, field: 5) {
+            $0.varint(1, image.id)
+            $0.string(2, image.name)
+            $0.varint(3, sessionID)
+            $0.varint(4, image.data.count)
+            $0.varint(5, image.compression.rawValue)
+            $0.varint(6, fragmentIndex)
+            $0.varint(7, fragment.count)
+            $0.bytes(8, fragment)
+        }
+    }
+
+    /// The `imageUpdate` messages that upload `image`, one per fragment, in order. Each needs its
+    /// own magic, so `magics` supplies them.
+    public static func imageUpdates(
+        image: G2ImageBox, sessionID: Int, magic: () -> UInt64, fragmentSize: Int = imageFragmentSize
+    ) -> [[UInt8]] {
+        let size = max(fragmentSize, 1)
+        return stride(from: 0, to: image.data.count, by: size).enumerated().map { index, start in
+            imageUpdate(magic: magic(), image: image, sessionID: sessionID, fragmentIndex: index,
+                        fragment: Array(image.data[start..<min(start + size, image.data.count)]))
+        }
     }
 
     /// Cmd 19, IMU control: `{1: enable, 2: report pace}` in envelope field 20 (MentraOS, found by

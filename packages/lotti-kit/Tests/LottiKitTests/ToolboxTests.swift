@@ -43,14 +43,14 @@ extension FakeTool {
 
 struct ToolboxTests {
     @Test func runsSeveralCallsAtOnceAndKeepsTheirOrder() async {
-        // Each call takes 1 s: one after the other would take 2 s. The margin is for slow CI machines.
-        let calendar = FakeTool("calendar", result: "Standup 9:30", delay: .seconds(1))
-        let weather = FakeTool("weather", result: "12°, cloudy", delay: .seconds(1))
+        // Each call takes 2 s: one after the other would take 4 s. The margin is for slow CI machines.
+        let calendar = FakeTool("calendar", result: "Standup 9:30", delay: .seconds(2))
+        let weather = FakeTool("weather", result: "12°, cloudy", delay: .seconds(2))
         let toolbox = Toolbox([calendar, weather])
         let started = Date()
         let results = await toolbox.run([ToolCall(id: "c1", tool: "calendar"), ToolCall(id: "c2", tool: "weather")],
                                         allowed: ["calendar", "weather"])
-        #expect(Date().timeIntervalSince(started) < 1.8)
+        #expect(Date().timeIntervalSince(started) < 3.6)
         #expect(results == [ToolResult(id: "c1", ok: true, content: "Standup 9:30"),
                             ToolResult(id: "c2", ok: true, content: "12°, cloudy")])
     }
@@ -189,11 +189,6 @@ struct LocalPipelineTests {
         ("Was steht auf meinen Erinnerungen?", ["reminders"]),
         ("Stell einen Timer auf 10 Minuten", ["set_timer"]),
         ("Termine und Wetter morgen?", ["calendar", "weather"]),
-        ("Wann macht der Edeka hier zu?", ["hermes"]),
-        ("Gibt es was Neues?", ["hermes"]),
-        ("Was kostet gerade ein Bitcoin?", ["hermes"]),
-        ("Who won the game yesterday?", ["hermes"]),
-        ("Hat die Apotheke noch offen?", ["hermes"]),
         ("Wie komme ich von hier zum Media Markt Altenach?", ["start_navigation"]),
         ("Walk me home", ["start_navigation"]),
         ("Bring mich mit dem Rad zum Mauerpark", ["start_navigation"]),
@@ -226,6 +221,7 @@ struct LocalPipelineTests {
     @Test func noRuleLeavesItToTheModel() {
         #expect(LocalPipeline.ruleTools("How are you?", tools: specs) == nil)
         #expect(LocalPipeline.ruleTools("Wie hoch ist der Eiffelturm?", tools: specs) == nil)
+        #expect(LocalPipeline.ruleTools("Was kostet gerade ein Bitcoin?", tools: specs) == nil)
         #expect(LocalPipeline.ruleTools("Wo bin ich?", tools: []) == nil)
     }
 
@@ -237,8 +233,9 @@ struct LocalPipelineTests {
 
     @Test func parsesTheChoiceFromLabels() {
         let json: JSONValue = ["intent": "remind", "tools": ["remind_me_later", "weather", "weather", "nonsense"]]
-        #expect(LocalPipeline.parseChoice(json, tools: specs).tools == ["create_reminder", "weather"])
-        #expect(LocalPipeline.parseChoice(["tools": ["hermes_web_news_research"]], tools: specs).tools == ["hermes"])
+        #expect(LocalPipeline.parseChoice(json, tools: specs).tools == ["create_reminder"])  // weather is the backend's
+        #expect(LocalPipeline.parseChoice(["tools": ["hermes_web_news_research"]], tools: specs).tools == [])
+        #expect(LocalPipeline.parseChoice(["tools": ["where_jan_is", "jan_calendar"]], tools: specs).tools == ["calendar"])  // location is the backend's
     }
 
     @Test func fixedSentencesForActions() {
