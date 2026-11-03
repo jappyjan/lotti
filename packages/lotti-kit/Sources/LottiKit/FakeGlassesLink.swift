@@ -21,6 +21,7 @@ public final class FakeGlassesLink: GlassesLink {
     public private(set) var headTracking = false
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
+    public private(set) var wearState: WearState = .unknown
 
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var mic: AsyncStream<[Int16]>.Continuation?
@@ -61,6 +62,12 @@ public final class FakeGlassesLink: GlassesLink {
 
     /// Deliver a gesture to every `inputs()` stream.
     public func send(_ event: InputEvent) { inputBroadcast.send(event) }
+
+    /// The glasses report being put on or taken off: updates `wearState` and sends the input.
+    public func sendWear(_ worn: Bool) {
+        wearState = worn ? .worn : .removed
+        inputBroadcast.send(InputEvent(worn ? .worn : .removed, from: .glasses))
+    }
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
         if let microphoneError { throw microphoneError }

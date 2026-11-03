@@ -117,6 +117,53 @@ public struct G2TextBox: Equatable, Sendable {
     }
 }
 
+/// One image container on the page: a small monochrome bitmap (the attention and location
+/// indicators). The bitmap is already encoded as the 4 bpp BMP (+ LZ4) the nav maps use
+/// (`NavMapBmp`); the container's size is the bitmap's size.
+///
+/// **Unverified on hardware:** the container and upload layouts in `G2Payload` are reconstructed
+/// from the Even Hub / even-g2-protocol schemas and the map upload they share a format with; no
+/// capture of an EvenHub image container exists yet.
+public struct G2ImageBox: Equatable, Sendable {
+    public var id: Int
+    /// ≤ 14 characters, like text containers.
+    public var name: String
+    public var x: Int
+    public var y: Int
+    public var width: Int
+    public var height: Int
+    /// The BMP, LZ4-compressed when that is smaller (see `compression`).
+    public var data: [UInt8]
+    public var compression: NavMapBmp.Compression
+
+    public static let attentionID = 3
+    public static let locationID = 4
+
+    public init(id: Int, name: String, x: Int, y: Int, width: Int, height: Int, data: [UInt8],
+                compression: NavMapBmp.Compression) {
+        self.id = id
+        self.name = name
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.data = data
+        self.compression = compression
+    }
+
+    /// Encodes a monochrome bitmap (lit pixels green, the rest off) as a container at (x, y).
+    public init?(id: Int, name: String, x: Int, y: Int, bitmap: MonoBitmap) {
+        guard let encoded = NavMapBmp.encode(rgba: bitmap.rgba(), width: bitmap.width, height: bitmap.height) else { return nil }
+        self.init(id: id, name: name, x: x, y: y, width: bitmap.width, height: bitmap.height,
+                  data: encoded.data, compression: encoded.mode)
+    }
+
+    /// Same place and size (the data may differ): a different geometry needs a page rebuild.
+    func sameGeometry(as other: G2ImageBox) -> Bool {
+        id == other.id && name == other.name && x == other.x && y == other.y && width == other.width && height == other.height
+    }
+}
+
 /// Decides what to send to show a frame, given what the glasses show now. Pure, so the diffing is
 /// testable without Bluetooth.
 ///
@@ -125,15 +172,18 @@ public struct G2TextBox: Equatable, Sendable {
 /// - Other shape, or the page state is unknown after a failure: Cmd 7 RebuildPage.
 public struct G2PagePlanner: Equatable, Sendable {
     public enum Command: Equatable, Sendable {
-        case create([G2TextBox])
-        case rebuild([G2TextBox])
+        case create([G2TextBox], images: [G2ImageBox] = [])
+        case rebuild([G2TextBox], images: [G2ImageBox] = [])
         case update(id: Int, name: String, text: String)
+        /// Upload an image container's pixels. Always follows the create or rebuild that made the
+        /// container, or comes alone when only the pixels changed.
+        case uploadImage(G2ImageBox)
     }
 
     private enum State: Equatable, Sendable {
         /// No page yet this session.
         case none
-        case live(G2PageShape, texts: [Int: String])
+        case live(G2PageShape, texts: [Int: String], images: [G2ImageBox])
         /// A page exists, but we don't know what it shows (a send failed).
         case unknown
     }
@@ -146,7 +196,7 @@ public struct G2PagePlanner: Equatable, Sendable {
     public var hasPage: Bool { state != .none }
 
     public var shape: G2PageShape? {
-        if case .live(let shape, _) = state { return shape }
+        if case .live(let shape, _, _) = state { return shape }
         return nil
     }
 
@@ -162,17 +212,21 @@ public struct G2PagePlanner: Equatable, Sendable {
         }
         let texts = Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, $0.text) })
 
+        let images = frame.images
         let commands: [Command]
         switch state {
         case .none:
-            commands = [.create(boxes)]
-        case .live(let current, let shown) where current == shape:
+            commands = [.create(boxes, images: images)] + images.map { .uploadImage($0) }
+        case .live(let current, let shown, let shownImages)
+            where current == shape && Self.sameImageGeometry(shownImages, images):
             commands = boxes.filter { shown[$0.id] != $0.text }
                 .map { .update(id: $0.id, name: $0.name, text: $0.text) }
+                + images.filter { image in shownImages.first { $0.id == image.id }?.data != image.data }
+                .map { .uploadImage($0) }
         case .live, .unknown:
-            commands = [.rebuild(boxes)]
+            commands = [.rebuild(boxes, images: images)] + images.map { .uploadImage($0) }
         }
-        state = .live(shape, texts: texts)
+        state = .live(shape, texts: texts, images: images)
         return commands
     }
 
@@ -185,6 +239,10 @@ public struct G2PagePlanner: Equatable, Sendable {
     /// The session ended (disconnect): the next frame creates a new page.
     public mutating func reset() {
         state = .none
+    }
+
+    private static func sameImageGeometry(_ a: [G2ImageBox], _ b: [G2ImageBox]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { $0.sameGeometry(as: $1) }
     }
 
     private static func text(_ text: String) -> String {

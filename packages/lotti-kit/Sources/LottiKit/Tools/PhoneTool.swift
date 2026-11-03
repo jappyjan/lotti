@@ -24,7 +24,7 @@ public struct ToolParameter: Equatable, Sendable {
     }
 }
 
-/// What a phone tool is, for both brains: Apple's on-device model and Hermes.
+/// What a phone tool is, for the offline brain and for the backend (which calls `location` and `reminders` over the socket).
 public struct PhoneToolSpec: Equatable, Sendable {
     public enum Effect: Equatable, Sendable {
         /// Reads something (calendar, weather). Runs right away when a brain asks for it.
@@ -179,14 +179,32 @@ public struct ToolResult: Equatable, Sendable {
 
 /// An action a brain suggested, validated and ready to run when you tap it.
 public struct ProposedAction: Equatable, Sendable {
+    /// Where the action runs.
+    public enum Target: String, Equatable, Sendable {
+        /// On the phone, through the `Toolbox` (`set_timer`, `create_reminder`, `start_navigation`).
+        case phone
+        /// On the backend: the tap sends `perform {actionId}` and the server runs it.
+        case server
+    }
+
     public var tool: String
     public var arguments: ToolArguments
     /// The rail title.
     public var title: String
+    public var target: Target
+    /// The backend's id for a `.server` action (from the answer's `actions`).
+    public var actionId: String?
 
-    public init(tool: String, arguments: ToolArguments, title: String) {
+    public init(tool: String, arguments: ToolArguments, title: String, target: Target = .phone, actionId: String? = nil) {
         self.tool = tool
         self.arguments = arguments
         self.title = title
+        self.target = target
+        self.actionId = actionId
+    }
+
+    /// An action the backend runs when you tap it.
+    public static func server(id: String, title: String, tool: String = "", arguments: ToolArguments = ToolArguments()) -> ProposedAction {
+        ProposedAction(tool: tool, arguments: arguments, title: title, target: .server, actionId: id)
     }
 }

@@ -189,11 +189,6 @@ struct LocalPipelineTests {
         ("Was steht auf meinen Erinnerungen?", ["reminders"]),
         ("Stell einen Timer auf 10 Minuten", ["set_timer"]),
         ("Termine und Wetter morgen?", ["calendar", "weather"]),
-        ("Wann macht der Edeka hier zu?", ["hermes"]),
-        ("Gibt es was Neues?", ["hermes"]),
-        ("Was kostet gerade ein Bitcoin?", ["hermes"]),
-        ("Who won the game yesterday?", ["hermes"]),
-        ("Hat die Apotheke noch offen?", ["hermes"]),
         ("Wie komme ich von hier zum Media Markt Altenach?", ["start_navigation"]),
         ("Walk me home", ["start_navigation"]),
         ("Bring mich mit dem Rad zum Mauerpark", ["start_navigation"]),
@@ -226,6 +221,7 @@ struct LocalPipelineTests {
     @Test func noRuleLeavesItToTheModel() {
         #expect(LocalPipeline.ruleTools("How are you?", tools: specs) == nil)
         #expect(LocalPipeline.ruleTools("Wie hoch ist der Eiffelturm?", tools: specs) == nil)
+        #expect(LocalPipeline.ruleTools("Was kostet gerade ein Bitcoin?", tools: specs) == nil)
         #expect(LocalPipeline.ruleTools("Wo bin ich?", tools: []) == nil)
     }
 
@@ -237,8 +233,9 @@ struct LocalPipelineTests {
 
     @Test func parsesTheChoiceFromLabels() {
         let json: JSONValue = ["intent": "remind", "tools": ["remind_me_later", "weather", "weather", "nonsense"]]
-        #expect(LocalPipeline.parseChoice(json, tools: specs).tools == ["create_reminder", "weather"])
-        #expect(LocalPipeline.parseChoice(["tools": ["hermes_web_news_research"]], tools: specs).tools == ["hermes"])
+        #expect(LocalPipeline.parseChoice(json, tools: specs).tools == ["create_reminder"])  // weather is the backend's
+        #expect(LocalPipeline.parseChoice(["tools": ["hermes_web_news_research"]], tools: specs).tools == [])
+        #expect(LocalPipeline.parseChoice(["tools": ["where_jan_is", "jan_calendar"]], tools: specs).tools == ["calendar"])  // location is the backend's
     }
 
     @Test func fixedSentencesForActions() {

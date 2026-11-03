@@ -84,3 +84,10 @@ Note: the protocol lives in `libapp.so`, which Jiagu does not pack, so `blutter`
 - Jiagu usually adds anti-debug / anti-emulator / root checks — hook `android.os.Debug.isDebuggerConnected`, the `/proc/self/maps` read, and the emulator-property checks first.
 
 Our CI host has no `/dev/kvm` (no nested virtualization), so the emulator route runs on a Mac or a real device, not here.
+
+## LottiKit decoders and builders awaiting a hardware capture (2026-11-03)
+
+Implemented from the best evidence above, **not verified on glasses**. Each is isolated, commented as unverified in code, and covered only by synthetic frames, so a real capture changes one function and its test.
+
+- **Wear detection (sid `0x0D`)**: `G2Events.wearState`. The two captured sid `0x0D` payloads are `{1: kind, 3: body}`; the decoder assumes kind 2 is "wear detect" with the state in `{3: {1: 1 worn / 0 not worn}}` (or a plain varint in field 2; zero is left out on the wire). Everything else still surfaces as `.info("state change …")`, so the app log shows the real bytes when the glasses are put on and taken off. Next step: wear the glasses with the log open and fix the layout from what appears.
+- **EvenHub image containers**: `G2Payload.createPage` / `rebuildPage` put `ImageContainerProperty {1 x, 2 y, 3 w, 4 h, 5 id, 6 name}` in page field 4 (after lists and text), and `G2Payload.imageUpdate` uploads pixels as Cmd 3 (acked as Cmd 4, like the 0/1, 5/6, 7/8 pairs) in envelope field 5 with `{1 containerID, 2 containerName, 3 sessionID, 4 totalSize, 5 compressMode, 6 fragmentIndex, 7 fragmentSize, 8 rawData}`, the nav-map upload with the container id and name in front. The pixels use the nav maps' 4 bpp BMP + LZ4 (`NavMapBmp`). Next step: a BLE capture of the Even app showing an image on an EvenHub page.

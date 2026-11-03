@@ -52,6 +52,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
     @ObservationIgnored private var page = G2PagePlanner()
+    @ObservationIgnored private var imageSession = 0
     // Head tracking (IMU). `imuField` is the envelope field that produced samples (20 or 22).
     @ObservationIgnored private var headTrackingWanted = false
     @ObservationIgnored private var lastFrame: GlassesFrame?
@@ -213,15 +214,15 @@ public final class G2Link: NSObject, GlassesLink {
             let m = nextMagic()
             do {
                 switch command {
-                case .create(let boxes):
+                case .create(let boxes, let images):
                     pageChanged = true
-                    _ = try await request(G2Payload.createPage(magic: m, boxes: boxes), sid: G2Service.evenHub,
+                    _ = try await request(G2Payload.createPage(magic: m, boxes: boxes, images: images), sid: G2Service.evenHub,
                                           flag: G2Flag.request, magic: m, to: right, step: "creating the page")
-                case .rebuild(let boxes):
+                case .rebuild(let boxes, let images):
                     pageChanged = true
                     // Untested live by the references, and an ack may not come: only an explicit
                     // failure counts.
-                    let reply = try? await request(G2Payload.rebuildPage(magic: m, boxes: boxes), sid: G2Service.evenHub,
+                    let reply = try? await request(G2Payload.rebuildPage(magic: m, boxes: boxes, images: images), sid: G2Service.evenHub,
                                                    flag: G2Flag.request, magic: m, to: right,
                                                    step: "rebuilding the page", seconds: 2)
                     let result = reply.flatMap { G2Payload.rebuildResult($0.payload) }
@@ -230,6 +231,17 @@ public final class G2Link: NSObject, GlassesLink {
                     if result == 7 { throw PageError.gone }
                     if let result, result != 6 {
                         throw GlassesLinkError.timeout("rebuilding the page (result \(result))")
+                    }
+                case .uploadImage(let image):
+                    // Decoration only: a missing ack is logged, not an error (the layout is
+                    // unverified on hardware, see `G2Payload.imageUpdate`).
+                    imageSession += 1
+                    let session = imageSession
+                    for payload in G2Payload.imageUpdates(image: image, sessionID: session, magic: { nextMagic() }) {
+                        let magic = ProtoReader.varintFields(payload)[2] ?? 0
+                        let ack = try? await request(payload, sid: G2Service.evenHub, flag: G2Flag.request, magic: magic,
+                                                     to: right, step: "uploading \(image.name)", seconds: 2)
+                        if ack == nil { print("[Glasses] image \(image.name): no ack") }
                     }
                 case .update(let id, let name, let text):
                     _ = try await request(G2Payload.textUpdate(magic: m, containerID: id, containerName: name, text: text),
@@ -325,6 +337,7 @@ public final class G2Link: NSObject, GlassesLink {
         didSet { headUp.config = headUpSettings.config }
     }
     public private(set) var headPitch: Double?
+    public private(set) var wearState: WearState = .unknown
 
     public var headUpConfig: HeadUpDetector.Config {
         get { headUp.config }
@@ -468,6 +481,7 @@ public final class G2Link: NSObject, GlassesLink {
         lastFrame = nil
         redraw?.cancel()
         lastImuSample = nil
+        wearState = .unknown
         headUp.reset()
         endMicrophone()
         let current = arms.values
@@ -736,6 +750,14 @@ extension G2Link: @MainActor CBPeripheralDelegate {
             if isNew { inputBroadcast.send(input) }
         case .imu(let x, let y, let z):
             receiveImu(x: x, y: y, z: z)
+        case .wear(let worn):
+            // Both arms may report it; only a change counts.
+            let next: WearState = worn ? .worn : .removed
+            log("wear detection: \(next) from \(arm.side) arm (unverified layout)")
+            if wearState != next {
+                wearState = next
+                inputBroadcast.send(InputEvent(worn ? .worn : .removed, from: .glasses))
+            }
         case .info(let text):
             log("\(arm.side) arm: \(text)")
             if message.sid == G2Events.stateService, message.payload == G2Events.dashboardToggled, arm.side == .right {

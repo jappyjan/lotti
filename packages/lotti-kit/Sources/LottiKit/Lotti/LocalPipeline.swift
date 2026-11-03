@@ -1,13 +1,17 @@
 import Foundation
 import NaturalLanguage
 
-/// The prompts and parsing for the on-device brain's steps, kept apart from Foundation Models so
-/// they can be tested without a model. No fixed facts about Jan go into any prompt: everything
-/// about him comes from the clock or from a tool in this turn.
+/// The prompts and parsing for the offline (on-device) brain's steps, kept apart from Foundation
+/// Models so they can be tested without a model. No fixed facts about Jan go into any prompt:
+/// everything about him comes from the clock or from a tool in this turn.
+///
+/// The offline brain is narrow on purpose: the backend answers everything else whenever it can be
+/// reached. Offline it does timers and navigation (most important), reminders and the local
+/// calendar; anything else gets a short "I'm offline" sentence (`offlineSentence`).
 ///
 /// Steps: choose tools from a list → fill in each chosen tool's arguments → run reads in
 /// parallel (actions are only prepared) → shorten long results → write the answer from the facts.
-/// Prepared actions and hand-offs get fixed sentences.
+/// Prepared actions and the offline notice get fixed sentences.
 public enum LocalPipeline {
     public static let languages = ["German", "English"]
 
@@ -16,7 +20,7 @@ public enum LocalPipeline {
         public var intent: String
         /// "German" or "English": the answer's language.
         public var language: String
-        /// Tool names, or "hermes". At most three, no repeats.
+        /// Tool names. At most three, no repeats.
         public var tools: [String]
 
         public init(intent: String = "", language: String = "English", tools: [String] = []) {
@@ -71,8 +75,6 @@ public enum LocalPipeline {
     /// Phrases that clearly ask for a tool, German and English. Checked before the model chooses:
     /// deterministic and instant. The model only chooses when no rule matches.
     static let rules: [(tool: String, pattern: String)] = [
-        // Things only Hermes can know. The phone can't look up the web, and the model invents answers.
-        ("hermes", #"\b(nachrichten|news|neues|neuigkeiten|schlagzeilen|headlines|kostet|kosten|preise?|prices?|costs?|öffnungszeit(en)?|opening hours|geöffnet|offen|open|macht .*\b(zu|auf)\b|schlie(ß|ss)t|closes?|wer hat .*gewonnen|who won|ergebnis(se)?|scores?|such(e)? (mir|nach)|search|look up|recherch\w*|google)\b"#),
         ("create_reminder", #"\b(erinner(e|n)? mich|remind me|vergiss nicht|don'?t let me forget)\b"#),
         ("reminders", #"\b(erinnerungen|reminders|to-?dos?|aufgaben(liste)?)\b"#),
         ("set_timer", #"\b(timer|countdown|stoppuhr)\b"#),
@@ -85,19 +87,37 @@ public enum LocalPipeline {
     /// Tools only the rules pick, never the model.
     public static let rulesOnly: Set<String> = ["location"]
 
-    /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. Hermes wins
-    /// over everything; a new reminder wins over reading the reminder list.
+    /// What the offline brain can do. Everything else (weather, web, location, small talk) is for
+    /// the backend and gets `offlineSentence` here.
+    public static let offlineTools: Set<String> = ["set_timer", "start_navigation", "create_reminder", "reminders", "calendar"]
+
+    /// What the offline brain does with a message.
+    public enum OfflinePlan: Equatable, Sendable {
+        /// Use these tools (all in `offlineTools`).
+        case tools([String])
+        /// A rule recognised something only the backend can do.
+        case unsupported
+    }
+
+    /// The rules' verdict for the offline brain, or nil when no rule matches (then the model may
+    /// choose among `offlineTools`, and an empty choice is unsupported too).
+    public static func offlinePlan(_ message: String, names: Set<String>) -> OfflinePlan? {
+        guard let picked = ruleTools(message, names: names) else { return nil }
+        let offline = picked.filter { offlineTools.contains($0) }
+        return offline.isEmpty ? .unsupported : .tools(offline)
+    }
+
+    /// Tools the rules pick for `message`, in rule order, or nil if no rule matches. A new
+    /// reminder wins over reading the reminder list.
     public static func ruleTools(_ message: String, tools: [PhoneToolSpec]) -> [String]? {
         ruleTools(message, names: Set(tools.map(\.name)))
     }
 
     public static func ruleTools(_ message: String, names: Set<String>) -> [String]? {
         let text = message.lowercased()
-        let available = names.union(["hermes"])
         var picked = rules.filter { rule in
-            available.contains(rule.tool) && (try? Regex(rule.pattern)).map { text.contains($0) } == true
+            names.contains(rule.tool) && (try? Regex(rule.pattern)).map { text.contains($0) } == true
         }.map(\.tool)
-        if picked.contains("hermes") { return ["hermes"] }
         if picked.contains("create_reminder") { picked.removeAll { $0 == "reminders" } }
         return picked.isEmpty ? nil : Array(picked.prefix(3))
     }
@@ -114,13 +134,12 @@ public enum LocalPipeline {
         "reminders": "read_existing_reminders",
         "set_timer": "start_timer",
         "create_reminder": "remind_me_later",
-        "hermes": "hermes_web_news_research",
     ]
 
     static func label(_ name: String) -> String { labels[name] ?? name }
 
-    /// The chooser's options: a label per tool plus Hermes.
-    public static func options(tools: [PhoneToolSpec]) -> [String] { (tools.map(\.name) + ["hermes"]).map(label) }
+    /// The chooser's options: a label per offline tool.
+    public static func options(tools: [PhoneToolSpec]) -> [String] { tools.filter { offlineTools.contains($0.name) }.map { label($0.name) } }
 
     /// Instructions for the chooser. One explicit rule per tool: a ~3B model follows rules, not hints.
     public static func chooseInstructions(tools: [PhoneToolSpec]) -> String {
@@ -139,9 +158,8 @@ public enum LocalPipeline {
             "set_timer": "Start a timer or countdown",
             "create_reminder": "Jan wants to be reminded of something later (remind me, erinner mich, don't let me forget)",
         ]
-        rules += tools.compactMap { spec in ruleFor[spec.name].map { "- \($0) → \(label(spec.name))." } }
-        rules.append("- News, the web, prices, opening hours, places to go, research, or Jan names Hermes → \(label("hermes")).")
-        rules.append("- Small talk, questions about Lotti, the time or the date → nothing (empty list).")
+        rules += tools.filter { offlineTools.contains($0.name) }.compactMap { spec in ruleFor[spec.name].map { "- \($0) → \(label(spec.name))." } }
+        rules.append("- Anything else (weather, news, the web, prices, small talk, questions about Lotti) → nothing (empty list).")
         return rules.joined(separator: "\n")
     }
 
@@ -166,7 +184,7 @@ public enum LocalPipeline {
 
     /// Reads the chooser's output: `{"intent":…,"tools":["jan_calendar"]}`.
     public static func parseChoice(_ json: JSONValue, tools: [PhoneToolSpec]) -> Choice {
-        let names = Dictionary(uniqueKeysWithValues: (tools.map(\.name) + ["hermes"]).map { (label($0), $0) })
+        let names = Dictionary(uniqueKeysWithValues: tools.filter { offlineTools.contains($0.name) }.map { (label($0.name), $0.name) })
         var picked: [String] = []
         for option in json["tools"]?.array?.compactMap(\.string) ?? [] {
             guard let name = names[option] ?? names.values.first(where: { $0 == option }), !picked.contains(name) else { continue }
@@ -190,8 +208,8 @@ public enum LocalPipeline {
 
     // MARK: Checks
 
-    /// True if an answer only says it doesn't know. Then Hermes gets the question; the model's own
-    /// "can answer" flag isn't reliable enough.
+    /// True if an answer only says it doesn't know. Offline that means the question is beyond the
+    /// phone (the offline notice replaces it); the model's own "can answer" flag isn't reliable enough.
     public static func soundsUnsure(_ sentence: String) -> Bool {
         sentence.lowercased().contains(try! Regex(#"(weiß (ich )?(es |das )?nicht|keine ahnung|kann (ich )?(dir )?(das |es )?nicht (sagen|wissen|beantworten)|habe keine (infos|informationen)|don'?t know|do not know|not sure|can'?t (tell|say|know)|cannot (tell|say|know)|no idea|no information)"#))
     }
@@ -204,8 +222,23 @@ public enum LocalPipeline {
         return language == "German" ? "Bereit: \(titles). Tipp zum Starten." : "Ready: \(titles). Tap to start."
     }
 
-    public static func handoffSentence(language: String) -> String {
-        language == "German" ? "Ich frag Hermes." : "Let me ask Hermes."
+    /// What the offline brain says to everything it can't do. Short, in the question's language.
+    public static func offlineSentence(language: String) -> String {
+        language == "German"
+            ? "Ich bin gerade offline, dabei kann ich nicht helfen. Timer und Navigation gehen."
+            : "I'm offline right now, so I can't help with that. Timers and navigation still work."
+    }
+
+    /// When a timer or a destination is missing from what Jan said.
+    public static func missingSentence(_ what: String, language: String) -> String {
+        switch (what, language == "German") {
+        case ("timer", true): "Wie viele Minuten soll der Timer laufen?"
+        case ("timer", false): "How many minutes should the timer run?"
+        case ("navigation", true): "Wohin soll es gehen?"
+        case ("navigation", false): "Where to?"
+        case (_, true): "Woran soll ich dich erinnern?"
+        default: "What should I remind you of?"
+        }
     }
 
     // MARK: Shorten

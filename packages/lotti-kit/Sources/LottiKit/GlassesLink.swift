@@ -54,6 +54,14 @@ public enum GlassesLinkError: Error, Equatable, LocalizedError {
     }
 }
 
+/// Whether the glasses are on your head, from the firmware's wear detection (sid 0x0D).
+public enum WearState: Equatable, Sendable {
+    /// Nothing reported yet this session.
+    case unknown
+    case worn
+    case removed
+}
+
 /// What the display shows. `main` is Lotti's text on the left; `rail` is the column of choices on
 /// the right, or nil for a full-width `main`. Both are plain text, already laid out by
 /// `ScreenRenderer`; the link only draws them. Black is invisible on the lens, so `.dark` (empty
@@ -63,11 +71,15 @@ public struct GlassesFrame: Equatable, Sendable {
     public var rail: String?
     /// The layout the strings were written for, so switching styles rebuilds the page geometry.
     public var style: DisplayStyle
+    /// Small image containers (the attention and location indicators) drawn over the page.
+    /// They don't count for `isDark`: a dark frame with an indicator is the "display off" state.
+    public var images: [G2ImageBox]
 
-    public init(main: String, rail: String? = nil, style: DisplayStyle = .rail) {
+    public init(main: String, rail: String? = nil, style: DisplayStyle = .rail, images: [G2ImageBox] = []) {
         self.main = main
         self.rail = rail
         self.style = style
+        self.images = images
     }
 
     public static let dark = GlassesFrame(main: "")
@@ -99,6 +111,10 @@ public protocol GlassesLink: AnyObject, Observable {
     func stopMicrophone() async
     /// Report head-up / head-down (from the glasses' IMU) as `.headUp` / `.headDown` inputs.
     func setHeadTracking(_ enabled: Bool) async
+    /// Wear detection: `.unknown` until the glasses report. Changes also arrive as `.worn` /
+    /// `.removed` inputs. **Unverified on hardware:** the sid 0x0D layout is a best guess (see
+    /// `G2Events.wearState`).
+    var wearState: WearState { get }
     /// When looking up counts as head-up.
     var headUpSettings: HeadUpSettings { get set }
     /// The head's latest pitch in degrees while head tracking is on, for calibrating.

@@ -4,6 +4,9 @@ public enum G2Event: Equatable, Sendable {
     /// One IMU sample (only while IMU reporting is on): gravity-normalised, so |v| ≈ 1 at rest
     /// (MentraOS). Axis orientation on the head isn't confirmed yet.
     case imu(x: Float, y: Float, z: Float)
+    /// Wear detection: the glasses were put on (true) or taken off (false). **Unverified on
+    /// hardware**, see `G2Events.wearState`.
+    case wear(Bool)
     /// Anything else worth logging (app lifecycle, state change, ring status), in words.
     case info(String)
 }
@@ -39,6 +42,7 @@ public enum G2Events {
             guard message.command == 2, let event = ProtoReader.message(p, 13) else { return nil }
             return deviceEvent(event)
         case stateService:
+            if let worn = wearState(p) { return .wear(worn) }
             return .info("state change \(hex(p))")
         case G2Service.deviceConfig where message.command == ringConnectInfo:
             return .info(ringInfo(ProtoReader.message(p, 5) ?? []))
@@ -46,6 +50,28 @@ public enum G2Events {
             return nil
         }
     }
+
+    /// Wear detection from a sid 0x0D payload, or nil if it isn't one.
+    ///
+    /// **Unverified on hardware.** The two sid 0x0D payloads captured so far (`evenHubActive`,
+    /// `dashboardToggled`) are `{1: event kind, 3: body}`. g2-kit's device-state schema and the
+    /// Even Hub SDK's `isWearing` flag say the glasses report wearing as a state change on this
+    /// service, but no capture of one exists and the APK recon has no layout. Best evidence: kind
+    /// 2 is "wear detect", the state is `{3: {1: 1 worn / 0 not worn}}`, or a plain varint in
+    /// field 2. If a real capture differs, only this function (and its tests) change; unknown
+    /// payloads still surface as `.info("state change …")`, so the app log shows the raw bytes.
+    public static func wearState(_ payload: [UInt8]) -> Bool? {
+        guard payload != evenHubActive, payload != dashboardToggled else { return nil }
+        let f = ProtoReader.varintFields(payload)
+        guard f[1] == wearEventKind else { return nil }
+        // Zero values are left out on the wire: an empty body means "not worn".
+        if let body = ProtoReader.message(payload, 3) { return (ProtoReader.varintFields(body)[1] ?? 0) != 0 }
+        if let state = f[2] { return state != 0 }
+        return nil
+    }
+
+    /// The sid 0x0D event kind assumed to be wear detection (unverified).
+    static let wearEventKind: UInt64 = 2
 
     private static func deviceEvent(_ event: [UInt8]) -> G2Event? {
         if let list = ProtoReader.message(event, 1) {
