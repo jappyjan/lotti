@@ -6,12 +6,13 @@ import Foundation
 /// (0 = off, 1 = green road, 2 = red route), packed 4 bpp into a full BMP file — rows bottom-up,
 /// 64-byte palette (only 3 entries used, `biClrUsed = 3`), pixel data offset 0x76 — and then
 /// LZ4-compressed when that shrinks it, else sent raw. `compressMode` in the map message
-/// reflects the winner: 4 = LZ4, 0 = raw.
+/// reflects the winner: 2 = LZ4, 0 = raw (the Even app sends 2 — seen in a Bluetooth trace;
+/// the firmware acks 4 but draws nothing).
 public enum NavMapBmp {
     public enum Compression: UInt64, Sendable {
         /// Uncompressed BMP — the app sends raw whenever LZ4 doesn't shrink the data.
         case raw = 0
-        case lz4 = 4
+        case lz4 = 2
     }
 
     /// Bitmap dimensions the renderer draws at: the Even app's own sizes, read from

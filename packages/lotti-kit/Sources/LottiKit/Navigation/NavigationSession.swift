@@ -165,7 +165,7 @@ public final class NavigationSession {
                 print("[Nav] view changed to \(view)")
                 requestFrame(now: true)
             case .compassChanged(let value):
-                // The glasses' heading: it turns the mini map (`rotationAngle`).
+                // The glasses' heading: it decides when the full map is due again.
                 glassesHeading = Double(value % 360)
             case .locationSelected, .compassCalibrateStart, .compassCalibrateDone, .other:
                 break
@@ -288,13 +288,14 @@ public final class NavigationSession {
             print("[Nav] no \(kind) map bitmap")
             return
         }
-        // RGBA → 4 bpp BMP (green roads, red route) → LZ4 (mode 4), or raw (mode 0) when that
+        // RGBA → 4 bpp BMP (green roads, red route) → LZ4 (mode 2), or raw (mode 0) when that
         // doesn't shrink it (the app's rule).
         guard let frame = NavMapBmp.encode(rgba: bitmap.rgba, width: bitmap.width, height: bitmap.height) else {
             print("[Nav] couldn't encode the \(kind) map bitmap")
             return
         }
-        let rotation = heading.map { UInt64((Int($0.rounded()) % 360 + 360) % 360) } ?? 0
+        // The Even app leaves `rotationAngle` at 0 even while the compass reports (trace).
+        let rotation: UInt64 = 0
         switch kind {
         case .mini:
             // A mini map ≤ 8192 bytes is one message without session fields (the app's rule).

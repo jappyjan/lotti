@@ -99,9 +99,10 @@ public enum G2Navigation {
                     || eta.hasPrefix("ETA") ? eta : "ETA: \(eta)"
                 w.string(6, text(withPrefix))
             }
-            if let speed { w.string(7, text(speed)) }
+            // The Even app always writes speed ("--" when unknown) and the index, even 0.
+            w.string(7, text(speed ?? "--"))
             w.varint(8, method)
-            if counter > 0 { w.varint(10, counter) }
+            w.varint(10, counter)
         }
     }
 
@@ -139,8 +140,8 @@ public enum G2Navigation {
     /// max map: `{1: 8, 2: magic, 6: {1 mapSize, 2 compressMode, 3 mapRawData, 4 errorCode,
     /// 5 rotationAngle, 6 miniMapBorderEn, 7 mapSessionId, 8 mapFragmentIndex,
     /// 9 mapFragmentPacketSize}}`. A mini map ≤ 8192 bytes is sent as ONE message without the
-    /// session fields; bigger maps fragment with 7/8/9. `rotationAngle` (heading mod 360) and
-    /// `miniMapBorderEn` (0 in a live session) are always written — the app's factory does.
+    /// session fields; bigger maps fragment with 7/8/9. `rotationAngle` and `miniMapBorderEn` are
+    /// always written; the Even app sends 0 for both in a live session (Bluetooth trace).
     public static func miniMapFragment(
         magic: UInt64, size: UInt64, compressMode: UInt64, data: [UInt8],
         rotationAngle: UInt64 = 0, border: UInt64 = 0,
@@ -164,7 +165,7 @@ public enum G2Navigation {
     /// `{1: 9, 2: magic, 7: {1 mapSessionId, 2 mapTotalSize, 3 compressMode,
     /// 4 mapFragmentIndex, 5 mapFragmentPacketSize, 6 mapRawData, 7 errorCode}}`.
     /// All fragments of one frame share the session id and the total size; `index` runs from 0.
-    /// `compressMode`: 4 = LZ4 block, 0 = raw BMP (the app never sends anything else).
+    /// `compressMode`: 2 = LZ4 block, 0 = raw BMP (the app never sends anything else).
     public static func maxMapFragment(
         magic: UInt64, sessionID: UInt64, totalSize: UInt64,
         compressMode: UInt64 = 0, index: UInt64, packetSize: UInt64, data: [UInt8]

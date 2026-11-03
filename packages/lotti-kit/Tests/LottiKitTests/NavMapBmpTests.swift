@@ -87,7 +87,7 @@ struct NavMapBmpTests {
         }
         let frame = try! #require(NavMapBmp.encode(rgba: rgba, width: width, height: height))
         #expect(frame.mode == .lz4)
-        #expect(frame.mode.rawValue == 4)
+        #expect(frame.mode.rawValue == 2)  // the Even app's LZ4 compressMode
         let bmpSize = 118 + NavMapBmp.rowBytes(forWidth: width) * height
         var out = [UInt8](repeating: 0, count: bmpSize + 64)
         let outCount = out.count

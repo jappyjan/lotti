@@ -271,7 +271,8 @@ struct NavigationSessionTests {
         await task.value
     }
 
-    @Test func theMiniMapTurnsWithTheGlassesCompass() async {
+    @Test func theMiniMapStaysUnrotatedLikeTheEvenApp() async {
+        // The Even app sends rotationAngle 0 while the glasses report their compass (trace).
         let link = FakeGlassesLink()
         let session = makeSession(link, map: FakeMapProvider())
         session.frameInterval = .zero
@@ -282,7 +283,8 @@ struct NavigationSessionTests {
         try? await Task.sleep(for: .milliseconds(100))
 
         let mini = frames(link).last { $0.cmd == G2Navigation.cmdMiniMap }
-        #expect(mini.map { ProtoReader.varintFields($0.sub)[5] } == 235)
+        #expect(mini.map { ProtoReader.varintFields($0.sub)[5] } == 0)
+        #expect(mini.map { ProtoReader.varintFields($0.sub)[2] } == 2)  // LZ4
 
         feed.finish()
         await task.value

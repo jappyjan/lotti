@@ -36,6 +36,17 @@ struct G2NavigationTests {
         #expect(payload == expected.bytes)
     }
 
+    @Test func basicInfoMatchesTheEvenAppByteForByte() {
+        // The Even app's first card of a route, from an iPhone Bluetooth trace: speed "--" and
+        // basicInfoIndex 0 are written, not left out.
+        let payload = G2Navigation.basicInfo(
+            magic: 66, direction: NavigateDirectionSign.turnLeft.rawValue,
+            distance: "68 m", road: "Grandweg", remainingTime: "1 Std 42 Min",
+            remainingDistance: "6.1 km", eta: "ETA: 11:55", counter: 0)
+        #expect(hex(payload) == "080710422a3c080412043638206d1a084772616e64776567220c3120537464203432"
+            + "204d696e2a06362e31206b6d320a4554413a2031313a35353a022d2d40015000")
+    }
+
     @Test func basicInfoLeavesExistingETAPrefixAlone() {
         let payload = G2Navigation.basicInfo(magic: 1, direction: 2, eta: "ETA: 14:35")
         #expect(ProtoReader.string(ProtoReader.message(payload, 5) ?? [], 6) == "ETA: 14:35")
@@ -83,6 +94,16 @@ struct G2NavigationTests {
             $0.varint(6, 0)
         }
         #expect(payload == expected.bytes)
+    }
+
+    @Test func miniMapMatchesTheEvenAppFraming() {
+        // The Even app's mini map from a Bluetooth trace: 890 bytes, compressMode 2 (LZ4),
+        // rotation 0, border 0 — `08 08 10 43 32 8607 08 fa06 10 02 1a fa06 <data> 28 00 30 00`.
+        let data = [UInt8](repeating: 0xAB, count: 890)
+        let payload = G2Navigation.miniMapFragment(
+            magic: 0x43, size: 890, compressMode: NavMapBmp.Compression.lz4.rawValue, data: data)
+        #expect(hex(Array(payload.prefix(15))) == "0808104332860708fa0610021afa06")
+        #expect(hex(Array(payload.suffix(4))) == "28003000")
     }
 
     @Test func miniMapFragmentsCarrySessionFields() {
