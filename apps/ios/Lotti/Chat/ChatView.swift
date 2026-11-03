@@ -10,7 +10,7 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    if chat.items.isEmpty { EmptyChat() }
+                    if chat.items.isEmpty { EmptyChat(mascot: model.mascot) }
                     ForEach(chat.items) { item in
                         ChatRow(item: item, isLast: item.id == chat.items.last?.id).id(item.id)
                     }
@@ -31,6 +31,7 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
+                    if !chat.items.isEmpty { MascotAvatarView(host: model.mascot) }
                     Text("Lotti").font(.headline)
                     Circle().fill(chat.isOnline ? Color.green : Color.orange).frame(width: 8, height: 8)
                 }
@@ -56,14 +57,24 @@ struct ChatView: View {
 }
 
 private struct EmptyChat: View {
+    let mascot: MascotHost
+    @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
+
+    private var german: Bool { Locale.preferredLanguages.first?.hasPrefix("de") ?? false }
+
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.green)
-            Text("Ask Lotti anything").font(.title3.weight(.semibold))
+            if mascotEnabled {
+                MascotView(host: mascot).frame(width: 200, height: 200)
+                Text(german ? "Hi Jan, frag mich was" : "Hi Jan, ask me anything").font(.title3.weight(.semibold))
+            } else {
+                Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.green)
+                Text("Ask Lotti anything").font(.title3.weight(.semibold))
+            }
             Text("Type, or hold the microphone and speak.").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 80)
+        .padding(.top, 40)
     }
 }
 

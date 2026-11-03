@@ -5,6 +5,7 @@ import SwiftUI
 struct GlassesSettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var displayStyle = Settings.displayStyle
+    @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
     @State private var note: String?
     @State private var error: String?
 
@@ -28,6 +29,11 @@ struct GlassesSettingsView: View {
                 }
             } header: {
                 Text("Layout")
+            }
+            Section {
+                Toggle("Mascot", isOn: $mascotEnabled)
+            } footer: {
+                Text("Lotti's raccoon in the chat. It wears glasses when yours are on and follows your head.")
             }
             indicatorSection
         }

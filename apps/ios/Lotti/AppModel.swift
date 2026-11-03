@@ -14,6 +14,8 @@ final class AppModel {
 
     let link: any GlassesLink
     let conductor: Conductor
+    /// The raccoon mascot's one controller (cosmetic; views hold it through ref-counted start/stop).
+    let mascot: MascotHost
     /// The connection to Lotti Brain (live socket: asks, inbox, presence, phone tools).
     let backend: BackendClient
     let store: BackendStore
@@ -44,6 +46,7 @@ final class AppModel {
          deviceName: String = "iPhone", appVersion: String = "0.1") {
         self.link = link
         self.conductor = conductor
+        mascot = MascotHost(link: link, demand: conductor.imuDemand)
         self.backend = backend
         self.store = store
         self.locationLog = locationLog
