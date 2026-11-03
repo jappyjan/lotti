@@ -431,6 +431,26 @@ struct HermesBrainTests {
         #expect(hermes.sessions == ["lotti-old", new])
     }
 
+    @Test func aStuckQuestionDoesNotReplaceASessionANewerOneMovedTo() async throws {
+        // A was stuck in "lotti-old"; meanwhile B found it gone and moved to a new session. A's late
+        // "stuck" must not throw B's healthy session away.
+        let hermes = PerRequestHermes([
+            { try await Task.sleep(for: .milliseconds(200)); throw HermesError.sessionStuck },
+            { throw HermesError.sessionGone },
+            { #"{"type":"answer","sentence":"yep."}"# },
+        ])
+        let store = FakeHermesSessionStore(stored: "lotti-old")
+        let brain = brain(hermes, store: store)
+        let first = Task { try await brain.answer("A", context: "") { _ in } }
+        try await eventually { hermes.sessions.count == 1 }
+        _ = try await brain.answer("B", context: "") { _ in }
+        let moved = try #require(brain.sessionID)
+        #expect(moved != "lotti-old")
+        _ = await first.result
+        #expect(brain.sessionID == moved)
+        #expect(store.stored == moved)
+    }
+
     @Test func aReadHiddenDuringAQuestionIsGoneFromTheNextRequest() async throws {
         let allowed = Locked<Set<String>>(["calendar", "weather"])
         let hermes = ScriptedHermes([Self.callReply, Self.plainReply])
@@ -446,6 +466,19 @@ struct HermesBrainTests {
         let system = try #require(hermes.requests.first?.first?.content)
         #expect(system.contains("never leave work running in the background"))
         #expect(system.contains("Answer Jan's newest message"))
+    }
+}
+
+/// Answers each request with its own step, in order, recording the session ids.
+final class PerRequestHermes: HermesTransport, @unchecked Sendable {
+    private var steps: [@Sendable () async throws -> String]
+    private(set) var sessions: [String] = []
+
+    init(_ steps: [@Sendable () async throws -> String]) { self.steps = steps }
+
+    func complete(_ messages: [ChatMessage], session: String, progress: @escaping @Sendable (String) -> Void) async throws -> String {
+        sessions.append(session)
+        return try await steps.removeFirst()()
     }
 }
 

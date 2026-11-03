@@ -118,24 +118,32 @@ public struct HermesClient: HermesTransport {
         // would queue behind it. So the stream runs in its own task, and a cancelled question first
         // asks Hermes to stop its run (the completion id is the run id while the stream is open),
         // then closes the stream.
+        try Task.checkCancellation()
         let run = Run()
         let stream = Task { try await read(request, run: run, progress: progress) }
-        return try await withTaskCancellationHandler {
-            do {
-                return try await stream.value
-            } catch {
-                if run.stuck { throw HermesError.sessionStuck }
-                throw error
-            }
-        } onCancel: {
-            Task {
-                await stop(run, config: config)
-                stream.cancel()
+        let stopping: @Sendable () -> Task<Void, Never> = {
+            run.stopping {
+                Task {
+                    await stop(run, config: config)
+                    stream.cancel()
+                }
             }
         }
+        let result = await withTaskCancellationHandler {
+            await stream.result
+        } onCancel: {
+            _ = stopping()
+        }
+        // Stopping its run often ends the stream first; the question was cancelled all the same.
+        if Task.isCancelled {
+            await stopping().value
+            throw run.stuck ? HermesError.sessionStuck : CancellationError()
+        }
+        return try result.get()
     }
 
     private func read(_ request: URLRequest, run: Run, progress: @escaping @Sendable (String) -> Void) async throws -> String {
+        defer { run.end() }
         let (bytes, response) = try await session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let type = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
@@ -164,20 +172,25 @@ public struct HermesClient: HermesTransport {
         return try parser.finish()
     }
 
-    /// Best effort, bounded: a question cancelled before its run is known just closes the stream.
-    /// A run Hermes hadn't started after `stuckAfter` means the session is stuck.
+    /// Best effort, bounded: waits up to 2 s for the run id (Hermes sends it in its first chunk),
+    /// asks whether the run ever started, then stops it. A run still queued after `stuckAfter`
+    /// means an earlier turn won't finish: the session is stuck.
     private func stop(_ run: Run, config: HermesConfig) async {
-        guard let id = run.id else { return }
+        let deadline = Date().addingTimeInterval(2)
+        while run.id == nil, !run.ended, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        guard let id = run.id, !run.ended else { return }
+        if !run.startedAnswering, Date().timeIntervalSince(run.opened) >= stuckAfter {
+            var status = URLRequest(url: config.endpoint("runs/\(id)"), timeoutInterval: 2)
+            status.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
+            if let (data, _) = try? await session.data(for: status),
+               (try? JSONValue(json: String(decoding: data, as: UTF8.self)))?["status"]?.string == "queued" {
+                run.markStuck()
+            }
+        }
         var request = URLRequest(url: config.endpoint("runs/\(id)/stop"), timeoutInterval: 3)
         request.httpMethod = "POST"
         request.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
-        guard let (data, _) = try? await session.data(for: request) else { return }
-        let json = try? JSONValue(json: String(decoding: data, as: UTF8.self))
-        // "stopping" is a run that was executing; a queued one is cancelled outright.
-        if let status = json?["status"]?.string, status != "stopping", !run.startedAnswering,
-           Date().timeIntervalSince(run.opened) >= stuckAfter {
-            run.markStuck()
-        }
+        _ = try? await session.data(for: request)
     }
 
     /// What Hermes says when the session id can't be continued: deleted (retired) or unresumable.
@@ -282,11 +295,27 @@ private final class Run: @unchecked Sendable {
     private var _id: String?
     private var _startedAnswering = false
     private var _stuck = false
+    private var _ended = false
+    private var _stopping: Task<Void, Never>?
     let opened = Date()
 
     var id: String? { lock.withLock { _id } }
     var startedAnswering: Bool { lock.withLock { _startedAnswering } }
     var stuck: Bool { lock.withLock { _stuck } }
+    /// The stream is over: Hermes no longer knows the run by its completion id.
+    var ended: Bool { lock.withLock { _ended } }
+
+    func end() { lock.withLock { _ended = true } }
+
+    /// The one stop of this run, started by whoever needs it first.
+    func stopping(_ start: () -> Task<Void, Never>) -> Task<Void, Never> {
+        lock.withLock {
+            if let _stopping { return _stopping }
+            let task = start()
+            _stopping = task
+            return task
+        }
+    }
 
     func update(id: String?, started: Bool) {
         lock.withLock {

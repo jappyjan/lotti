@@ -55,19 +55,21 @@ public final class HermesBrain: RemoteBrain {
     public func answer(_ message: String, context: String, status: @escaping @MainActor (String) -> Void) async throws -> Answer {
         turn += 1
         let mine = turn
+        var used = currentSession()
         do {
             do {
-                return try await run(message, context: context, session: currentSession(), turn: mine, status: status)
-            } catch HermesError.sessionGone where mine == turn {
+                return try await run(message, context: context, session: used, turn: mine, status: status)
+            } catch HermesError.sessionGone where mine == turn && session == used {
                 // Deleted at Hermes (its id stays retired): continue in a new session, asking again.
                 note("✕ Hermes lost the session, starting a new one")
                 startNewSession()
-                return try await run(message, context: context, session: currentSession(), turn: mine, status: status)
+                used = currentSession()
+                return try await run(message, context: context, session: used, turn: mine, status: status)
             }
         } catch {
             // Stuck behind a turn that never finishes (Hermes restarted mid-question): the next
-            // question goes to a new session.
-            if case HermesError.sessionStuck = error {
+            // question goes to a new session, unless a newer question already moved on.
+            if case HermesError.sessionStuck = error, session == used {
                 note("✕ the session is stuck, the next question starts a new one")
                 startNewSession()
             }

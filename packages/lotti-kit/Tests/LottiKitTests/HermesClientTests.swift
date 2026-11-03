@@ -10,15 +10,25 @@ final class StubHermesProtocol: URLProtocol, @unchecked Sendable {
         var contentType = "text/event-stream"
         var body: String
         var hang = false
+        /// Like Hermes stopping a run: first ends the open streams (a `cancelled` finish), then
+        /// answers this request a little later.
+        var endsOpenStreams = false
+        /// Sent this long after `body`, like Hermes loading a long session before its first chunk.
+        var later: (body: String, after: TimeInterval)?
     }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _replies: [String: Reply] = [:]
     nonisolated(unsafe) private static var _requests: [(request: URLRequest, body: Data)] = []
+    nonisolated(unsafe) private static var open: [StubHermesProtocol] = []
+    /// Whether a stream was still open when each request arrived, in order.
+    nonisolated(unsafe) private static var _openAtRequest: [Bool] = []
 
     static func reset(_ replies: [String: Reply]) {
-        lock.withLock { _replies = replies; _requests = [] }
+        lock.withLock { _replies = replies; _requests = []; open = []; _openAtRequest = [] }
     }
+
+    static var openAtRequest: [Bool] { lock.withLock { _openAtRequest } }
 
     static var requests: [(request: URLRequest, body: Data)] { lock.withLock { _requests } }
 
@@ -28,18 +38,42 @@ final class StubHermesProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let body = request.httpBody ?? request.httpBodyStream.map(Self.read) ?? Data()
         let path = request.url?.path() ?? ""
-        let reply = Self.lock.withLock {
+        let (reply, streams) = Self.lock.withLock {
             Self._requests.append((request, body))
-            return Self._replies[path]
-        } ?? Reply(status: 404, contentType: "text/plain", body: "404: Not Found")
-        let response = HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: "HTTP/1.1",
-                                       headerFields: ["Content-Type": reply.contentType])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
-        if !reply.hang { client?.urlProtocolDidFinishLoading(self) }
+            Self._openAtRequest.append(!Self.open.isEmpty)
+            let reply = Self._replies[path]
+            var streams: [StubHermesProtocol] = []
+            if reply?.endsOpenStreams == true { streams = Self.open; Self.open = [] }
+            if reply?.hang == true { Self.open.append(self) }
+            return (reply, streams)
+        }
+        let answer = reply ?? Reply(status: 404, contentType: "text/plain", body: "404: Not Found")
+        for stream in streams { stream.endCancelled() }
+        let respond = {
+            let response = HTTPURLResponse(url: self.request.url!, statusCode: answer.status, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": answer.contentType])!
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: Data(answer.body.utf8))
+            if let later = answer.later {
+                DispatchQueue.global().asyncAfter(deadline: .now() + later.after) {
+                    guard Self.lock.withLock({ Self.open.contains { $0 === self } }) else { return }
+                    self.client?.urlProtocol(self, didLoad: Data(later.body.utf8))
+                }
+            }
+            if !answer.hang { self.client?.urlProtocolDidFinishLoading(self) }
+        }
+        if answer.endsOpenStreams { DispatchQueue.global().asyncAfter(deadline: .now() + 0.05, execute: respond) } else { respond() }
     }
 
-    override func stopLoading() {}
+    private func endCancelled() {
+        let finish = #"data: {"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"cancelled"}]}"# + "\n\ndata: [DONE]\n\n"
+        client?.urlProtocol(self, didLoad: Data(finish.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {
+        Self.lock.withLock { Self.open.removeAll { $0 === self } }
+    }
 
     private static func read(_ stream: InputStream) -> Data {
         stream.open()
@@ -104,51 +138,82 @@ struct HermesClientTests {
         await #expect(throws: HermesError.http(404, "404: Not Found")) { try await client().complete(messages, session: "s") { _ in } }
     }
 
-    @Test func aCancelledQuestionStopsItsRunAtHermes() async throws {
-        StubHermesProtocol.reset([
-            "/v1/chat/completions": .init(body: Self.opening + Self.chunk("Work"), hang: true),
-            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: #"{"run_id":"chatcmpl-1","status":"stopping"}"#),
-        ])
-        let client = client(stuckAfter: 0)
-        let question = Task { try await client.complete(messages, session: "lotti-abc") { _ in } }
-        try await eventually { StubHermesProtocol.requests.count == 1 }
-        try await Task.sleep(for: .milliseconds(100))  // the opening chunk (with the run id) is in
-        question.cancel()
-        let result = await question.result
-        #expect(throws: (any Error).self) { try result.get() }
-        #expect((try? result.get()) == nil)
-        if case .failure(let error) = result { #expect(error as? HermesError != .sessionStuck) }  // it had started
-        let stop = try #require(StubHermesProtocol.requests.last)
-        #expect(stop.request.url?.path() == "/v1/runs/chatcmpl-1/stop")
-        #expect(stop.request.httpMethod == "POST")
-        #expect(stop.request.value(forHTTPHeaderField: "Authorization") == "Bearer k")
-    }
-
-    @Test func aRunThatNeverStartedMeansTheSessionIsStuck() async throws {
-        // Queued behind a turn that won't finish: Hermes cancels the queued run instead of stopping it.
-        StubHermesProtocol.reset([
-            "/v1/chat/completions": .init(body: Self.opening, hang: true),
-            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: #"{"run_id":"chatcmpl-1","status":"cancelled"}"#),
-        ])
-        let client = client(stuckAfter: 0)
+    /// Waits until the stream's first chunk (with the run id) is in.
+    func startQuestion(_ client: HermesClient) async throws -> Task<String, Error> {
         let question = Task { try await client.complete(messages, session: "lotti-abc") { _ in } }
         try await eventually { StubHermesProtocol.requests.count == 1 }
         try await Task.sleep(for: .milliseconds(100))
+        return question
+    }
+
+    @Test func aCancelledQuestionStopsItsRunWhileTheStreamIsOpen() async throws {
+        StubHermesProtocol.reset([
+            "/v1/chat/completions": .init(body: Self.opening + Self.chunk("Work"), hang: true),
+            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json",
+                                              body: #"{"run_id":"chatcmpl-1","status":"stopping"}"#, endsOpenStreams: true),
+        ])
+        let question = try await startQuestion(client(stuckAfter: 0))
+        question.cancel()
+        let result = await question.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        let paths = StubHermesProtocol.requests.map { $0.request.url?.path() ?? "" }
+        #expect(paths == ["/v1/chat/completions", "/v1/runs/chatcmpl-1/stop"])  // it had started: no status check
+        let stop = try #require(StubHermesProtocol.requests.last)
+        #expect(stop.request.httpMethod == "POST")
+        #expect(stop.request.value(forHTTPHeaderField: "Authorization") == "Bearer k")
+        #expect(StubHermesProtocol.openAtRequest.last == true)  // Hermes still knew the run
+    }
+
+    @Test func aRunStillQueuedMeansTheSessionIsStuck() async throws {
+        // Queued behind a turn that won't finish. Like Hermes: the stop ends the stream first and
+        // then answers null (the run's alias is gone by then).
+        StubHermesProtocol.reset([
+            "/v1/chat/completions": .init(body: Self.opening, hang: true),
+            "/v1/runs/chatcmpl-1": .init(contentType: "application/json", body: #"{"object":"hermes.run","status":"queued"}"#),
+            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: "null", endsOpenStreams: true),
+        ])
+        let question = try await startQuestion(client(stuckAfter: 0))
         question.cancel()
         let result = await question.result
         #expect(throws: HermesError.sessionStuck) { try result.get() }
+        #expect(StubHermesProtocol.openAtRequest == [false, true, true])
+    }
+
+    @Test func aRunThatIsRunningIsNotStuck() async throws {
+        StubHermesProtocol.reset([
+            "/v1/chat/completions": .init(body: Self.opening, hang: true),
+            "/v1/runs/chatcmpl-1": .init(contentType: "application/json", body: #"{"object":"hermes.run","status":"running"}"#),
+            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: "null", endsOpenStreams: true),
+        ])
+        let question = try await startQuestion(client(stuckAfter: 0))
+        question.cancel()
+        let result = await question.result
+        #expect(throws: CancellationError.self) { try result.get() }
     }
 
     @Test func aShortWaitInTheQueueIsNotStuck() async throws {
         StubHermesProtocol.reset([
             "/v1/chat/completions": .init(body: Self.opening, hang: true),
-            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: #"{"run_id":"chatcmpl-1","status":"cancelled"}"#),
+            "/v1/runs/chatcmpl-1": .init(contentType: "application/json", body: #"{"object":"hermes.run","status":"queued"}"#),
+            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: "null", endsOpenStreams: true),
         ])
-        let client = client(stuckAfter: 60)
+        let question = try await startQuestion(client(stuckAfter: 60))
+        question.cancel()
+        let result = await question.result
+        #expect(throws: CancellationError.self) { try result.get() }
+        #expect(!StubHermesProtocol.requests.contains { $0.request.url?.path() == "/v1/runs/chatcmpl-1" })
+    }
+
+    @Test func aQuestionCancelledBeforeItsRunIsKnownWaitsForTheId() async throws {
+        StubHermesProtocol.reset([
+            "/v1/chat/completions": .init(body: ": keepalive\n\n", hang: true, later: (Self.opening, 0.3)),
+            "/v1/runs/chatcmpl-1/stop": .init(contentType: "application/json", body: "null", endsOpenStreams: true),
+        ])
+        let client = client()
         let question = Task { try await client.complete(messages, session: "lotti-abc") { _ in } }
         try await eventually { StubHermesProtocol.requests.count == 1 }
-        try await Task.sleep(for: .milliseconds(100))
-        question.cancel()
-        if case .failure(let error) = await question.result { #expect(error as? HermesError != .sessionStuck) }
+        question.cancel()  // before the first chunk (with the run id) arrives
+        _ = await question.result
+        #expect(StubHermesProtocol.requests.last?.request.url?.path() == "/v1/runs/chatcmpl-1/stop")
     }
 }
