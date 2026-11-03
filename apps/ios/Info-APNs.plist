@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Opt-in copy of Info.plist (LOTTI_APNS=1) with remote-notification added. Keep both in step. -->
+	<!-- Stay connected to the glasses with the phone locked; record from the phone mic as a fallback. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>audio</string>
+		<string>remote-notification</string>
+	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Lotti sets timers when you confirm them on the glasses.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Lotti reads your reminders and adds new ones when you confirm them.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Lotti talks to your Lotti Brain on your network.</string>
+	<!-- Lotti Brain may run on the local network or a tailnet without HTTPS. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- lotti://pair?url=…&code=… (QR code of Lotti Brain) and the OAuth return of account logins. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>de.janjaap.lotti</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lotti</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

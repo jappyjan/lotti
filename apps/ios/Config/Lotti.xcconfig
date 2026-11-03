@@ -1,0 +1,25 @@
+// Project-wide build settings that change per setup.
+//
+// Default build: signs with a free Personal Team (no push capability), so Lotti.entitlements is
+// empty and Info.plist has no remote-notification background mode.
+//
+// Push notifications (APNs) are opt-in and need a paid developer account. Turn them on with
+//   LOTTI_APNS = 1
+// in Config/Local.xcconfig (not committed), or `xcodebuild ... LOTTI_APNS=1`. That selects
+// Lotti-APNs.entitlements (aps-environment) and Info-APNs.plist (remote-notification), and
+// compiles the registration code (LOTTI_APNS compilation condition). See apps/ios/README.md.
+
+LOTTI_APNS =
+
+LOTTI_ENTITLEMENTS_ = Lotti.entitlements
+LOTTI_ENTITLEMENTS_1 = Lotti-APNs.entitlements
+LOTTI_INFOPLIST_ = Info.plist
+LOTTI_INFOPLIST_1 = Info-APNs.plist
+LOTTI_CONDITION_ =
+LOTTI_CONDITION_1 = LOTTI_APNS
+
+LOTTI_ENTITLEMENTS = $(LOTTI_ENTITLEMENTS_$(LOTTI_APNS))
+LOTTI_INFOPLIST = $(LOTTI_INFOPLIST_$(LOTTI_APNS))
+LOTTI_SWIFT_CONDITION = $(LOTTI_CONDITION_$(LOTTI_APNS))
+
+#include? "Local.xcconfig"
