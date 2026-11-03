@@ -1,0 +1,7 @@
+version: 2
+secret:
+  ignored-matches:
+    # The Bring! web client's public API key (shipped in its own JavaScript, used by every client of
+    # the unofficial API). Not a credential of ours.
+    - name: Bring! public client API key
+      match: cof4Nc6D8saplXjE3h3HXqHH8m7VU2i1Gs0g85Sp
