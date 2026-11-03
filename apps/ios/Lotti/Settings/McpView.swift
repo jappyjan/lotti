@@ -158,7 +158,7 @@ struct McpDetailView: View {
             } header: {
                 Text("Credentials")
             } footer: {
-                Text("Write-only: stored encrypted on your Lotti Brain and never shown again.")
+                Text("Write-only: stored encrypted on your Lotti Brain and never shown again. Changing the URL or command removes them, so enter them again afterwards.")
             }
             Section {
                 if tools.isEmpty { Text("Test the connection to list the tools.").foregroundStyle(.secondary) }
