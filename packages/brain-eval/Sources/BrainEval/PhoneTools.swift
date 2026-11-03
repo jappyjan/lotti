@@ -20,8 +20,8 @@ public enum PhoneTools {
 
     struct StartNavigation: Tool {
         let name = "start_navigation"
-        let description = "Start turn-by-turn navigation on the glasses."
-        @Generable enum Mode: String { case walk, bike, drive }
+        let description = "Start turn-by-turn navigation on the glasses, walking or by bike."
+        @Generable enum Mode: String { case walk, bike }
         @Generable struct Arguments {
             @Guide(description: "Place name or address; \"home\" for Jan's home") var destination: String
             var mode: Mode

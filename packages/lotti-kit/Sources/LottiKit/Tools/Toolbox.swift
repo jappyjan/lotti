@@ -71,7 +71,7 @@ public struct Toolbox: Sendable {
         } catch {
             return ToolResult(id: id, ok: false, content: error.localizedDescription)
         }
-        let timeout = callTimeout
+        let timeout = tool.spec.timeout ?? callTimeout
         return await withTaskGroup(of: ToolResult?.self) { group in
             group.addTask {
                 do {

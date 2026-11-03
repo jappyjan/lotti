@@ -78,24 +78,6 @@ public struct ToolText: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// A place and how long it takes to get there: "Media Markt, Ottenser Hauptstraße 10, Hamburg:
-    /// 2.1 km away. On foot 26 min, by bike 9 min, by public transport 14 min, by car 8 min."
-    /// `minutes` keys: walk, bike, transit, car; missing modes are left out.
-    public func trip(to place: String, meters: Double?, minutes: [String: Double]) -> String {
-        var text = place
-        if let meters { text += ": " + (meters < 1000 ? "\(Int((meters / 10).rounded()) * 10) m" : String(format: "%.1f km", meters / 1000)) + " away" }
-        let names = [("walk", "on foot"), ("bike", "by bike"), ("transit", "by public transport"), ("car", "by car")]
-        let times = names.compactMap { key, name in minutes[key].map { "\(name) \(duration($0))" } }
-        if !times.isEmpty { text += ". " + times.joined(separator: ", ").capitalizedFirst }
-        return text + "."
-    }
-
-    /// "26 min", "1 h 5 min".
-    func duration(_ minutes: Double) -> String {
-        let total = max(Int(minutes.rounded()), 1)
-        return total < 60 ? "\(total) min" : "\(total / 60) h" + (total % 60 == 0 ? "" : " \(total % 60) min")
-    }
-
     /// One line per day from `from` for `days` days.
     public func events(_ entries: [CalendarEntry], from: Date, days: Int) -> String {
         (0..<max(days, 1)).compactMap { offset -> String? in

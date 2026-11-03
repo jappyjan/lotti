@@ -315,6 +315,48 @@
       "now": "Sat 10:20",
       "utterance": "How are you today, Lotti?",
       "expect": { "noTool": true }
+    },
+    {
+      "id": "tool-06-en-done-at-the-office",
+      "task": "tool",
+      "now": "Thu 18:05",
+      "utterance": "We're finished at the office, get me to the Hauptbahnhof",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "Hauptbahnhof|main station", "mode": "walk" } } }
+    },
+    {
+      "id": "tool-07-de-bike-home",
+      "task": "tool",
+      "now": "Sun 22:15",
+      "utterance": "Bring mich bitte mit dem Fahrrad nach Hause",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "home|Kastanienallee|zuhause|Hause", "mode": "bike" } } }
+    },
+    {
+      "id": "tool-08-de-next-pharmacy",
+      "task": "tool",
+      "now": "Mon 20:40",
+      "utterance": "Ich hab Kopfschmerzen, navigiere mich zur nächsten Apotheke",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "Apotheke|pharmacy", "mode": "walk" } } }
+    },
+    {
+      "id": "tool-09-de-fastest-way",
+      "task": "tool",
+      "now": "Sat 11:05",
+      "utterance": "Wie komme ich am schnellsten zum Hackeschen Markt?",
+      "expect": { "tool": { "name": "start_navigation", "args": { "destination": "Hackeschen|Hackesche", "mode": "walk" } } }
+    },
+    {
+      "id": "tool-10-de-not-distance",
+      "task": "tool",
+      "now": "Sat 11:06",
+      "utterance": "Wie weit ist es noch bis zum Mauerpark?",
+      "expect": { "noTool": true }
+    },
+    {
+      "id": "tool-11-en-not-duration",
+      "task": "tool",
+      "now": "Thu 18:06",
+      "utterance": "How long does it take to walk to the office?",
+      "expect": { "noTool": true }
     }
   ]
 }

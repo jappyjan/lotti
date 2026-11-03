@@ -9,13 +9,18 @@ import SwiftUI
 /// The phone tools both brains can use. Reads run when a brain asks; actions run only after
 /// you tap them on the glasses (see `Toolbox`).
 enum PhoneTools {
-    static func all(today: DeviceToday) -> [any PhoneTool] {
-        [CalendarTool(today: today), WeatherTool(today: today), LocationTool(today: today), DirectionsTool(today: today), RemindersTool(),
-         SetTimerTool(), CreateReminderTool()]
+    static func all(
+        today: DeviceToday,
+        startNavigation: @escaping @MainActor (String, NavigationMode) async throws -> String
+    ) -> [any PhoneTool] {
+        [CalendarTool(today: today), WeatherTool(today: today), LocationTool(today: today),
+         RemindersTool(), SetTimerTool(), CreateReminderTool(), StartNavigationTool(start: startNavigation)]
     }
 
     /// The tools the on-device brain may pick from (all of them; its planner sees only names).
-    static let onDevice: Set<String> = ["calendar", "weather", "location", "directions", "reminders", "set_timer", "create_reminder"]
+    static let onDevice: Set<String> = [
+        "calendar", "weather", "location", "reminders", "set_timer", "create_reminder", "start_navigation",
+    ]
 
     /// Ask for alarm and reminder access while the app is open; a locked phone can't show the prompt.
     static func requestAccess() async {
@@ -79,59 +84,6 @@ struct LocationTool: PhoneTool {
               let item = try? await request.mapItems.first else { return position }
         let name = item.address?.shortAddress ?? item.addressRepresentations?.cityWithContext ?? ""
         return name.isEmpty ? position : "\(name) (\(position))"
-    }
-}
-
-/// Finds a place near Jan (MapKit search) and how long it takes to get there by each mode.
-/// On the phone, no Hermes: MapKit knows where Jan is and the places around him.
-struct DirectionsTool: PhoneTool {
-    let today: DeviceToday
-    let spec = PhoneToolSpec(
-        name: "directions",
-        description: "Finds a place near Jan and how far it is and how long it takes to get there on foot, by bike, by public transport and by car.",
-        parameters: [ToolParameter("destination", .string, "the place as Jan said it, e.g. \"Media Markt Altona\" or \"Hauptbahnhof\"")],
-        effect: .read, progress: "Looking up the way…")
-
-    func run(_ arguments: ToolArguments) async throws -> String {
-        let destination = arguments.string("destination") ?? ""
-        guard let here = await today.freshLocation() else { throw ToolError("Lotti doesn't know where Jan is.") }
-        let start = CLLocation(latitude: here.latitude, longitude: here.longitude)
-
-        guard let place = await Self.find(destination, near: here) else {
-            throw ToolError("No place called \(destination) found near Jan.")
-        }
-        // Name and town, no street: enough for the glasses, and a street address in the facts can
-        // trip the model's language check.
-        let name = [place.name, place.addressRepresentations?.cityWithContext].compactMap { $0 }.joined(separator: ", ")
-
-        let modes: [(String, MKDirectionsTransportType)] = [("walk", .walking), ("bike", .cycling), ("transit", .transit), ("car", .automobile)]
-        var minutes: [String: Double] = [:]
-        var meters: Double?
-        for (key, type) in modes {
-            let request = MKDirections.Request()
-            request.source = MKMapItem(location: start, address: nil)
-            request.destination = place
-            request.transportType = type
-            guard let eta = try? await MKDirections(request: request).calculateETA() else { continue }
-            minutes[key] = eta.expectedTravelTime / 60
-            if key == "walk" || meters == nil { meters = eta.distance }
-        }
-        return ToolText().trip(to: name, meters: meters ?? place.location.distance(from: start), minutes: minutes)
-    }
-
-    /// MapKit's best match within ~30 km. A name speech-to-text got wrong ("Media Markt Altenach")
-    /// is retried without its last words. Without the area limit MapKit found a store 530 km away.
-    static func find(_ query: String, near here: CLLocationCoordinate2D) async -> MKMapItem? {
-        var words = query.split(separator: " ").map(String.init)
-        while !words.isEmpty {
-            let search = MKLocalSearch.Request()
-            search.naturalLanguageQuery = words.joined(separator: " ")
-            search.region = MKCoordinateRegion(center: here, latitudinalMeters: 60_000, longitudinalMeters: 60_000)
-            search.regionPriority = .required
-            if let place = try? await MKLocalSearch(request: search).start().mapItems.first { return place }
-            words.removeLast()
-        }
-        return nil
     }
 }
 
@@ -210,7 +162,7 @@ struct CreateReminderTool: PhoneTool {
 
     func title(for arguments: ToolArguments) -> String {
         let text = arguments.string("text") ?? ""
-        return "Remind: " + (text.count > 14 ? text.prefix(13) + "…" : text)
+        return "Remind: " + text
     }
 
     func run(_ arguments: ToolArguments) async throws -> String {
@@ -236,5 +188,30 @@ struct CreateReminderTool: PhoneTool {
         }
         try store.save(reminder, commit: true)
         return "Reminder added\(when)."
+    }
+}
+
+/// Starts turn-by-turn navigation on the glasses (walking or by bike). The trip runs on the
+/// firmware's own nav screen, driven by `NavigationSession`; see `NavigationController`.
+struct StartNavigationTool: PhoneTool {
+    let start: @MainActor (String, NavigationMode) async throws -> String
+    let spec = PhoneToolSpec(
+        name: "start_navigation",
+        description: "Start turn-by-turn navigation on the glasses, walking or by bike.",
+        parameters: [
+            ToolParameter("destination", .string, "the place as Jan said it, e.g. \"Mauerpark\" or \"Kastanienallee 12\""),
+            ToolParameter("mode", .oneOf(["walk", "bike"]), "how Jan wants to go; default walk", optional: true),
+        ],
+        effect: .action, progress: "Planning the route…",
+        // Planning needs a location fix plus a MapKit search and route: give it room.
+        timeout: .seconds(30))
+
+    func title(for arguments: ToolArguments) -> String {
+        "Navigation: " + (arguments.string("destination") ?? "Ziel")
+    }
+
+    func run(_ arguments: ToolArguments) async throws -> String {
+        let mode = arguments.string("mode") == "bike" ? NavigationMode.cycling : .walking
+        return try await start(arguments.string("destination") ?? "", mode)
     }
 }

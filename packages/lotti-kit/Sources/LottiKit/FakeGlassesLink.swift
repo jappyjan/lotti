@@ -24,6 +24,17 @@ public final class FakeGlassesLink: GlassesLink {
 
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
     @ObservationIgnored private var mic: AsyncStream<[Int16]>.Continuation?
+    @ObservationIgnored private let navigationBroadcast = Broadcast<G2NavigationEvent>()
+
+    // Navigation
+    public var displaySuspended = false
+    /// Every payload sent to the navigation service, oldest first (both `sendNavigation` and
+    /// `navigationRequest`).
+    public private(set) var navigationPayloads: [[UInt8]] = []
+    /// The payload `navigationRequest` answers with; nil (default) echoes the request.
+    public var navigationReply: [UInt8]?
+    /// When set, `navigationRequest` throws it instead of replying.
+    public var navigationRequestError: Error?
 
     public init(last: DiscoveredGlasses? = nil) { lastGlasses = last }
 
@@ -69,4 +80,21 @@ public final class FakeGlassesLink: GlassesLink {
     public func sendAudio(_ samples: [Int16]) { mic?.yield(samples) }
 
     public func setHeadTracking(_ enabled: Bool) async { headTracking = enabled }
+
+    // MARK: Navigation
+
+    public func sendNavigation(_ payload: [UInt8]) async {
+        navigationPayloads.append(payload)
+    }
+
+    public func navigationRequest(_ payload: [UInt8]) async throws -> G2Message {
+        if let navigationRequestError { throw navigationRequestError }
+        navigationPayloads.append(payload)
+        return G2Message(sid: G2Service.navigation, flag: G2Flag.request, seq: 0, payload: navigationReply ?? payload)
+    }
+
+    public func navigationEvents() -> AsyncStream<G2NavigationEvent> { navigationBroadcast.stream() }
+
+    /// Deliver a glasses-initiated navigation event to every `navigationEvents()` stream.
+    public func sendNavEvent(_ event: G2NavigationEvent) { navigationBroadcast.send(event) }
 }

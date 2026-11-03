@@ -26,16 +26,14 @@ public final class Conductor {
         /// An on-device conversation older than this starts fresh. Hermes has no such threshold
         /// (it continues one session forever), so this never ends the Hermes chat.
         public var conversation: Duration
-        /// Give up on Hermes after this when you asked for it. It may research the web; double tap cancels sooner.
+        /// Hermes may research the web, so the timeout counts silence, not total time: any
+        /// traffic from Hermes (tokens, keepalives, tool progress) restarts the clock.
         public var remote: Duration
-        /// For questions Hermes gets by default: the phone answers if Hermes is silent for this long.
-        /// Progress (status lines, tool calls) restarts the clock, so a slow answer isn't cut off.
-        public var remoteFallback: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120), remoteFallback: Duration = .seconds(20)
+            remote: Duration = .seconds(120)
         ) {
             self.idle = idle
             self.done = done
@@ -43,7 +41,6 @@ public final class Conductor {
             self.finalTranscript = finalTranscript
             self.conversation = conversation
             self.remote = remote
-            self.remoteFallback = remoteFallback
         }
     }
 
@@ -401,9 +398,9 @@ public final class Conductor {
         thinking = Task { await answer(question, onHermes: toHermes) }
     }
 
-    /// Routes a question (see `Router`): simple tasks the phone's rules recognise go to the
-    /// on-device brain; everything else to Hermes, with the phone as the fallback when Hermes is
-    /// missing, failing or too slow. "Ask Hermes" and "Hermes, …" go to Hermes without fallback.
+    /// Routes a question (see `Router`): Hermes answers everything when it's set up; the
+    /// on-device brain only when Hermes isn't. "Ask Hermes" and "Hermes, …" go to Hermes
+    /// explicitly.
     private func answer(_ question: String, onHermes toHermes: Bool = false) async {
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
             endConversation()
@@ -411,18 +408,19 @@ public final class Conductor {
         lastAsked = now()
         // Only the clock goes in; calendar, weather and location come from tools when needed.
         let info = TodayInfo(now: now())
-        let route: Router.Route = toHermes
-            ? .hermes(question, fallback: false)
+        let route = toHermes
+            ? Router.Route.hermes(question)
             : Router.route(question, hermesAvailable: hermes?.isConfigured == true)
         log("route: \(route)")
         switch route {
-        case .local: await askLocal(question, info: info, mayHandOff: true)
-        case .hermes(let text, let fallback): await askHermes(text, info: info, fallback: fallback ? question : nil)
+        case .local: await askLocal(question, info: info)
+        case .hermes(let text): await askHermes(text, info: info)
         }
     }
 
-    /// The on-device brain. `mayHandOff`: false when it's already standing in for Hermes.
-    private func askLocal(_ question: String, info: TodayInfo, mayHandOff: Bool) async {
+    /// The on-device brain. It only runs when Hermes isn't set up; a question beyond it hands
+    /// back to Hermes if that ever changes mid-flight.
+    private func askLocal(_ question: String, info: TodayInfo) async {
         let context = composer.nowLine(info)
         let brain = self.brain
         let result: Result<Answer, Error>? = await withTimeout(timing.answer) { [weak self] in
@@ -441,15 +439,11 @@ public final class Conductor {
                 guard hermes?.isConfigured == true else {
                     return show(Screen(.says, "I can't look that up on my own, and Hermes isn't set up yet."))
                 }
-                guard mayHandOff else {
-                    return show(Screen(.says, "Hermes isn't answering, and I can't answer that myself.",
-                                       rail: Rail([RailItem("Try Hermes again", .askHermes(question))])))
-                }
                 mode = .working
-                return await askHermes(handoff, info: info, fallback: nil)
+                return await askHermes(handoff, info: info)
             }
             mode = .showing
-            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question, offerHermes: true)))
+            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question)))
         case .failure(let error):
             mode = .showing
             lastError = error.localizedDescription
@@ -464,57 +458,36 @@ public final class Conductor {
         }
     }
 
-    /// Hermes. `fallback`: the question for the on-device brain if Hermes fails or goes quiet
-    /// for `timing.remoteFallback`; nil to wait up to `timing.remote` and report errors. Status
-    /// lines and tool calls mean Hermes is still working and restart the quiet clock, so a long
-    /// answer isn't handed over as long as it keeps making progress.
-    private func askHermes(_ question: String, info: TodayInfo, fallback: String?) async {
+    /// Hermes. It answers with its own tools and the phone's; status lines from the phone's
+    /// tools show on the glasses, and any traffic from Hermes restarts the quiet clock, so a
+    /// long answer isn't cut off while it keeps working.
+    private func askHermes(_ question: String, info: TodayInfo) async {
         guard let hermes, hermes.isConfigured else {
-            if let fallback { return await askLocal(fallback, info: info, mayHandOff: false) }
             mode = .showing
             return show(Screen(.says, "Hermes isn't set up yet. Add it in the Lotti app."))
         }
         if mode == .working { show(Screen(.working, "Asking Hermes…"), timeout: false) }
         let context = composer.nowLine(info)
         hermesActivity = ContinuousClock.now
-        let timeout: Duration
-        let activity: (@MainActor @Sendable () -> ContinuousClock.Instant)?
-        if fallback == nil {
-            timeout = timing.remote
-            activity = nil
-        } else {
-            timeout = timing.remoteFallback
-            activity = { [weak self] in self?.hermesActivity ?? ContinuousClock.now }
-        }
-        let result: Result<Answer, Error>? = await withTimeout(timeout, activity: activity) { [weak self] in
+        let result: Result<Answer, Error>? = await withTimeout(timing.remote, activity: { [weak self] in
+            self?.hermesActivity ?? ContinuousClock.now
+        }) { [weak self] in
             do {
-                return .success(try await hermes.answer(question, context: context) { [weak self] status in
-                    self?.working(status)
-                    self?.hermesActivity = ContinuousClock.now
-                })
+                // Status lines are for the glasses; activity (any Hermes traffic) restarts the
+                // quiet clock, so a long answer isn't handed over while it keeps streaming.
+                return .success(try await hermes.answer(question, context: context,
+                                                        status: { [weak self] status in self?.working(status) },
+                                                        activity: { [weak self] in self?.hermesActivity = ContinuousClock.now }))
             } catch {
                 return .failure(error)
             }
         }
         guard !Task.isCancelled, mode == .working else { return }
-        if let fallback {
-            let problem: String? = switch result {
-            case .failure(let error): error.localizedDescription
-            case nil: "went quiet"
-            case .success: nil
-            }
-            if let problem {
-                lastError = "Hermes: \(problem)"
-                log("hermes failed (\(problem)), answering on the phone")
-                show(Screen(.working, "Hermes isn't answering, trying myself…"), timeout: false)
-                return await askLocal(fallback, info: info, mayHandOff: false)
-            }
-        }
         mode = .showing
         switch result {
         case .success(let answer):
             log("hermes: \(answer.sentence) \(answer.followUps) actions: \(answer.actions.map(\.title))")
-            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question, offerHermes: false)))
+            show(Screen(.says, answer.sentence, rail: rail(for: answer, question: question)))
         case .failure(let error):
             lastError = "Hermes: \(error.localizedDescription)"
             log("hermes failed: \(error.localizedDescription)")
@@ -533,15 +506,11 @@ public final class Conductor {
         show(Screen(.working, line), timeout: false)
     }
 
-    /// Actions first (Lotti's best guess), then follow-ups, then "Ask Hermes" if there's room.
-    private func rail(for answer: Answer, question: String, offerHermes: Bool) -> Rail {
-        let maxItems = renderer.style.maxRailItems
+    /// Actions first (Lotti's best guess), then follow-ups.
+    private func rail(for answer: Answer, question: String) -> Rail {
         var items = answer.actions.map { RailItem($0.title, .perform($0)) }
         items += answer.followUps.map { RailItem($0, .ask($0)) }
-        if offerHermes, hermes?.isConfigured == true {
-            items = Array(items.prefix(maxItems - 1)) + [RailItem("Ask Hermes", .askHermes(question))]
-        }
-        return Rail(items, limit: maxItems)
+        return Rail(items, limit: renderer.style.maxRailItems)
     }
 
     /// Runs an action you tapped, then says how it went.
@@ -550,7 +519,8 @@ public final class Conductor {
         thinking?.cancel()
         if let current = screen { backStack.append(current) }
         mode = .working
-        show(Screen(.working, action.title + "…"), timeout: false)
+        let progress = toolbox.tool(named: action.tool)?.spec.progress ?? "Working…"
+        show(Screen(.working, progress), timeout: false)
         let toolbox = self.toolbox
         thinking = Task {
             let result = await toolbox.perform(action)

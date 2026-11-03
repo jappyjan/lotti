@@ -41,7 +41,6 @@ public enum LocalPipeline {
         var label: String {
             switch tool {
             case "location": "where Jan is right now"
-            case "directions": "the way there"
             case "calendar": "Jan's calendar"
             case "reminders": "Jan's reminder list"
             default: tool
@@ -77,7 +76,7 @@ public enum LocalPipeline {
         ("create_reminder", #"\b(erinner(e|n)? mich|remind me|vergiss nicht|don'?t let me forget)\b"#),
         ("reminders", #"\b(erinnerungen|reminders|to-?dos?|aufgaben(liste)?)\b"#),
         ("set_timer", #"\b(timer|countdown|stoppuhr)\b"#),
-        ("directions", #"\b(wie komme? ich|wie kommen wir|wie weit|wie lange (brauche|fahre|laufe|gehe) ich|weg (zu|zum|zur|nach)|route|navigier\w*|bring mich|führ mich|how do i get|how far|how long (does it take|to get)|directions|way to|take me to|get me to)\b"#),
+        ("start_navigation", #"\b(navigier\w*|navigat\w*|bring(e|t)? mich|bring(e|t)? uns|führ(e|t)? (mich|uns)|lotse (mich|uns)|fahre mich|fährst du mich|nimm mich mit|zeig mir den weg|walk me (to|home|back)|bike me (to|home)|ride me (to|home)|take me (to|home|back)|get me (to|home)|guide me (to|home)|lead me (to|home)|directions to|wo ist (der|die|das) nächste|where( is|'s|s)? the nearest|where( is|'s|s)? the closest|wie komme? ich|wie kommen wir|how do (i|we) get)\b"#),
         ("location", #"\b(wo bin ich|wo sind wir|where am i|where are we|mein(en)? standort|my location)\b"#),
         ("calendar", #"\b(termine?n?|kalender|calendar|meetings?|appointments?|schedule|agenda|steht .*\ban\b|what'?s on|was hab(e)? ich)\b"#),
         ("weather", #"\b(wetter|weather|regen|regnet|rain(ing)?|schirm|umbrella|temperatur(e)?|kalt|cold|warm|grad|sonnig|sunny|schnee|snow|wind(ig|y)?)\b"#),
@@ -109,7 +108,7 @@ public enum LocalPipeline {
     /// says what it does ("add_new_reminder", not "create_reminder" next to "reminders").
     static let labels: [String: String] = [
         "location": "where_jan_is",
-        "directions": "route_to_a_place",
+        "start_navigation": "navigate_me_there",
         "calendar": "jan_calendar",
         "weather": "weather",
         "reminders": "read_existing_reminders",
@@ -133,7 +132,7 @@ public enum LocalPipeline {
         ]
         let ruleFor: [String: String] = [
             "location": "Where Jan himself is right now (his own position or address)",
-            "directions": "How to get somewhere, how far a place is, how long it takes to get there",
+            "start_navigation": "Jan wants turn-by-turn navigation on the glasses: walk me there, take me there, bring mich hin, navigiere mich",
             "calendar": "His calendar, appointments, meetings or plans for any day, and where they are",
             "weather": "Weather, temperature, rain, umbrella, what to wear",
             "reminders": "Jan asks what is on his reminder or to-do list",

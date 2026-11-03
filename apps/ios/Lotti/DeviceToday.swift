@@ -68,6 +68,12 @@ actor DeviceToday: TodayProvider {
         return location?.coordinate
     }
 
+    /// The most recent fix without fetching a new one. Good enough to plan from — the
+    /// navigation session's own stream takes over from there. Nil if there never was one.
+    func lastKnownLocation() async -> CLLocationCoordinate2D? {
+        location?.coordinate
+    }
+
     /// Where the phone is, at most 15 minutes old if a new fix can be had. Nil if never known.
     private func coordinate() async -> CLLocationCoordinate2D? {
         if let location, Date().timeIntervalSince(location.found) < 15 * 60 { return location.coordinate }
@@ -78,22 +84,34 @@ actor DeviceToday: TodayProvider {
         return location?.coordinate
     }
 
-    /// One location fix, or nil after a few seconds or without permission.
+    /// One location fix, or nil after ~8 s or without permission. The deadline is enforced by a
+    /// racing task, because `liveUpdates` can stay parked for minutes without yielding a single
+    /// update (no fix, prompt pending) — checking the clock inside the loop isn't enough.
     @MainActor private static func findLocation() async -> CLLocationCoordinate2D? {
-        let session = CLServiceSession(authorization: .whenInUse)
-        defer { session.invalidate() }
-        let deadline = Date().addingTimeInterval(8)
-        do {
-            for try await update in CLLocationUpdate.liveUpdates(.default) {
-                if let location = update.location {
-                    print("[Today] location found")
-                    return location.coordinate
+        await withTaskGroup(of: CLLocationCoordinate2D?.self) { group in
+            group.addTask {
+                let session = CLServiceSession(authorization: .whenInUse)
+                defer { session.invalidate() }
+                do {
+                    for try await update in CLLocationUpdate.liveUpdates(.default) {
+                        if let location = update.location {
+                            print("[Today] location found")
+                            return location.coordinate
+                        }
+                        if update.authorizationDenied { break }
+                    }
+                } catch {
+                    print("[Today] location failed: \(error.localizedDescription)")
                 }
-                if update.authorizationDenied || Date() > deadline { break }
+                return nil
             }
-        } catch {
-            print("[Today] location failed: \(error.localizedDescription)")
+            group.addTask {
+                try? await Task.sleep(for: .seconds(8))
+                return nil
+            }
+            defer { group.cancelAll() }
+            if let result = await group.next(), let coordinate = result { return coordinate }
+            return nil
         }
-        return nil
     }
 }

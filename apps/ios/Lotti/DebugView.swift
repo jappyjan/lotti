@@ -6,6 +6,7 @@ struct DebugView: View {
     let model: AppModel
     let brain: AppleBrain
     let hermes: HermesBrain
+    let navigation: NavigationController
 
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
@@ -92,6 +93,11 @@ struct DebugView: View {
                 }
             }
 
+            Section("Navigation maps") {
+                mapPreview("Mini map", image: navigation.renderer.lastMini)
+                mapPreview("Full map", image: navigation.renderer.lastFull)
+            }
+
             Section("Last input") {
                 if model.inputs.isEmpty {
                     Text("Tap a touchpad or use the ring.").foregroundStyle(.secondary)
@@ -107,5 +113,34 @@ struct DebugView: View {
             }
         }
         .navigationTitle("Debug")
+    }
+
+    /// The last map bitmap the glasses got, or a placeholder. Tap for the full-size image.
+    @ViewBuilder private func mapPreview(_ name: String, image: UIImage?) -> some View {
+        if let image {
+            NavigationLink {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .navigationTitle(name)
+            } label: {
+                HStack {
+                    Image(uiImage: image)
+                        .resizable()
+                        .interpolation(.none)
+                        .scaledToFit()
+                        .frame(width: 96)
+                        .background(Color.black)
+                    VStack(alignment: .leading) {
+                        Text(name)
+                        Text("\(Int(image.size.width))×\(Int(image.size.height)) px")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
+                }
+            }
+        } else {
+            Text("\(name): nothing sent yet.").foregroundStyle(.secondary)
+        }
     }
 }
