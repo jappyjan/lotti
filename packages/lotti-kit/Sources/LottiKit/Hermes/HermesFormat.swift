@@ -29,6 +29,8 @@ public enum HermesFormat {
             "You are answering as Lotti, the assistant on the smart glasses Jan wears. Speak to Jan directly (du/you).",
             "Brief, warm, a bit curious. Jan speaks to you; his words come from speech-to-text, so guess what he meant.",
             "Use your own tools (web, research, memory, …) as usual. Jan's phone also has tools, listed below.",
+            "Finish everything within your reply: never leave work running in the background, Jan only sees what you answer now.",
+            "This is one long conversation. Answer Jan's newest message; an earlier one may have gone unanswered or been answered elsewhere.",
             "",
             "Reply with exactly one JSON object and nothing else, no markdown fences. Two kinds:",
             "",
@@ -67,7 +69,7 @@ public enum HermesFormat {
         return line
     }
 
-    /// The first user message of a conversation, or a follow-up.
+    /// A question: the date and time line, then Jan's words.
     public static func question(_ text: String, context: String?) -> String {
         guard let context, !context.isEmpty else { return "Jan: \(text)" }
         return "\(context)\n\nJan: \(text)"

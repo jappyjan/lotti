@@ -7,7 +7,7 @@ import Observation
 /// - display off: double tap or look up → today view
 /// - scroll moves the rail highlight, tap picks it
 /// - double tap: back (from a screen opened from the rail), otherwise display off, which also
-///   ends the conversation
+///   ends the on-device conversation (Hermes continues one session forever and is never reset)
 /// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
 ///   off, talking needs a double tap first (the today view opens), then the hold, so a stray hold
 ///   in your pocket or hair doesn't start listening.
@@ -23,7 +23,8 @@ public final class Conductor {
         public var answer: Duration
         /// Wait this long for the final transcript after you let go.
         public var finalTranscript: Duration
-        /// A conversation older than this starts fresh.
+        /// An on-device conversation older than this starts fresh. Hermes has no such threshold
+        /// (it continues one session forever), so this never ends the Hermes chat.
         public var conversation: Duration
         /// Hermes may research the web, so the timeout counts silence, not total time: any
         /// traffic from Hermes (tokens, keepalives, tool progress) restarts the clock.
@@ -81,6 +82,8 @@ public final class Conductor {
     @ObservationIgnored private var listening: Task<String, Never>?
     @ObservationIgnored private var thinking: Task<Void, Never>?
     @ObservationIgnored private var usingPhoneMic = false
+    /// When Jan last asked anything: the on-device brain's clock for `timing.conversation`.
+    /// Hermes has no such clock: it continues one session forever.
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
@@ -246,7 +249,6 @@ public final class Conductor {
 
     private func endConversation() {
         brain.endConversation()
-        hermes?.endConversation()
     }
 
     private func show(_ next: Screen, timeout: Bool = true) {

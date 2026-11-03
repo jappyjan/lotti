@@ -12,13 +12,13 @@ public struct ChatMessage: Equatable, Sendable, Codable {
     }
 }
 
-/// Sends a whole conversation to Hermes and returns its reply text. `progress` gets Hermes's
-/// own tool activity ("web_search", a raw command name) while it works; `activity` fires on any
-/// data from Hermes — progress, answer tokens, keepalives — so the caller can tell "working"
-/// from "silent".
+/// Sends the newest message to Hermes and returns its reply text. `session` is sent as
+/// `X-Hermes-Session-Id`: Hermes keeps the history. `progress` gets Hermes's own tool activity
+/// ("web_search", a raw command name) while it works; `activity` fires on any data from Hermes —
+/// progress, answer tokens, keepalives — so the caller can tell "working" from "silent".
 public protocol HermesTransport: Sendable {
     func complete(
-        _ messages: [ChatMessage],
+        _ messages: [ChatMessage], session: String,
         progress: @escaping @Sendable (String) -> Void,
         activity: @escaping @Sendable () -> Void
     ) async throws -> String
@@ -58,6 +58,11 @@ public enum HermesError: Error, LocalizedError, Equatable {
     case notConfigured
     case http(Int, String)
     case empty
+    /// Hermes no longer has the session (deleted in its dashboard) or can't continue it.
+    case sessionGone
+    /// The question waited in the session's queue and never started: an earlier turn is stuck
+    /// (say, Hermes restarted mid-question and paused the session).
+    case sessionStuck
 
     public var errorDescription: String? {
         switch self {
@@ -66,20 +71,29 @@ public enum HermesError: Error, LocalizedError, Equatable {
         case .http(429, _): "Hermes is busy."
         case .http(let code, let message): "Hermes error \(code)" + (message.isEmpty ? "" : ": \(message)")
         case .empty: "Hermes sent an empty reply."
+        case .sessionGone: "Hermes lost our conversation."
+        case .sessionStuck: "Hermes's conversation got stuck."
         }
     }
 }
 
-/// Talks to Hermes's OpenAI-compatible chat completions endpoint, streaming. Stateless: every
-/// request carries the whole conversation, so the phone owns the history.
+/// Talks to Hermes's OpenAI-compatible chat completions endpoint, streaming. With the
+/// `X-Hermes-Session-Id` header Hermes loads the session's history itself and treats only the last
+/// message of the body as new, so a request is the system prompt plus the newest message. A Hermes
+/// without that header support (no `session_continuity_header` in `/v1/capabilities`) answers
+/// without memory of earlier questions, and phone-tool rounds lose their question.
 public struct HermesClient: HermesTransport {
     /// Read at every request, so settings changes apply right away. Nil when not set up.
     public var config: @Sendable () -> HermesConfig?
     public var session: URLSession
+    /// A cancelled question that waited this long without starting was stuck behind another turn.
+    public var stuckAfter: TimeInterval
 
-    public init(session: URLSession = HermesClient.defaultSession, config: @escaping @Sendable () -> HermesConfig?) {
+    public init(session: URLSession = HermesClient.defaultSession, stuckAfter: TimeInterval = 10,
+                config: @escaping @Sendable () -> HermesConfig?) {
         self.config = config
         self.session = session
+        self.stuckAfter = stuckAfter
     }
 
     /// Hermes sends a keepalive every 10 s while it works, so a minute of silence means it's gone.
@@ -91,9 +105,9 @@ public struct HermesClient: HermesTransport {
     }()
 
     public func complete(
-        _ messages: [ChatMessage],
+        _ messages: [ChatMessage], session id: String,
         progress: @escaping @Sendable (String) -> Void,
-        activity: @escaping @Sendable () -> Void
+        activity: @escaping @Sendable () -> Void = {}
     ) async throws -> String {
         guard let config = config() else { throw HermesError.notConfigured }
         var request = URLRequest(url: config.endpoint("chat/completions"))
@@ -101,6 +115,7 @@ public struct HermesClient: HermesTransport {
         request.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue(id, forHTTPHeaderField: "X-Hermes-Session-Id")
         struct Body: Encodable {
             var model = "hermes-agent"
             var messages: [ChatMessage]
@@ -108,11 +123,47 @@ public struct HermesClient: HermesTransport {
         }
         request.httpBody = try JSONEncoder().encode(Body(messages: messages))
 
+        // Hermes keeps a turn running after its client goes away, and the session's next question
+        // would queue behind it. So the stream runs in its own task, and a cancelled question first
+        // asks Hermes to stop its run (the completion id is the run id while the stream is open),
+        // then closes the stream.
+        try Task.checkCancellation()
+        let run = Run()
+        let stream = Task { try await read(request, run: run, progress: progress, activity: activity) }
+        let stopping: @Sendable () -> Task<Void, Never> = {
+            run.stopping {
+                Task {
+                    await stop(run, config: config)
+                    stream.cancel()
+                }
+            }
+        }
+        let result = await withTaskCancellationHandler {
+            await stream.result
+        } onCancel: {
+            _ = stopping()
+        }
+        // Stopping its run often ends the stream first; the question was cancelled all the same.
+        if Task.isCancelled {
+            await stopping().value
+            throw run.stuck ? HermesError.sessionStuck : CancellationError()
+        }
+        return try result.get()
+    }
+
+    private func read(
+        _ request: URLRequest, run: Run,
+        progress: @escaping @Sendable (String) -> Void,
+        activity: @escaping @Sendable () -> Void
+    ) async throws -> String {
+        defer { run.end() }
         let (bytes, response) = try await session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let type = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
         guard (200..<300).contains(status) else {
-            throw HermesError.http(status, Self.errorMessage(try await Self.collect(bytes)))
+            let body = try await Self.collect(bytes)
+            if Self.sessionGoneReasons.contains(Self.errorCode(body) ?? "") { throw HermesError.sessionGone }
+            throw HermesError.http(status, Self.errorMessage(body))
         }
         // A server that ignores `stream` answers with one JSON object.
         if !type.contains("event-stream") {
@@ -124,7 +175,9 @@ public struct HermesClient: HermesTransport {
         for try await line in bytes.lines {
             try Task.checkCancellation()
             activity()  // any data from Hermes — a token, a tool step, a keepalive — means it's alive
-            switch parser.feed(line) {
+            let signal = parser.feed(line)
+            run.update(id: parser.completionID, started: !parser.text.isEmpty)
+            switch signal {
             case .progress(let text): progress(text)
             case .done: return try parser.finish()
             case nil: break
@@ -132,6 +185,30 @@ public struct HermesClient: HermesTransport {
         }
         return try parser.finish()
     }
+
+    /// Best effort, bounded: waits up to 2 s for the run id (Hermes sends it in its first chunk),
+    /// asks whether the run ever started, then stops it. A run still queued after `stuckAfter`
+    /// means an earlier turn won't finish: the session is stuck.
+    private func stop(_ run: Run, config: HermesConfig) async {
+        let deadline = Date().addingTimeInterval(2)
+        while run.id == nil, !run.ended, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        guard let id = run.id, !run.ended else { return }
+        if !run.startedAnswering, Date().timeIntervalSince(run.opened) >= stuckAfter {
+            var status = URLRequest(url: config.endpoint("runs/\(id)"), timeoutInterval: 2)
+            status.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
+            if let (data, _) = try? await session.data(for: status),
+               (try? JSONValue(json: String(decoding: data, as: UTF8.self)))?["status"]?.string == "queued" {
+                run.markStuck()
+            }
+        }
+        var request = URLRequest(url: config.endpoint("runs/\(id)/stop"), timeoutInterval: 3)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(config.key)", forHTTPHeaderField: "Authorization")
+        _ = try? await session.data(for: request)
+    }
+
+    /// What Hermes says when the session id can't be continued: deleted (retired) or unresumable.
+    static let sessionGoneReasons: Set<String> = ["not_found", "unknown_execution"]
 
     /// Checks address and key: lists the models (cheap, authenticated). Returns the model name.
     public func check() async throws -> String {
@@ -158,6 +235,11 @@ public struct HermesClient: HermesTransport {
         return json?["choices"]?.array?.first?["message"]?["content"]?.string
     }
 
+    static func errorCode(_ body: String) -> String? {
+        let json = try? JSONValue(json: body)
+        return json?["error"]?["code"]?.string ?? json?["error"]?["message"]?.string
+    }
+
     static func errorMessage(_ body: String) -> String {
         let json = try? JSONValue(json: body)
         let message = json?["error"]?["message"]?.string ?? json?["error"]?.string ?? json?["detail"]?.string ?? body
@@ -174,6 +256,9 @@ struct ServerSentEvents {
     }
 
     private(set) var text = ""
+    /// The `chatcmpl-…` id of the stream, which is also its run id at Hermes.
+    private(set) var completionID: String?
+    private var error: String?
     private var event: String?
 
     mutating func feed(_ line: String) -> Signal? {
@@ -192,13 +277,17 @@ struct ServerSentEvents {
             guard event.contains("progress") else { return nil }
             return Self.progressText(json).map(Signal.progress)
         }
-        if let delta = json["choices"]?.array?.first?["delta"]?["content"]?.string {
+        if completionID == nil { completionID = json["id"]?.string }
+        let choice = json["choices"]?.array?.first
+        if let delta = choice?["delta"]?["content"]?.string {
             text += delta
         }
+        if choice?["finish_reason"]?.string == "error" { error = json["error"]?["message"]?.string ?? "" }
         return nil
     }
 
     func finish() throws -> String {
+        if let error, HermesClient.sessionGoneReasons.contains(error) { throw HermesError.sessionGone }
         let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if reply.isEmpty { throw HermesError.empty }
         return reply
@@ -211,4 +300,43 @@ struct ServerSentEvents {
         }
         return json.string
     }
+}
+
+/// What a cancelled question needs to know about its stream: Hermes's run id and whether the answer
+/// had begun. Written by the stream, read when the question is cancelled.
+private final class Run: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _id: String?
+    private var _startedAnswering = false
+    private var _stuck = false
+    private var _ended = false
+    private var _stopping: Task<Void, Never>?
+    let opened = Date()
+
+    var id: String? { lock.withLock { _id } }
+    var startedAnswering: Bool { lock.withLock { _startedAnswering } }
+    var stuck: Bool { lock.withLock { _stuck } }
+    /// The stream is over: Hermes no longer knows the run by its completion id.
+    var ended: Bool { lock.withLock { _ended } }
+
+    func end() { lock.withLock { _ended = true } }
+
+    /// The one stop of this run, started by whoever needs it first.
+    func stopping(_ start: () -> Task<Void, Never>) -> Task<Void, Never> {
+        lock.withLock {
+            if let _stopping { return _stopping }
+            let task = start()
+            _stopping = task
+            return task
+        }
+    }
+
+    func update(id: String?, started: Bool) {
+        lock.withLock {
+            if _id == nil { _id = id }
+            if started { _startedAnswering = true }
+        }
+    }
+
+    func markStuck() { lock.withLock { _stuck = true } }
 }

@@ -29,8 +29,8 @@ public protocol Brain: AnyObject {
     func endConversation()
 }
 
-/// A bigger brain somewhere else (your Hermes), for what the phone can't answer. Keeps its
-/// own conversation until `endConversation()`.
+/// A bigger brain somewhere else (your Hermes), for what the phone can't answer. It keeps one
+/// ongoing conversation on its side; nothing here ends it.
 @MainActor
 public protocol RemoteBrain: AnyObject {
     /// False until you set it up in the app.
@@ -43,7 +43,6 @@ public protocol RemoteBrain: AnyObject {
         status: @escaping @MainActor (String) -> Void,
         activity: @escaping @MainActor () -> Void
     ) async throws -> Answer
-    func endConversation()
 }
 
 /// Your words, as far as the recognizer has heard them.

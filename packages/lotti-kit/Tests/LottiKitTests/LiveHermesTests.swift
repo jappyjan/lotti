@@ -30,6 +30,19 @@ struct LiveHermesTests {
         print("[Live] trace:\n" + brain.trace.joined(separator: "\n"))
         #expect(!answer.sentence.isEmpty)
     }
+
+    @Test func followUpsContinueTheSession() async throws {
+        let brain = HermesBrain(transport: client, toolbox: Toolbox([FakeTool.timer()], callTimeout: .seconds(5)),
+                                allowedReads: { [] }, isConfigured: { true })
+        let first = try await brain.answer("What is the capital of France?", context: "Now: Sunday 1 November 2026, 14:00") { _ in }
+        let second = try await brain.answer("And of Germany?", context: "Now: Sunday 1 November 2026, 14:05") { _ in }
+        print("[Live] session \(brain.sessionID ?? "-"): \(first.sentence) / \(second.sentence)")
+        // The mock counts the earlier questions of the session in its answer.
+        if ProcessInfo.processInfo.environment["HERMES_MOCK"] != nil {
+            #expect(second.sentence.contains("1 earlier"))
+        }
+        #expect(!second.sentence.isEmpty)
+    }
 }
 
 func liveHermesConfig() -> HermesConfig? {
