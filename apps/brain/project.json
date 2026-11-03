@@ -1,0 +1,58 @@
+{
+  "name": "brain",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/brain/src",
+  "tags": ["lang:ts", "platform:server"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p tsconfig.build.json",
+        "cwd": "apps/brain"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "!{projectRoot}/src/**/*.test.ts",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/package.json"
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p tsconfig.json --noEmit",
+        "cwd": "apps/brain"
+      },
+      "inputs": ["{projectRoot}/src/**/*", "{projectRoot}/tsconfig*.json"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "tsc -p tsconfig.test.json",
+          "node --test --test-force-exit --test-timeout=30000 \"out-tsc/test/**/*.test.js\""
+        ],
+        "parallel": false,
+        "cwd": "apps/brain"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/package.json"
+      ],
+      "cache": true
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node dist/main.js",
+        "cwd": "apps/brain"
+      }
+    }
+  }
+}

@@ -1,0 +1,20 @@
+# Lotti Brain: only MASTER_KEY is required. Everything else (API keys, accounts, tokens) is set from the app.
+#   MASTER_KEY=$(openssl rand -hex 32) docker compose up -d   (keep the key: it decrypts the stored secrets)
+#   docker compose logs brain     -> pairing code + QR on first start
+services:
+  brain:
+    build:
+      context: ../..
+      dockerfile: apps/brain/Dockerfile
+    restart: unless-stopped
+    ports:
+      - '8787:8787'
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
+      # PUBLIC_URL: https://brain.example.com   # shown in the pairing QR; default http://localhost:8787
+      # TZ: Europe/Berlin                       # cron schedules and the night window use this
+      # APNS_KEY_ID / APNS_TEAM_ID / APNS_KEY / APNS_TOPIC   # optional push (integrations agent)
+    volumes:
+      - lotti-data:/data
+volumes:
+  lotti-data:

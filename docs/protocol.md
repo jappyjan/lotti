@@ -69,3 +69,17 @@ One operations layer, two front doors: the app calls it over HTTP and the Lotti 
 ## Pushes and presence
 
 The server keeps the inbox as the source of truth. While no socket is open, `push` items queue and are replayed on reconnect (the `inbox` full sync after `hello` covers it). APNs wakes the app when configured and no socket is open.
+
+## Implementation notes (apps/brain)
+
+Where the backend is more specific than the contract above:
+
+- `GET /api/v1/pair/code` answers only requests from the server itself (loopback) and logs the code. More devices: op `pairing.new_code` (app only). Pairing link in the QR/log: `lotti://pair?url=<server>&code=<code>`. Wrong codes are rate-limited (429).
+- A new `hello` is answered by `welcome`, then a full `inbox`, then one `push` per item that queued while the device was offline.
+- `cancel` makes the ask end with `error {id, message: "cancelled"}`; there is no `answer`.
+- `message` is sent to every socket for the user turn (including the asking socket, so a glasses question shows up in the phone chat; clients ignore turns of their own channel) and for the assistant turn to every socket except the asking one (it gets `answer`).
+- `answer.undo` is present when the run made a `free` op change that can be undone; `performed.undo` likewise after `perform`. `undo` answers with `performed {id, ok, text}`.
+- `perform` for a `target: "phone"` action answers `performed {ok:false}`: only the app runs those.
+- A `tap` op proposed by the agent appears as an action `{target:"server", tool:"op:<name>"}`.
+- HTTP ops: `400 {ok:false,error}` for invalid input or a failing op, `404` for an unknown op; a successful response may carry `undo: {id,label}`.
+- Admin MCP: `POST /mcp/admin` (JSON-RPC over streamable HTTP, stateless, JSON replies), `Authorization: Bearer <admin token>`; `404` while no admin token exists. Agent tools for subscription runtimes: `POST /mcp/tools` with the internal token.
