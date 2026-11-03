@@ -28,26 +28,25 @@ The **phone is the hub for the glasses and sensors.** **Lotti Brain is the brain
 
 **Product rule:** a thing does not exist until the app can configure and manage it. Every backend feature has a screen in Settings.
 
-
 ## Components
 
-| Component        | Where  | Job                                                                                                                               |
-| ---------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| Glasses link     | iOS    | BLE connection, auth handshake, display commands, mic stream, touchpad events                                                     |
-| Ring input       | iOS    | R1 gestures. The ring is linked to the glasses, which relay its gestures through the glasses link ([S2](spikes/s2-ring.md))       |
-| Renderer         | iOS    | Turns a schema screen into G2 containers; pagination, focus, gesture → action mapping                                             |
-| Voice            | iOS    | Push-to-talk, on-device speech-to-text (`SpeechAnalyzer`), wake word spotter                                                      |
-| Signals          | iOS    | Notifications (`AccessoryNotifications`, EU), location, calendar, battery and connection state                                    |
-| Messaging        | iOS    | Quick replies to forwarded notifications for the five messengers (see below)                                                      |
-| Navigation       | iOS    | Routing, step tracking, rerouting, `nav` screens on the glasses (see below)                                                       |
-| Memory           | iOS    | What Lotti has learned: who matters, what you ignore, your writing style per person, places. On the phone; viewable and deletable |
-| Brain router     | iOS    | Backend reachable → `BackendBrain`; otherwise the offline brain                                                                   |
-| Offline brain    | iOS    | Timer, navigation, reminders and a short "I'm offline" sentence (Apple Foundation Models as a helper)                            |
-| Phone tools      | iOS    | Calendar, weather, location, reminders, timer, new reminder; shared by both brains (see below)                                    |
-| Backend client   | iOS    | `BackendClient`/`BackendBrain`: WebSocket to Lotti Brain, phone tools, inbox, presence; `BackendManagementClient` for Settings    |
-| Simulator        | web    | Renders schema screens at 576×288 with keyboard-as-ring, so UI and prompts can be iterated without glasses                        |
-| UI schema        | shared | Single source of truth for screens; TypeScript, JSON Schema for LLMs, Swift mirror                                                |
-| Lotti Brain      | server | Own agent loop, providers, tools, memory, jobs, inbox ([protocol](protocol.md), [apps/brain](../apps/brain/README.md))          |
+| Component      | Where  | Job                                                                                                                               |
+| -------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| Glasses link   | iOS    | BLE connection, auth handshake, display commands, mic stream, touchpad events                                                     |
+| Ring input     | iOS    | R1 gestures. The ring is linked to the glasses, which relay its gestures through the glasses link ([S2](spikes/s2-ring.md))       |
+| Renderer       | iOS    | Turns a schema screen into G2 containers; pagination, focus, gesture → action mapping                                             |
+| Voice          | iOS    | Push-to-talk, on-device speech-to-text (`SpeechAnalyzer`), wake word spotter                                                      |
+| Signals        | iOS    | Notifications (`AccessoryNotifications`, EU), location, calendar, battery and connection state                                    |
+| Messaging      | iOS    | Quick replies to forwarded notifications for the five messengers (see below)                                                      |
+| Navigation     | iOS    | Routing, step tracking, rerouting, `nav` screens on the glasses (see below)                                                       |
+| Memory         | iOS    | What Lotti has learned: who matters, what you ignore, your writing style per person, places. On the phone; viewable and deletable |
+| Brain router   | iOS    | Backend reachable → `BackendBrain`; otherwise the offline brain                                                                   |
+| Offline brain  | iOS    | Timer, navigation, reminders and a short "I'm offline" sentence (Apple Foundation Models as a helper)                             |
+| Phone tools    | iOS    | Calendar, weather, location, reminders, timer, new reminder; shared by both brains (see below)                                    |
+| Backend client | iOS    | `BackendClient`/`BackendBrain`: WebSocket to Lotti Brain, phone tools, inbox, presence; `BackendManagementClient` for Settings    |
+| Simulator      | web    | Renders schema screens at 576×288 with keyboard-as-ring, so UI and prompts can be iterated without glasses                        |
+| UI schema      | shared | Single source of truth for screens; TypeScript, JSON Schema for LLMs, Swift mirror                                                |
+| Lotti Brain    | server | Own agent loop, providers, tools, memory, jobs, inbox ([protocol](protocol.md), [apps/brain](../apps/brain/README.md))            |
 
 ## The UI schema idea
 
@@ -79,15 +78,15 @@ The one genuinely open piece is the foreground notification body: it travels ove
 
 **Short answer: most of the everyday work. Not the heavy tasks.**
 
-| Task                                                        | On-device?  | Notes                                                                                                                                       |
-| ----------------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Speech-to-text (dictation, push-to-talk)                    | ✅          | `SpeechAnalyzer` (iOS 26+), on-device and fast                                                                                              |
-| Wake word "Hey Lotti"                                       | ✅ but DIY  | No iOS API; small keyword-spotting model on the glasses mic stream. Battery is the open question; only built if push-to-talk feels limiting |
-| Notification triage (show / ignore / priority)              | ✅          | Small classification task, a good fit for a ~3B model                                                                                       |
-| Quick replies for messages                                  | ✅          | Short generation, user tone from a few examples                                                                                             |
-| Choosing and filling a screen template                      | ✅          | Guided generation (`@Generable`) produces valid screens directly                                                                            |
-| Simple tools (timer, reminder, calendar lookup, navigation) | ✅          | Tool calling in Foundation Models                                                                                                           |
-| Multi-step research, mail summaries, web, anything agentic  | ❌ → backend | Needs a bigger model, more context and server tools                                                                       |
+| Task                                                        | On-device?   | Notes                                                                                                                                       |
+| ----------------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Speech-to-text (dictation, push-to-talk)                    | ✅           | `SpeechAnalyzer` (iOS 26+), on-device and fast                                                                                              |
+| Wake word "Hey Lotti"                                       | ✅ but DIY   | No iOS API; small keyword-spotting model on the glasses mic stream. Battery is the open question; only built if push-to-talk feels limiting |
+| Notification triage (show / ignore / priority)              | ✅           | Small classification task, a good fit for a ~3B model                                                                                       |
+| Quick replies for messages                                  | ✅           | Short generation, user tone from a few examples                                                                                             |
+| Choosing and filling a screen template                      | ✅           | Guided generation (`@Generable`) produces valid screens directly                                                                            |
+| Simple tools (timer, reminder, calendar lookup, navigation) | ✅           | Tool calling in Foundation Models                                                                                                           |
+| Multi-step research, mail summaries, web, anything agentic  | ❌ → backend | Needs a bigger model, more context and server tools                                                                                         |
 
 ### Which model runs locally
 
@@ -117,28 +116,27 @@ Known limits (from S3):
 
 **Routing (`Router`): backend first.**
 
-| Situation                                   | Brain                                                  |
-| ------------------------------------------- | ------------------------------------------------------ |
-| Lotti Brain reachable (WebSocket up)        | `BackendBrain`: every question, glasses or phone       |
-| Backend unreachable                         | offline brain: timer, navigation, reminders, today view |
-| Anything else while offline                 | a short "Ich bin offline" / "I'm offline" sentence     |
+| Situation                            | Brain                                                   |
+| ------------------------------------ | ------------------------------------------------------- |
+| Lotti Brain reachable (WebSocket up) | `BackendBrain`: every question, glasses or phone        |
+| Backend unreachable                  | offline brain: timer, navigation, reminders, today view |
+| Anything else while offline          | a short "Ich bin offline" / "I'm offline" sentence      |
 
 The backend run is cancellable (double tap sends `cancel`) and its status lines stream to the glasses or phone. A silence-based timeout applies: any status or token restarts the clock. Shell steps and other server tool calls are logged, not shown on the glasses; only status lines show. Deterministic rules still come first: ring "back", gestures, the today view.
-
 
 ## Phone tools
 
 One set of tools on the phone, used by the offline brain, by Lotti Brain (proxied over the WebSocket) and later by the ring's Actions list. Each tool is a `PhoneTool` in LottiKit (name, description, arguments, `read` or `action`); the app implements the real ones in `apps/ios/Lotti/PhoneTools.swift`.
 
-| Tool              | Kind   | Backed by                                                                        | Offline brain | Lotti Brain       |
-| ----------------- | ------ | -------------------------------------------------------------------------------- | --------------- | ----------------- |
-| `calendar`        | read   | EventKit (your chosen calendars)                                                 | ✅              | ✅ if shared      |
-| `weather`         | read   | Open-Meteo at your location                                                      | ✅              | ✅ if shared      |
-| `location`        | read   | CoreLocation + MapKit address                                                    | ✅              | ✅ if shared      |
-| `reminders`       | read   | EventKit reminders                                                               | ✅              | ✅ if shared      |
-| `start_navigation` | action | MapKit: place search near Jan (~30 km), turn-by-turn on the glasses' nav screen | ✅              | ✅ (suggest only) |
-| `set_timer`       | action | AlarmKit (rings in silent mode)                                                  | ✅              | ✅ (suggest only) |
-| `create_reminder` | action | EventKit reminders                                                               | ✅              | ✅ (suggest only) |
+| Tool               | Kind   | Backed by                                                                       | Offline brain | Lotti Brain       |
+| ------------------ | ------ | ------------------------------------------------------------------------------- | ------------- | ----------------- |
+| `calendar`         | read   | EventKit (your chosen calendars)                                                | ✅            | ✅ if shared      |
+| `weather`          | read   | Open-Meteo at your location                                                     | ✅            | ✅ if shared      |
+| `location`         | read   | CoreLocation + MapKit address                                                   | ✅            | ✅ if shared      |
+| `reminders`        | read   | EventKit reminders                                                              | ✅            | ✅ if shared      |
+| `start_navigation` | action | MapKit: place search near Jan (~30 km), turn-by-turn on the glasses' nav screen | ✅            | ✅ (suggest only) |
+| `set_timer`        | action | AlarmKit (rings in silent mode)                                                 | ✅            | ✅ (suggest only) |
+| `create_reminder`  | action | EventKit reminders                                                              | ✅            | ✅ (suggest only) |
 
 Rules (enforced by `Toolbox`, not by prompts):
 
@@ -191,7 +189,6 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 **Safety.** Mail and web content is untrusted. Mitigations: no secrets in the shell env, non-root container, external-effect actions tap-confirmed, credentials app-only, commands logged. Residual risk, accepted for a personal tool: data the agent can read could be sent out via curl.
 
 **Not built yet:** WhatsApp, Matrix, Signal, Telegram and iMessage read/write. The inbox `kind`, the tool layout and the accounts screen leave room for them.
-
 
 ## Messaging: iMessage, WhatsApp, Signal, Telegram, Matrix
 
@@ -247,26 +244,26 @@ docs/           vision, architecture, roadmap
 
 ## Decisions
 
-| #   | Decision                                                                                                                                                                                | Status                                |
-| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
-| D2  | ~~Hermes first~~ — superseded (see D13): Lotti Brain first; the offline brain answers only timer, navigation and reminders without the backend | ⛔ superseded (2026-11-03) |
-| D3  | ~~Hermes is external~~ — superseded: Hermes is removed; Lotti has its own backend | ⛔ superseded (2026-11-03) |
-| D4  | Push-to-talk after the MVP; wake word only if push-to-talk feels limiting (then check battery)                                                                                          | ✅ decided                            |
-| D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
-| D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                | ✅ decided                            |
-| D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |
-| D8  | Own server for pushes and the brain | ✅ decided: yes (Lotti Brain, 2026-11-03) |
-| D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
-| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ decided (M5; no HERE/Mapbox anywhere) |
-| D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
+| #   | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Status                                      |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                                                                                                                                                                                                                                                                                                                                             | ✅ decided                                  |
+| D2  | ~~Hermes first~~ — superseded (see D13): Lotti Brain first; the offline brain answers only timer, navigation and reminders without the backend                                                                                                                                                                                                                                                                                                                                                                    | ⛔ superseded (2026-11-03)                  |
+| D3  | ~~Hermes is external~~ — superseded: Hermes is removed; Lotti has its own backend                                                                                                                                                                                                                                                                                                                                                                                                                                 | ⛔ superseded (2026-11-03)                  |
+| D4  | Push-to-talk after the MVP; wake word only if push-to-talk feels limiting (then check battery)                                                                                                                                                                                                                                                                                                                                                                                                                    | ✅ decided                                  |
+| D5  | Template-based UI schema instead of free layout                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | ✅ proposed                                 |
+| D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                                                                                                                                                                                                                                                                                                                                          | ✅ decided                                  |
+| D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                                                                                                                                                                                                                                                                                                                                                   | ✅ decided                                  |
+| D8  | Own server for pushes and the brain                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | ✅ decided: yes (Lotti Brain, 2026-11-03)   |
+| D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)                                                                                                                                                                                                                                                                                                                                     | ⏸ blocked on paid account                   |
+| D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                                                                                                                                                                                                                                                                                                                                            | ✅ decided (M5; no HERE/Mapbox anywhere)    |
+| D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11))                                                                                                                                                                                                                                                                                                                           | ✅ decided                                  |
 | D12 | A second display layer for popups. Confirmed via `g2.service_id_def.SID` (background vs foreground). The menu widget's content command is mapped: `g2.menu` (sid 0x03) `APP_SEND_MENU_INFO` with selectable items, picks back via EvenHub Cmd 0x15. But the menu is opened by the firmware (Cmd 17 is OS→app); no app-side open command is known. Open: how to open a foreground popup on demand — likely needs a live BLE capture (notification-widget JSON schema, sid 0x04) ([apk-recon](spikes/apk-recon.md)) | ✅ mapped (menu content); ⏳ open-on-demand |
-| D13 | Backend: Node 24 + TypeScript in Nx (`apps/brain`), one Docker image, SQLite + FTS5 on a volume, reached over Tailscale/HTTPS | ✅ decided (2026-11-03) |
-| D14 | Providers: DeepSeek (default, key), OpenAI and Anthropic (key), ChatGPT via Codex sign-in, Claude via Claude Code token; one active plus fallback | ✅ decided |
-| D15 | AI-first phone app: chat first, Settings manage everything ("a thing does not exist until the app can manage it") | ✅ decided |
-| D16 | Indicators, not notifications: small image indicator (kind icon + count) at the edge; location icon on every location read | ✅ decided |
-| D17 | Catch-up brief from wear detection plus away/slept heuristics replaces the morning brief | ✅ decided |
-| D18 | Self-management through the Lotti admin MCP server, no CLI; tap only for providers/models, MCP and safety; credentials app-only | ✅ decided |
-| D19 | Offline brain keeps timer, navigation, reminders; handoffs removed | ✅ decided |
-| D20 | Bring! natively via the unofficial API; adds/removes immediate with Undo | ✅ decided |
-| D21 | Messengers (WhatsApp, Matrix, Signal, Telegram, iMessage) read/write later, not now | ⏳ later |
+| D13 | Backend: Node 24 + TypeScript in Nx (`apps/brain`), one Docker image, SQLite + FTS5 on a volume, reached over Tailscale/HTTPS                                                                                                                                                                                                                                                                                                                                                                                     | ✅ decided (2026-11-03)                     |
+| D14 | Providers: DeepSeek (default, key), OpenAI and Anthropic (key), ChatGPT via Codex sign-in, Claude via Claude Code token; one active plus fallback                                                                                                                                                                                                                                                                                                                                                                 | ✅ decided                                  |
+| D15 | AI-first phone app: chat first, Settings manage everything ("a thing does not exist until the app can manage it")                                                                                                                                                                                                                                                                                                                                                                                                 | ✅ decided                                  |
+| D16 | Indicators, not notifications: small image indicator (kind icon + count) at the edge; location icon on every location read                                                                                                                                                                                                                                                                                                                                                                                        | ✅ decided                                  |
+| D17 | Catch-up brief from wear detection plus away/slept heuristics replaces the morning brief                                                                                                                                                                                                                                                                                                                                                                                                                          | ✅ decided                                  |
+| D18 | Self-management through the Lotti admin MCP server, no CLI; tap only for providers/models, MCP and safety; credentials app-only                                                                                                                                                                                                                                                                                                                                                                                   | ✅ decided                                  |
+| D19 | Offline brain keeps timer, navigation, reminders; handoffs removed                                                                                                                                                                                                                                                                                                                                                                                                                                                | ✅ decided                                  |
+| D20 | Bring! natively via the unofficial API; adds/removes immediate with Undo                                                                                                                                                                                                                                                                                                                                                                                                                                          | ✅ decided                                  |
+| D21 | Messengers (WhatsApp, Matrix, Signal, Telegram, iMessage) read/write later, not now                                                                                                                                                                                                                                                                                                                                                                                                                               | ⏳ later                                    |

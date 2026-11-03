@@ -53,13 +53,13 @@ In use the choices on the right were too small and too short: the rail got 176 o
 
 The same on the R1 ring and both temple touchpads.
 
-| Gesture           | Meaning everywhere                                                                        |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                             |
-| Tap               | Do the highlighted thing. On its own (display off) it does nothing                        |
-| Double tap        | Back or dismiss. With the display off: the today view                                     |
+| Gesture           | Meaning everywhere                                                                                                                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                                                                                                                                 |
+| Tap               | Do the highlighted thing. On its own (display off) it does nothing                                                                                                                            |
+| Double tap        | Back or dismiss. With the display off: the today view                                                                                                                                         |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
-| Look up           | The look-up view; look down to hide it                                                    |
+| Look up           | The look-up view; look down to hide it                                                                                                                                                        |
 
 ## Without voice
 
