@@ -61,6 +61,100 @@ final class FakeHermesSessionStore: HermesSessionStore, @unchecked Sendable {
     }
 }
 
+struct HermesFormatTests {
+    @Test func parsesSeveralCalls() {
+        let reply = HermesFormat.parse(#"""
+            {"type":"call","status":"Checking your day","calls":[
+              {"id":"c1","tool":"calendar","args":{"from":"2026-11-02","days":2}},
+              {"tool":"weather","arguments":{}}]}
+            """#)
+        #expect(reply == .calls([
+            ToolCall(id: "c1", tool: "calendar", arguments: ["from": "2026-11-02", "days": 2]),
+            ToolCall(id: "c2", tool: "weather"),
+        ], status: "Checking your day"))
+    }
+
+    @Test func parsesAnAnswerWithActions() {
+        let reply = HermesFormat.parse(#"""
+            {"type":"answer","sentence":"Pasta takes 10 minutes.","followUps":["Sauce?"],
+             "actions":[{"tool":"set_timer","args":{"minutes":10,"label":"Pasta"}}]}
+            """#)
+        #expect(reply == .answer(sentence: "Pasta takes 10 minutes.", followUps: ["Sauce?"],
+                                 actions: [ToolCall(id: "a1", tool: "set_timer", arguments: ["minutes": 10, "label": "Pasta"])]))
+    }
+
+    @Test func findsJSONInsideFencesAndProse() {
+        let reply = HermesFormat.parse("Sure!\n```json\n{\"type\":\"answer\",\"sentence\":\"Hi.\"}\n```")
+        #expect(reply == .answer(sentence: "Hi.", followUps: [], actions: []))
+    }
+
+    @Test func plainTextIsNotAReply() {
+        #expect(HermesFormat.parse("The museum opens at 10.") == nil)
+        #expect(HermesFormat.parse(#"{"type":"call","calls":[]}"#) == nil)
+        #expect(HermesFormat.plainSentence("**Yes.** It opens\nat 10.") == "Yes. It opens at 10.")
+    }
+
+    @Test func resultsMessage() throws {
+        let text = HermesFormat.results([ToolResult(id: "c1", ok: true, content: "Standup 9:30")], final: true)
+        let json = try JSONValue(json: text)
+        #expect(json["type"] == "results")
+        #expect(json["results"]?.array?.first == ["id": "c1", "ok": true, "content": "Standup 9:30"])
+        #expect(json["note"]?.string?.contains("Answer now") == true)
+    }
+
+    @Test func instructionsListReadsAndActionsSeparately() {
+        let reads = [FakeTool("calendar", parameters: [ToolParameter("from", .string, "first day, YYYY-MM-DD"),
+                                                       ToolParameter("days", .integer, "", optional: true)]).spec]
+        let text = HermesFormat.instructions(reads: reads, actions: [FakeTool.timer().spec])
+        #expect(text.contains("- calendar(from: string, days?: integer): Fake calendar. from: first day, YYYY-MM-DD."))
+        #expect(text.contains("Phone actions you may suggest"))
+        #expect(text.contains("- set_timer(minutes: integer, label?: string)"))
+        #expect(text.contains("they run at the same time"))
+    }
+
+    @Test func configAcceptsWhatPeoplePaste() {
+        let bare = HermesConfig(address: "hermes.example.ts.net/", key: "k")
+        #expect(bare?.endpoint("chat/completions").absoluteString == "https://hermes.example.ts.net/v1/chat/completions")
+        let withV1 = HermesConfig(address: "http://192.168.1.20:8642/v1", key: "k")
+        #expect(withV1?.endpoint("models").absoluteString == "http://192.168.1.20:8642/v1/models")
+        #expect(HermesConfig(address: "", key: "k") == nil)
+        #expect(HermesConfig(address: "hermes.local", key: " ") == nil)
+    }
+
+    @Test func routesExplicitQuestions() {
+        #expect(HermesRoute.explicitQuestion("Hermes, what's new in Swift?") == "what's new in Swift?")
+        #expect(HermesRoute.explicitQuestion("ask Hermes when the museum opens") == "when the museum opens")
+        #expect(HermesRoute.explicitQuestion("Frag Hermes, wann fährt die S-Bahn?") == "wann fährt die S-Bahn?")
+        #expect(HermesRoute.explicitQuestion("Dig into flights to Lisbon") == "Dig into flights to Lisbon")
+        #expect(HermesRoute.explicitQuestion("What's on today?") == nil)
+        #expect(HermesRoute.explicitQuestion("Hermesbrief") == nil)
+    }
+}
+
+struct ServerSentEventsTests {
+    @Test func collectsContentAndProgress() throws {
+        var parser = ServerSentEvents()
+        let lines = [
+            ": keepalive",
+            #"data: {"choices":[{"delta":{"role":"assistant"}}]}"#,
+            "event: hermes.tool.progress",
+            #"data: {"tool":"web_search","label":"Searching the web"}"#,
+            "",
+            #"data: {"choices":[{"delta":{"content":"{\"type\":"}}]}"#,
+            #"data: {"choices":[{"delta":{"content":"\"answer\"}"}}]}"#,
+            "data: [DONE]",
+        ]
+        var signals: [ServerSentEvents.Signal] = []
+        for line in lines { if let signal = parser.feed(line) { signals.append(signal) } }
+        #expect(signals == [.progress("Searching the web"), .done])
+        #expect(try parser.finish() == #"{"type":"answer"}"#)
+    }
+
+    @Test func anEmptyStreamIsAnError() {
+        #expect(throws: HermesError.empty) { try ServerSentEvents().finish() }
+    }
+}
+
 @MainActor
 struct HermesBrainTests {
     let calendar = FakeTool("calendar", parameters: [ToolParameter("from", .string, "")], result: "09:30 Standup",
