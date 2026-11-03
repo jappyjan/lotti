@@ -466,3 +466,43 @@ test('validation errors are reported, not thrown', async () => {
     /Unknown operation/,
   );
 });
+
+test('"switch to Claude" via the agent (default tool groups) only proposes; the app switches directly', async () => {
+  const t = makeApp();
+  t.mock.script(
+    call('providers_set_active', { active: 'anthropic' }),
+    call('providers_set_model', {
+      provider: 'deepseek',
+      model: 'deepseek-reasoner',
+    }),
+    answer('Vorgeschlagen'),
+  );
+  const before = t.app.providers.activeId();
+  const a = await t.app.ask({
+    text: 'Wechsel zu Claude',
+    channel: 'phone',
+    locale: 'de',
+  });
+  assert.equal(t.app.providers.activeId(), before, 'nothing happened yet');
+  assert.equal(a.actions.length, 2);
+  assert.deepEqual(
+    a.actions.map((x) => x.tool),
+    ['op:providers.set_active', 'op:providers.set_model'],
+  );
+  const p = await t.app.actions.perform(a.actions[0]!.id);
+  assert.equal(p.ok, true);
+  assert.equal(t.app.providers.activeId(), 'anthropic');
+  // credentials never reach the agent
+  assert.ok(
+    !t.app.tools
+      .all()
+      .some((x) => /set_credential|codex_login_start/.test(x.name)),
+  );
+  // the app itself is not asked for a tap
+  const direct = await t.app.ops.invoke(
+    'providers.set_active',
+    { active: 'deepseek' },
+    'app',
+  );
+  assert.equal(direct.ok && !direct.proposed, true);
+});

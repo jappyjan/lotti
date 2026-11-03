@@ -67,7 +67,9 @@ export const coreOps = [
       active: providerId,
       fallback: z.string().optional(),
     }),
-    risk: 'free',
+    risk: 'tap',
+    proposalTitle: (i) =>
+      `Switch provider to ${i.active}${i.fallback ? ` (fallback ${i.fallback})` : ''}`,
     handler(i, { app }) {
       for (const id of [i.active, i.fallback].filter(Boolean) as string[])
         if (!app.providers.get(id)) throw new Error(`Unknown provider ${id}`);
@@ -95,7 +97,8 @@ export const coreOps = [
     group: 'providers',
     description: 'Set the model id used for a provider.',
     inputSchema: z.object({ provider: providerId, model: z.string().min(1) }),
-    risk: 'free',
+    risk: 'tap',
+    proposalTitle: (i) => `Use model ${i.model} for ${i.provider}`,
     handler(i, { app }) {
       if (!app.providers.get(i.provider))
         throw new Error(`Unknown provider ${i.provider}`);

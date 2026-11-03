@@ -232,7 +232,7 @@ test('registerIntegrations: all slots filled, new ops present and sorted into th
     assert.ok(tools.includes(n), n);
   assert.ok(
     !tools.some((n) =>
-      /google|codex_login|push_configure|set_credential/.test(n),
+      /google|codex_login_start|codex_logout|push_configure|set_credential/.test(n),
     ),
   );
 });

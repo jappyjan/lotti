@@ -115,6 +115,9 @@ const MIGRATIONS: string[] = [
   /* 5: account sync marker */ `
   ALTER TABLE accounts ADD COLUMN last_sync_at INTEGER;
   `,
+  /* 6: actions an inbox item offers (JSON array of proposed actions) */ `
+  ALTER TABLE inbox ADD COLUMN actions TEXT;
+  `,
 ];
 
 export function migrate(db: Db): void {

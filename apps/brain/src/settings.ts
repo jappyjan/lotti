@@ -21,6 +21,12 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: 'deepseek-chat',
     description: 'DeepSeek model id',
   },
+  'provider.deepseek.base_url': {
+    default: '',
+    description:
+      'DeepSeek API base URL (empty = https://api.deepseek.com). Any OpenAI-compatible endpoint works.',
+    safety: true,
+  },
   'provider.openai.model': {
     default: 'gpt-4.1-mini',
     description: 'OpenAI model id',
@@ -67,6 +73,8 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
       'status',
       'catchup',
       'bring',
+      'providers',
+      'mcp',
     ],
     description: 'Op groups the agent may use as tools (app_only ops never)',
     safety: true,

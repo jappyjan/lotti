@@ -55,7 +55,7 @@ src/
 
 - HTTP: `GET /api/v1/ops`, `POST /api/v1/ops/<name>` -> `{ok:true,result,undo?}` / `{ok:false,error}` (device token; everything).
 - Admin MCP: `POST /mcp/admin` (streamable HTTP, JSON-RPC). **Off** until an admin token exists (`admin_token.create` in the app; the token is shown once, stored hashed). No `app_only` ops. Tool names are op names with `_` (`jobs_create`).
-- Agent: ops of the groups in setting `agent.op_tool_groups` (default memory, inbox, jobs, skills, scripts, settings, status, catchup) are tools for the internal agent loop.
+- Agent: ops of the groups in setting `agent.op_tool_groups` (default memory, inbox, jobs, skills, scripts, settings, status, catchup, bring, providers, mcp; `tap` ops such as `providers.set_active`, `providers.set_model` and `mcp.*` only PROPOSE an action when the agent calls them) are tools for the internal agent loop.
 
 Risk rules: `app_only` never reaches MCP/agent. `tap` called by MCP/agent returns a **proposed server action** (`op:<name>`) that runs only after the app sends `perform`; from the app it runs directly. `free` ops return an `undo` handle where possible (job/memory/skill/script/inbox/setting/Bring), undone with `undo {undoId}`.
 

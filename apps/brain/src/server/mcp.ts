@@ -74,6 +74,15 @@ async function handleOne(
             content: [{ type: 'text', text: `Unknown tool: ${name}` }],
           });
         const r = await app.ops.invoke(op.name, args, 'mcp');
+        // Nobody is on the other end to tap: surface the proposal in the app's inbox to confirm.
+        if (r.ok && r.proposed)
+          app.inbox.create({
+            kind: 'info',
+            title: r.proposed.title,
+            summary: 'Requested through the admin MCP. Confirm to apply.',
+            actions: [r.proposed],
+            expiresInHours: 24,
+          });
         return ok({
           isError: !r.ok,
           content: [{ type: 'text', text: r.ok ? r.text : r.error }],

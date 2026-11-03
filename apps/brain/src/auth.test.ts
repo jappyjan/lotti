@@ -328,3 +328,38 @@ test('starting with another MASTER_KEY on existing data fails with a clear messa
   assert.equal(again.secrets.get('x'), 'y');
   again.db.close();
 });
+
+test('admin MCP: a tap op creates a proposal that shows up as an inbox item with the action', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const { token } = t.app.auth.createAdminToken('claude');
+    const r = (await (
+      await fetch(
+        base(srv.port) + '/mcp/admin',
+        j(
+          {
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'tools/call',
+            params: {
+              name: 'providers_set_active',
+              arguments: { active: 'anthropic' },
+            },
+          },
+          token,
+        ),
+      )
+    ).json()) as any;
+    assert.equal(r.result.isError, false);
+    assert.notEqual(t.app.providers.activeId(), 'anthropic');
+    const item = t.app.inbox.list()[0]!;
+    assert.equal(item.actions?.length, 1);
+    assert.equal(item.actions![0]!.tool, 'op:providers.set_active');
+    const p = await t.app.actions.perform(item.actions![0]!.id);
+    assert.equal(p.ok, true);
+    assert.equal(t.app.providers.activeId(), 'anthropic');
+  } finally {
+    await srv.close();
+  }
+});

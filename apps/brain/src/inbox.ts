@@ -1,3 +1,4 @@
+import type { ProposedAction } from './actions.ts';
 import type { App } from './app.ts';
 import { HOUR, isoLocal } from './util/clock.ts';
 import { newId } from './util/crypto.ts';
@@ -14,6 +15,8 @@ export interface InboxItem {
   createdAt: string;
   expiresAt?: string;
   status: InboxStatus;
+  /** Things the user can do with the item (max 2), e.g. a proposed change to confirm. */
+  actions?: ProposedAction[];
 }
 
 interface Row {
@@ -26,6 +29,7 @@ interface Row {
   created_at: number;
   expires_at: number | null;
   status: InboxStatus;
+  actions: string | null;
 }
 
 function toItem(r: Row): InboxItem {
@@ -39,6 +43,9 @@ function toItem(r: Row): InboxItem {
     createdAt: isoLocal(r.created_at),
     ...(r.expires_at ? { expiresAt: isoLocal(r.expires_at) } : {}),
     status: r.status,
+    ...(r.actions
+      ? { actions: JSON.parse(r.actions) as ProposedAction[] }
+      : {}),
   };
 }
 
@@ -49,6 +56,7 @@ export interface NewInboxItem {
   body?: string;
   sourceRef?: string;
   expiresInHours?: number;
+  actions?: ProposedAction[];
   /** Skip creating if an item with the same sourceRef already exists (any status). */
   dedupe?: boolean;
 }
@@ -70,8 +78,8 @@ export class InboxService {
       n.expiresInHours ?? this.app.settings.num('inbox.default_expiry_hours');
     const id = newId('in_');
     this.app.db.run(
-      `INSERT INTO inbox(id,kind,title,summary,body,source_ref,created_at,expires_at,status,updated_at)
-       VALUES(?,?,?,?,?,?,?,?, 'pending', ?)`,
+      `INSERT INTO inbox(id,kind,title,summary,body,source_ref,created_at,expires_at,status,updated_at,actions)
+       VALUES(?,?,?,?,?,?,?,?, 'pending', ?, ?)`,
       id,
       n.kind ?? 'info',
       n.title,
@@ -81,6 +89,7 @@ export class InboxService {
       now,
       hours > 0 ? now + hours * HOUR : null,
       now,
+      n.actions?.length ? JSON.stringify(n.actions.slice(0, 2)) : null,
     );
     const item = this.get(id)!;
     this.app.hub.broadcast({
