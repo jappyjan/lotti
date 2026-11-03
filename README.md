@@ -27,7 +27,7 @@ MASTER_KEY=$(openssl rand -hex 32) docker compose up -d   # build context is the
 docker compose logs brain                                  # prints a pairing code, URL and QR
 ```
 
-Only `MASTER_KEY` is needed (it encrypts secrets in `/data`); `PUBLIC_URL` and the APNs key are optional. Reach it over Tailscale/HTTPS (e.g. Coolify). `GET /health` returns OK.
+Only `MASTER_KEY` is needed (it encrypts secrets in `/data`); `PUBLIC_URL` and the APNs key are optional. Reach it over Tailscale/HTTPS (e.g. Coolify). The app allows plain `http://` only for IP addresses, `.local` and single-label host names; use HTTPS (e.g. `tailscale serve`) for a `*.ts.net` name. `GET /health` returns OK.
 
 ## Pair and set up (all in the app)
 

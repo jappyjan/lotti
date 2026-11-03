@@ -178,7 +178,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 - Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
 - MCP client: stdio and streamable HTTP servers, added and tested in the app, with per-tool confirmation switches.
 
-**Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces old turns); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.
+**Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces the old turns in the model's context; the turns themselves are kept, flagged `compacted`, so the history stays complete and searchable); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.
 
 **Memory and dreaming.** SQLite + FTS5, no embeddings. Facts are extracted after compaction or conversation end, plus explicit remember/forget; the top relevant memories go into the prompt. Lotti saves reusable scripts in `workspace/scripts/` and skills in `workspace/skills/<name>/SKILL.md`; the skill index is in the prompt and skills load on demand. A nightly **dreaming** job (03:00, editable) merges duplicates, supersedes contradictions (newest wins), drops stale memories, tidies skills and writes a report.
 
@@ -186,7 +186,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 
 **Self-management (no CLI).** The admin MCP server is always attached to the agent. Free with a visible line and Undo: jobs, memory, skills, scripts, inbox, catch-up and other non-security settings. Need a tap: switching providers or models, MCP server changes, safety settings. App only, never through the agent: credentials (keys, passwords, OAuth, pairing and admin tokens). External access to the admin MCP is off by default and uses its own token made in the app.
 
-**Safety.** Mail and web content is untrusted. Mitigations: no secrets in the shell env, non-root container, external-effect actions tap-confirmed, credentials app-only, commands logged. Residual risk, accepted for a personal tool: data the agent can read could be sent out via curl.
+**Safety.** Mail and web content is untrusted. Mitigations: no secrets in the shell env, non-root container, external-effect actions tap-confirmed, credentials app-only, commands logged. Residual risk, accepted for a personal tool: data the agent can read could be sent out via curl. The shell runs as the same user as the server, so on Linux it can also read the server's own `/proc/<pid>/environ` (including `MASTER_KEY`) and `/data`; the real boundary is the container. Running the shell as a separate unprivileged user is a known follow-up.
 
 **Not built yet:** WhatsApp, Matrix, Signal, Telegram and iMessage read/write. The inbox `kind`, the tool layout and the accounts screen leave room for them.
 
