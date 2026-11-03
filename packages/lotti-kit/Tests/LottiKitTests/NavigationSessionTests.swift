@@ -80,7 +80,9 @@ struct NavigationSessionTests {
         try? await Task.sleep(for: .milliseconds(50))
         session.setRoute(route())
         feed.yield(fix(52.5209, 13.4023))  // near the destination
-        try? await eventually(timeout: 5) { ended == .arrived }
+        try? await eventually(timeout: 5) {
+            ended == .arrived && commands(link).contains(G2Navigation.cmdArrive) && !link.displaySuspended
+        }
         #expect(ended == .arrived)
         #expect(commands(link).contains(G2Navigation.cmdArrive))
         #expect(!link.displaySuspended)
