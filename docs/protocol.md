@@ -54,7 +54,7 @@ Both sides are built against this file. Change it first, then the code.
 
 ### Inbox item
 
-`{id, kind (mail|calendar|job|reminder|info|…), title, summary, body, sourceRef?, createdAt, expiresAt?, status (pending|seen|dismissed|expired)}`
+`{id, kind (mail|calendar|job|reminder|info|…), title, summary, body, sourceRef?, createdAt, expiresAt?, startsAt? (calendar items: event start), actions? (≤2 proposed actions, same shape as an answer's), status (pending|seen|dismissed|expired)}`
 
 ## Management API (HTTP/JSON)
 

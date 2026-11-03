@@ -40,7 +40,7 @@ export function noteAccountError(
 ): void {
   app.db.run(
     "UPDATE accounts SET status='error', last_error=? WHERE id=?",
-    e instanceof Error ? e.message : String(e),
+    errText(e),
     accountId,
   );
 }
@@ -48,5 +48,22 @@ export function noteAccountError(
 export const strList = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
-export const errText = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
+/** A readable reason for the app: unwraps Node's "fetch failed" cause and imapflow's terse errors. */
+export function errText(e: unknown): string {
+  if (!(e instanceof Error)) return String(e);
+  const x = e as Error & {
+    cause?: { code?: string; message?: string };
+    authenticationFailed?: boolean;
+    responseText?: string;
+    code?: string;
+  };
+  if (x.authenticationFailed)
+    return 'Mail login failed: check the username and (app-specific) password.';
+  if (e.message === 'fetch failed' || e.message === 'Command failed') {
+    const why = x.cause?.code ?? x.cause?.message ?? x.responseText ?? x.code;
+    return e.message === 'fetch failed'
+      ? `Cannot reach the server${why ? ` (${why})` : ''}.`
+      : `The mail server refused the request${why ? ` (${why})` : ''}: check the account settings.`;
+  }
+  return e.message;
+}

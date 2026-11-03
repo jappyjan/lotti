@@ -121,6 +121,9 @@ const MIGRATIONS: string[] = [
   /* 7: compaction keeps the turns (hidden from the prompt, still readable and searchable) */ `
   ALTER TABLE turns ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
   `,
+  /* 8: when a calendar item starts (the today view counts down to it) */ `
+  ALTER TABLE inbox ADD COLUMN starts_at INTEGER;
+  `,
 ];
 
 export function migrate(db: Db): void {

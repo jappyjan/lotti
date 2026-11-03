@@ -14,6 +14,8 @@ export interface InboxItem {
   sourceRef?: string;
   createdAt: string;
   expiresAt?: string;
+  /** Calendar items: when the event starts (the phone and glasses count down to it). */
+  startsAt?: string;
   status: InboxStatus;
   /** Things the user can do with the item (max 2), e.g. a proposed change to confirm. */
   actions?: ProposedAction[];
@@ -28,6 +30,7 @@ interface Row {
   source_ref: string | null;
   created_at: number;
   expires_at: number | null;
+  starts_at: number | null;
   status: InboxStatus;
   actions: string | null;
 }
@@ -42,6 +45,7 @@ function toItem(r: Row): InboxItem {
     ...(r.source_ref ? { sourceRef: r.source_ref } : {}),
     createdAt: isoLocal(r.created_at),
     ...(r.expires_at ? { expiresAt: isoLocal(r.expires_at) } : {}),
+    ...(r.starts_at ? { startsAt: isoLocal(r.starts_at) } : {}),
     status: r.status,
     ...(r.actions
       ? { actions: JSON.parse(r.actions) as ProposedAction[] }
@@ -56,6 +60,8 @@ export interface NewInboxItem {
   body?: string;
   sourceRef?: string;
   expiresInHours?: number;
+  /** Epoch ms. */
+  startsAt?: number;
   actions?: ProposedAction[];
   /** Skip creating if an item with the same sourceRef already exists (any status). */
   dedupe?: boolean;
@@ -78,8 +84,8 @@ export class InboxService {
       n.expiresInHours ?? this.app.settings.num('inbox.default_expiry_hours');
     const id = newId('in_');
     this.app.db.run(
-      `INSERT INTO inbox(id,kind,title,summary,body,source_ref,created_at,expires_at,status,updated_at,actions)
-       VALUES(?,?,?,?,?,?,?,?, 'pending', ?, ?)`,
+      `INSERT INTO inbox(id,kind,title,summary,body,source_ref,created_at,expires_at,status,updated_at,actions,starts_at)
+       VALUES(?,?,?,?,?,?,?,?, 'pending', ?, ?, ?)`,
       id,
       n.kind ?? 'info',
       n.title,
@@ -90,6 +96,7 @@ export class InboxService {
       hours > 0 ? now + hours * HOUR : null,
       now,
       n.actions?.length ? JSON.stringify(n.actions.slice(0, 2)) : null,
+      n.startsAt ?? null,
     );
     const item = this.get(id)!;
     this.app.hub.broadcast({

@@ -180,6 +180,12 @@ test('built-in meeting_soon uses the pluggable calendar and dedupes', async () =
   assert.match(r1.output!, /1 meeting/);
   assert.equal(t.app.inbox.list().length, 1);
   assert.equal(t.app.inbox.list()[0]!.kind, 'calendar');
+  // the app counts down to the start, not to the (later) expiry
+  assert.match(t.app.inbox.list()[0]!.startsAt!, /^2026-11-03T08:08:00/);
+  assert.notEqual(
+    t.app.inbox.list()[0]!.startsAt,
+    t.app.inbox.list()[0]!.expiresAt,
+  );
   t.clock.advanceMinutes(1);
   await t.app.scheduler.runNow(job.id);
   assert.equal(t.app.inbox.list().length, 1, 'same meeting not duplicated');

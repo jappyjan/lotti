@@ -398,3 +398,26 @@ test('important_mail built-in job triages unread mail from the sources', async (
   const item = t.app.inbox.list().find((i) => i.kind === 'mail')!;
   assert.equal(item.title, 'Chef fragt');
 });
+
+test('errText: readable reasons for fetch and IMAP failures', async () => {
+  const { errText } = await import('./accounts.ts');
+  const refused = Object.assign(new TypeError('fetch failed'), {
+    cause: { code: 'ECONNREFUSED' },
+  });
+  assert.equal(errText(refused), 'Cannot reach the server (ECONNREFUSED).');
+  assert.match(
+    errText(
+      Object.assign(new Error('Command failed'), {
+        authenticationFailed: true,
+      }),
+    ),
+    /login failed/,
+  );
+  assert.match(
+    errText(
+      Object.assign(new Error('Command failed'), { responseText: 'NO nope' }),
+    ),
+    /refused.*NO nope/,
+  );
+  assert.equal(errText(new Error('plain')), 'plain');
+});

@@ -507,10 +507,23 @@ export const dataOps: Operation[] = [
       body: z.string().default(''),
       sourceRef: z.string().optional(),
       expiresInHours: z.number().min(0).optional(),
+      startsAt: z
+        .string()
+        .optional()
+        .describe(
+          'Calendar items: when the event starts (ISO 8601 with offset)',
+        ),
     }),
     risk: 'free',
     handler(i, { app }) {
-      const it = app.inbox.create(i);
+      const { startsAt, ...rest } = i;
+      const start = startsAt ? Date.parse(startsAt) : NaN;
+      if (startsAt && Number.isNaN(start))
+        throw new Error(`startsAt "${startsAt}" is not an ISO date.`);
+      const it = app.inbox.create({
+        ...rest,
+        ...(Number.isNaN(start) ? {} : { startsAt: start }),
+      });
       return out(it, {
         text: `Created inbox item "${it.title}".`,
         undo: {

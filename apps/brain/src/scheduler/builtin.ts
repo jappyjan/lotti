@@ -32,6 +32,7 @@ export const builtinJobs: BuiltinJob[] = [
           title: e.title,
           summary: `Starts ${humanLocal(e.start).slice(-5)}${e.location ? ' · ' + e.location : ''}`,
           sourceRef: ref,
+          startsAt: e.start,
           expiresInHours: Math.max(1, (e.end - now) / 3_600_000),
           dedupe: true,
         });
