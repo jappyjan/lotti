@@ -1,19 +1,50 @@
 import type { App } from '../app.ts';
+import { bringConnector, BringHttp } from './bring/index.ts';
+import { calendarEventsTool } from './calendar/tool.ts';
+import { MergedCalendar } from './calendar/source.ts';
+import { connectorKinds, makeConnector } from './connectors.ts';
+import { McpClientImpl } from './mcp/client.ts';
+import { MergedMail } from './mail/source.ts';
+import { mailReadTool, mailSearchTool } from './mail/tools.ts';
+import { accountOps } from './ops.ts';
+import { ApnsPush } from './push/apns.ts';
+import { ClaudeRuntime } from './runtimes/claude.ts';
+import { CodexRuntime } from './runtimes/codex.ts';
+import { webSearchTool } from './search/web-search.ts';
 
-/**
- * Integrations agent: wire everything here (called once from main.ts after createApp()).
- *
- *   app.integrations.calendar = new GoogleCalendar(app)        // CalendarSource
- *   app.integrations.mail = new GmailSource(app)               // MailSource
- *   app.integrations.push = new ApnsPush(app.config.apns)      // PushNotifier
- *   app.integrations.mcp = new RealMcpClient(app)              // McpClient
- *   app.integrations.bring = new BringHttp(app)                // BringClient
- *   app.integrations.connectors.set('google', googleConnector) // AccountConnector
- *   app.providers.register(new CodexRuntime(app))              // agent-runtime provider (src/providers/agent-runtime.ts)
- *   app.tools.register({ name: 'web_search', ... })            // new tool (src/tools/registry.ts)
- *   app.ops.register({ name: 'google.start_oauth', risk: 'app_only', ... }) // new op (src/ops/registry.ts)
- *   app.actions.register('some_tool', async (args) => ({ ok: true, text: '...' })) // server action (perform)
- */
-export function registerIntegrations(_app: App): void {
-  // intentionally empty: all slots are stubs
+/** Wires every integration into the app (called once from main.ts after createApp()). */
+export function registerIntegrations(app: App): void {
+  const i = app.integrations;
+  i.bring = new BringHttp(app);
+  i.connectors.set('bring', bringConnector);
+  for (const k of connectorKinds) i.connectors.set(k, makeConnector(k));
+
+  const cal = new MergedCalendar(app);
+  i.calendar = cal;
+  app.actions.register('create_calendar_event', (args) =>
+    cal.createEvent(args),
+  );
+  const mail = new MergedMail(app);
+  i.mail = mail;
+
+  i.push = new ApnsPush(app);
+  const mcp = new McpClientImpl(app);
+  i.mcp = mcp;
+
+  app.providers.register(new CodexRuntime(app));
+  app.providers.register(new ClaudeRuntime(app));
+
+  for (const t of [
+    calendarEventsTool,
+    mailSearchTool,
+    mailReadTool,
+    webSearchTool,
+  ])
+    app.tools.register(t);
+  for (const op of accountOps) app.ops.register(op);
+
+  // Remote MCP tools register themselves once the servers answer (does not block start-up).
+  void mcp
+    .refresh()
+    .catch((e) => app.log.warn('mcp refresh failed', String(e)));
 }

@@ -104,6 +104,6 @@ function listTools(app: App, mode: Mode) {
   return app.tools.all().map((t) => ({
     name: t.name,
     description: t.description,
-    inputSchema: jsonSchemaOf(t.inputSchema),
+    inputSchema: t.jsonSchema ?? jsonSchemaOf(t.inputSchema),
   }));
 }

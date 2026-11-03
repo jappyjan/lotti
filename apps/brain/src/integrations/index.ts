@@ -16,12 +16,17 @@ export interface CalendarEvent {
   start: number; // epoch ms
   end: number;
   location?: string;
+  allDay?: boolean;
+  /** Calendar name (for the merged view). */
+  calendar?: string;
 }
 
 /** Used by the built-in `meeting_soon` job and the catch-up brief. */
 export interface CalendarSource {
   /** Events starting between `from` and `to` (epoch ms), sorted by start. */
   events(from: number, to: number): Promise<CalendarEvent[]>;
+  /** The next event starting at or after `from` (looks 14 days ahead). */
+  next?(from: number): Promise<CalendarEvent | undefined>;
   /** Server action `create_calendar_event` runs this after `perform`. */
   createEvent?(args: Record<string, unknown>): Promise<ActionOutcome>;
 }
@@ -32,12 +37,22 @@ export interface MailMessage {
   subject: string;
   snippet: string;
   receivedAt: number;
+  unread?: boolean;
+}
+
+export interface MailFull extends MailMessage {
+  to: string;
+  body: string;
 }
 
 /** Used by the built-in `important_mail` job. */
 export interface MailSource {
   /** Unread messages received after `since` (epoch ms). */
   unread(since: number): Promise<MailMessage[]>;
+  /** Search (Gmail syntax for Gmail, text search for IMAP). Empty query = most recent. */
+  search?(query: string, limit?: number): Promise<MailMessage[]>;
+  /** Full text of one message (ids come from search/unread). */
+  read?(id: string): Promise<MailFull>;
   /** Server action `send_mail_reply` runs this after `perform`. */
   sendReply?(args: Record<string, unknown>): Promise<ActionOutcome>;
 }
@@ -56,6 +71,8 @@ export interface DeviceInfo {
 
 /** APNs hook. Called when an inbox item is created and no socket is open. */
 export interface PushNotifier {
+  /** True when the sender has credentials (APNs key etc.). */
+  configured?(): boolean;
   notifyOffline(device: DeviceInfo, item: InboxItem): Promise<void>;
 }
 
@@ -78,6 +95,8 @@ export interface McpServerConfig {
  * return a proposed action instead of calling; see `proposeServerAction` in tools/actions.ts).
  */
 export interface McpClient {
+  /** Re-read the configured servers and (re)register their tools in the tool registry. */
+  refresh?(): Promise<void>;
   test(
     server: McpServerConfig,
   ): Promise<{ ok: boolean; tools?: string[]; error?: string }>;
@@ -98,6 +117,7 @@ export interface AccountRow {
   config: Record<string, unknown>;
   status: string;
   lastError: string | null;
+  lastSyncAt?: number | null;
 }
 
 /** One per account kind (google, imap, caldav, bring, ...). Credentials live in `app.secrets` under `account.<id>.<key>`. */
@@ -113,8 +133,26 @@ export interface AccountConnector {
 export interface BringClient {
   lists(): Promise<{ id: string; name: string }[]>;
   items(listId?: string): Promise<{ name: string; spec?: string }[]>;
-  add(item: string, spec?: string, listId?: string): Promise<ActionOutcome>;
-  remove(item: string, listId?: string): Promise<ActionOutcome>;
+  /** Recently used items (suggestions for add). */
+  recent?(listId?: string): Promise<{ name: string; spec?: string }[]>;
+  add(
+    item: string,
+    spec?: string,
+    listId?: string,
+    locale?: 'de' | 'en',
+  ): Promise<ActionOutcome>;
+  remove(
+    item: string,
+    listId?: string,
+    locale?: 'de' | 'en',
+  ): Promise<ActionOutcome>;
+  /** Credentials present and login works. */
+  status?(): Promise<{
+    connected: boolean;
+    error?: string;
+    account?: string;
+    defaultList?: string | null;
+  }>;
 }
 
 export interface Integrations {

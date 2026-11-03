@@ -388,7 +388,7 @@ export const coreOps = [
     inputSchema: z.object({}),
     risk: 'free',
     handler: (_i, { app }) => ({
-      apnsConfigured: !!app.config.apns,
+      apnsConfigured: app.integrations.push.configured?.() ?? !!app.config.apns,
       devices: app.auth.devices().map((d) => ({
         id: d.id,
         name: d.name,

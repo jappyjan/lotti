@@ -15,38 +15,39 @@ Both sides are built against this file. Change it first, then the code.
 
 ### App → server
 
-| type | fields |
-|---|---|
-| `hello` | `appVersion`, `deviceName`, `apnsToken?` |
-| `ask` | `id`, `text`, `channel` (`glasses`\|`phone`), `now`, `locale` (`de`/`en`) |
-| `cancel` | `id` (the ask id) |
-| `tool_result` | `callId`, `ok` (bool), `text` (model-readable result or error message) |
-| `perform` | `id` (client request id), `actionId` (from an answer's `actions`) |
-| `undo` | `id`, `undoId` |
-| `inbox_event` | `itemId`, `event` (`shown`\|`opened`\|`dismissed`) |
-| `inbox_sync` | – (ask for a full inbox) |
-| `presence` | `event`, `at`, `detail?` — events: `glasses_worn`, `glasses_removed`, `glasses_connected`, `glasses_disconnected`, `gesture`, `head_up`, `phone_unlock`, `app_open`, `phone_charging`, `phone_unplugged`, `phone_still`, `phone_moving` |
+| type          | fields                                                                                                                                                                                                                                  |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`       | `appVersion`, `deviceName`, `apnsToken?`                                                                                                                                                                                                |
+| `ask`         | `id`, `text`, `channel` (`glasses`\|`phone`), `now`, `locale` (`de`/`en`)                                                                                                                                                               |
+| `cancel`      | `id` (the ask id)                                                                                                                                                                                                                       |
+| `tool_result` | `callId`, `ok` (bool), `text` (model-readable result or error message)                                                                                                                                                                  |
+| `perform`     | `id` (client request id), `actionId` (from an answer's `actions`)                                                                                                                                                                       |
+| `undo`        | `id`, `undoId`                                                                                                                                                                                                                          |
+| `inbox_event` | `itemId`, `event` (`shown`\|`opened`\|`dismissed`)                                                                                                                                                                                      |
+| `inbox_sync`  | – (ask for a full inbox)                                                                                                                                                                                                                |
+| `presence`    | `event`, `at`, `detail?` — events: `glasses_worn`, `glasses_removed`, `glasses_connected`, `glasses_disconnected`, `gesture`, `head_up`, `phone_unlock`, `app_open`, `phone_charging`, `phone_unplugged`, `phone_still`, `phone_moving` |
 
 ### Server → app
 
-| type | fields |
-|---|---|
-| `welcome` | `serverVersion`, `conversationId`, `settings` (small: `catchup`, `activeProvider`) |
-| `status` | `id` (ask id), `text` (one short line, e.g. "Suche Mails …") |
-| `answer` | `id`, `conversationId`, `text`, `followUps` (≤3 strings), `actions` (≤2), `undo?` |
-| `error` | `id?`, `message` |
-| `tool_call` | `callId`, `askId?`, `name`, `args` (JSON object). Phone tools: `location`, `reminders`. The app replies with `tool_result` within 10 s. |
-| `location_access` | `phase` (`start`\|`end`), `callId`, `at` — the app shows/hides the location icon on the glasses and logs the read |
-| `performed` | `id` (the perform/undo request id), `ok`, `text`, `undo?` |
-| `inbox` | `full` (bool), `items` (upserts, or the whole list if `full`), `removedIds` |
-| `push` | `item` (an inbox item) — also sent as `inbox` change; queued server side while offline and delivered on reconnect |
-| `catchup` | `id`, `text`, `at` — one catch-up brief, shown as the first chat message / on the glasses |
-| `conversation` | `conversationId`, `event` (`new`\|`compacted`) |
-| `message` | `conversationId`, `role` (`user`\|`assistant`), `text`, `channel`, `at` — mirrors turns made on the other surface (glasses question appears in phone chat) |
+| type              | fields                                                                                                                                                     |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `welcome`         | `serverVersion`, `conversationId`, `settings` (small: `catchup`, `activeProvider`)                                                                         |
+| `status`          | `id` (ask id), `text` (one short line, e.g. "Suche Mails …")                                                                                               |
+| `answer`          | `id`, `conversationId`, `text`, `followUps` (≤3 strings), `actions` (≤2), `undo?`                                                                          |
+| `error`           | `id?`, `message`                                                                                                                                           |
+| `tool_call`       | `callId`, `askId?`, `name`, `args` (JSON object). Phone tools: `location`, `reminders`. The app replies with `tool_result` within 10 s.                    |
+| `location_access` | `phase` (`start`\|`end`), `callId`, `at` — the app shows/hides the location icon on the glasses and logs the read                                          |
+| `performed`       | `id` (the perform/undo request id), `ok`, `text`, `undo?`                                                                                                  |
+| `inbox`           | `full` (bool), `items` (upserts, or the whole list if `full`), `removedIds`                                                                                |
+| `push`            | `item` (an inbox item) — also sent as `inbox` change; queued server side while offline and delivered on reconnect                                          |
+| `catchup`         | `id`, `text`, `at` — one catch-up brief, shown as the first chat message / on the glasses                                                                  |
+| `conversation`    | `conversationId`, `event` (`new`\|`compacted`)                                                                                                             |
+| `message`         | `conversationId`, `role` (`user`\|`assistant`), `text`, `channel`, `at` — mirrors turns made on the other surface (glasses question appears in phone chat) |
 
 ### Answer actions and undo
 
 `actions[]`: `{id, title, target: "phone"|"server", tool?, args?}`.
+
 - `target: "server"` — tap sends `perform {actionId}`; server runs it and replies `performed`.
 - `target: "phone"` — the app runs it itself through its `Toolbox` (`set_timer`, `create_reminder`, `start_navigation`) after the tap. Actions never run on a brain's say-so.
 - `undo: {id, label}` is present after immediate actions (Bring! add/remove, self-management). The app sends `undo {undoId}`.
@@ -83,3 +84,4 @@ Where the backend is more specific than the contract above:
 - A `tap` op proposed by the agent appears as an action `{target:"server", tool:"op:<name>"}`.
 - HTTP ops: `400 {ok:false,error}` for invalid input or a failing op, `404` for an unknown op; a successful response may carry `undo: {id,label}`.
 - Admin MCP: `POST /mcp/admin` (JSON-RPC over streamable HTTP, stateless, JSON replies), `Authorization: Bearer <admin token>`; `404` while no admin token exists. Agent tools for subscription runtimes: `POST /mcp/tools` with the internal token.
+- Integrations (details in `apps/brain/README.md`, section "Integrations"): account kinds `google|icloud|caldav|imap|bring`; Google sign-in is `accounts.google_auth_url` (PKCE, redirect `lotti://oauth`) then `accounts.google_exchange {code, state}`; Codex login is `providers.codex_login_start` (returns `{url, code}` to display) then polling `providers.codex_login_status`; the Claude runtime uses the `claude setup-token` token as the `claude_code` provider credential; `push.configure` / `push.test` set up APNs. No change to the WebSocket messages. New `tool_call`-free agent tools: `calendar_events`, `mail_search`, `mail_read`, `web_search`, `bring_*`, `mcp__<server>__<tool>`.

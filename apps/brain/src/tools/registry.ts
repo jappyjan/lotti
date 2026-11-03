@@ -29,6 +29,8 @@ export interface ToolDef {
   name: string;
   description: string;
   inputSchema: z.ZodType;
+  /** Use instead of the schema derived from `inputSchema` (remote MCP tools bring their own JSON Schema). */
+  jsonSchema?: Record<string, unknown>;
   /** server: runs here. phone: proxied to the phone over the WebSocket (10 s). */
   kind: 'server' | 'phone';
   /** The tool only PROPOSES an action; the user must tap (perform) before anything happens. Informational. */
@@ -48,6 +50,9 @@ export class ToolRegistry {
 
   register(t: ToolDef): void {
     this.tools.set(t.name, t);
+  }
+  unregister(name: string): void {
+    this.tools.delete(name);
   }
   get(name: string): ToolDef | undefined {
     return this.tools.get(name);
@@ -91,7 +96,7 @@ export class ToolRegistry {
     return tools.map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: jsonSchemaOf(t.inputSchema),
+      parameters: t.jsonSchema ?? jsonSchemaOf(t.inputSchema),
     }));
   }
 

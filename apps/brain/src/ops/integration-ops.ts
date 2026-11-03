@@ -54,7 +54,7 @@ const mcpFields = {
   enabled: z.boolean().optional(),
 };
 
-function accountRow(app: App, id: string): AccountRow | undefined {
+export function accountRow(app: App, id: string): AccountRow | undefined {
   const r = app.db.get<{
     id: string;
     kind: string;
@@ -62,6 +62,7 @@ function accountRow(app: App, id: string): AccountRow | undefined {
     config: string;
     status: string;
     last_error: string | null;
+    last_sync_at: number | null;
   }>('SELECT * FROM accounts WHERE id=?', id);
   return r
     ? {
@@ -71,8 +72,16 @@ function accountRow(app: App, id: string): AccountRow | undefined {
         config: JSON.parse(r.config),
         status: r.status,
         lastError: r.last_error,
+        lastSyncAt: r.last_sync_at ?? null,
       }
     : undefined;
+}
+
+/** Called after MCP server config changes: re-register remote tools. Failures are logged, never thrown. */
+function refreshMcp(app: App): void {
+  void app.integrations.mcp
+    .refresh?.()
+    .catch((e) => app.log.warn('mcp refresh failed', String(e)));
 }
 
 const bringStub = (app: App) => {
@@ -120,6 +129,7 @@ export const integrationOps: Operation[] = [
         i.enabled === false ? 0 : 1,
         app.clock.now(),
       );
+      refreshMcp(app);
       return out(
         { id },
         {
@@ -161,6 +171,7 @@ export const integrationOps: Operation[] = [
         i.enabled === undefined ? cur.enabled : i.enabled ? 1 : 0,
         i.id,
       );
+      refreshMcp(app);
       return { id: i.id };
     },
   }),
@@ -174,6 +185,9 @@ export const integrationOps: Operation[] = [
     handler(i, { app }) {
       const r = app.db.run('DELETE FROM mcp_servers WHERE id=?', i.id);
       if (!r.changes) throw new Error('No such MCP server.');
+      for (const x of app.secrets.list(`mcp.${i.id}.`))
+        app.secrets.delete(x.name);
+      refreshMcp(app);
       return { deleted: i.id };
     },
   }),
@@ -198,7 +212,50 @@ export const integrationOps: Operation[] = [
         r.error ?? null,
         i.id,
       );
+      if (r.ok) refreshMcp(app);
       return r;
+    },
+  }),
+  defineOp({
+    name: 'mcp.tools',
+    group: 'mcp',
+    description:
+      'Tools of an MCP server with description and whether each needs confirmation (connects to the server).',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'tap',
+    proposalTitle: (i) => `List tools of MCP server ${i.id}`,
+    async handler(i, { app }) {
+      const row = app.db.get<McpRow>(
+        'SELECT * FROM mcp_servers WHERE id=?',
+        i.id,
+      );
+      if (!row) throw new Error('No such MCP server.');
+      const srv = toMcp(row);
+      const tools = await app.integrations.mcp.listTools(srv);
+      return tools.map((t) => ({
+        name: t.name,
+        description: t.description ?? '',
+        needsConfirmation: mcpToolNeedsConfirmation(srv, t.name),
+      }));
+    },
+  }),
+  defineOp({
+    name: 'mcp.set_credential',
+    group: 'mcp',
+    description:
+      'Store a secret for an MCP server: key "bearer" (HTTP Authorization bearer token) or "env.NAME" (environment variable for stdio servers). Write-only.',
+    inputSchema: z.object({
+      id: z.string(),
+      key: z.string().regex(/^(bearer|env\.[A-Za-z_][A-Za-z0-9_]*)$/),
+      value: z.string().min(1),
+    }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!app.db.get('SELECT 1 AS x FROM mcp_servers WHERE id=?', i.id))
+        throw new Error('No such MCP server.');
+      app.secrets.set(`mcp.${i.id}.${i.key}`, i.value);
+      refreshMcp(app);
+      return { id: i.id, key: i.key, set: true };
     },
   }),
   defineOp({
@@ -228,6 +285,7 @@ export const integrationOps: Operation[] = [
         JSON.stringify(flags),
         i.id,
       );
+      refreshMcp(app);
       return out(
         { id: i.id, tool: i.tool, needsConfirmation: i.needsConfirmation },
         {
@@ -362,19 +420,24 @@ export const integrationOps: Operation[] = [
     },
   }),
 
-  // ---- bring (stub: integrations agent provides app.integrations.bring) ---------------------------------
+  // ---- bring ---------------------------------------------------------------------------------------
   defineOp({
     name: 'bring.status',
     group: 'bring',
-    description: 'Whether the Bring! shopping list is connected.',
+    description:
+      'Whether the Bring! shopping list is connected (login works) and the default list.',
     inputSchema: z.object({}),
     risk: 'free',
-    handler: (_i, { app }) => ({ connected: !!app.integrations.bring }),
+    async handler(_i, { app }) {
+      const b = app.integrations.bring;
+      if (!b) return { connected: false };
+      return b.status ? await b.status() : { connected: true };
+    },
   }),
   defineOp({
     name: 'bring.lists',
     group: 'bring',
-    description: 'Bring! shopping lists.',
+    description: 'Bring! shopping lists (id, name).',
     inputSchema: z.object({}),
     risk: 'free',
     handler: (_i, { app }) => bringStub(app).lists(),
@@ -382,23 +445,103 @@ export const integrationOps: Operation[] = [
   defineOp({
     name: 'bring.items',
     group: 'bring',
-    description: 'Items on a Bring! list.',
+    description:
+      'Items on a Bring! list (name, spec like "2 l"). Without listId: the default list.',
     inputSchema: z.object({ listId: z.string().optional() }),
     risk: 'free',
     handler: (i, { app }) => bringStub(app).items(i.listId),
   }),
   defineOp({
+    name: 'bring.recent',
+    group: 'bring',
+    description:
+      'Recently used Bring! items (what was bought lately; good suggestions).',
+    inputSchema: z.object({ listId: z.string().optional() }),
+    risk: 'free',
+    async handler(i, { app }) {
+      const b = bringStub(app);
+      if (!b.recent) throw new Error('Recently used items are not available.');
+      return b.recent(i.listId);
+    },
+  }),
+  defineOp({
+    name: 'bring.set_default_list',
+    group: 'bring',
+    description: 'Choose the default Bring! list (id from bring.lists).',
+    inputSchema: z.object({ listId: z.string().min(1) }),
+    risk: 'free',
+    handler(i, { app }) {
+      const prev = app.settings.str('bring.default_list');
+      app.settings.set('bring.default_list', i.listId);
+      return out(
+        { defaultList: i.listId },
+        {
+          undo: {
+            label: 'Default list back',
+            op: 'bring.set_default_list',
+            input: { listId: prev || i.listId },
+          },
+        },
+      );
+    },
+  }),
+  defineOp({
+    name: 'bring.login',
+    group: 'bring',
+    description:
+      'Save the Bring! login (email + password, stored encrypted, write-only) and check it works.',
+    inputSchema: z.object({
+      email: z.string().min(3),
+      password: z.string().min(1),
+    }),
+    risk: 'app_only',
+    async handler(i, { app }) {
+      let id = app.db.get<{ id: string }>(
+        "SELECT id FROM accounts WHERE kind='bring' ORDER BY created_at LIMIT 1",
+      )?.id;
+      if (!id) {
+        id = newId('acc_');
+        app.db.run(
+          'INSERT INTO accounts(id,kind,label,config,created_at) VALUES(?,?,?,?,?)',
+          id,
+          'bring',
+          'Bring!',
+          '{}',
+          app.clock.now(),
+        );
+      }
+      app.secrets.set(`account.${id}.email`, i.email);
+      app.secrets.set(`account.${id}.password`, i.password);
+      const acc = accountRow(app, id)!;
+      const r = await app.integrations.connectors.get('bring')?.check(acc, app);
+      const res = r ?? {
+        ok: false,
+        status: 'not_connected',
+        error: 'No Bring! connector installed.',
+      };
+      app.db.run(
+        'UPDATE accounts SET status=?, last_error=? WHERE id=?',
+        res.status,
+        res.error ?? null,
+        id,
+      );
+      return { accountId: id, ...res };
+    },
+  }),
+  defineOp({
     name: 'bring.add',
     group: 'bring',
-    description: 'Add an item to the Bring! shopping list.',
+    description:
+      'Add an item to the Bring! shopping list at once (spec e.g. "2 l"). Returns a Done line and an undo.',
     inputSchema: z.object({
       item: z.string().min(1),
       spec: z.string().optional(),
       listId: z.string().optional(),
+      locale: z.enum(['de', 'en']).optional(),
     }),
     risk: 'free',
     async handler(i, { app }) {
-      const r = await bringStub(app).add(i.item, i.spec, i.listId);
+      const r = await bringStub(app).add(i.item, i.spec, i.listId, i.locale);
       if (!r.ok) throw new Error(r.text);
       return out(
         { added: i.item },
@@ -416,14 +559,16 @@ export const integrationOps: Operation[] = [
   defineOp({
     name: 'bring.remove',
     group: 'bring',
-    description: 'Remove an item from the Bring! shopping list.',
+    description:
+      'Take an item off the Bring! shopping list (checks it off, like ticking it in the app). Returns a Done line and an undo.',
     inputSchema: z.object({
       item: z.string().min(1),
       listId: z.string().optional(),
+      locale: z.enum(['de', 'en']).optional(),
     }),
     risk: 'free',
     async handler(i, { app }) {
-      const r = await bringStub(app).remove(i.item, i.listId);
+      const r = await bringStub(app).remove(i.item, i.listId, i.locale);
       if (!r.ok) throw new Error(r.text);
       return out(
         { removed: i.item },

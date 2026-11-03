@@ -112,6 +112,9 @@ const MIGRATIONS: string[] = [
     args TEXT NOT NULL DEFAULT '[]', enabled INTEGER NOT NULL DEFAULT 1,
     tool_flags TEXT NOT NULL DEFAULT '{}', status TEXT, last_error TEXT, created_at INTEGER NOT NULL);
   `,
+  /* 5: account sync marker */ `
+  ALTER TABLE accounts ADD COLUMN last_sync_at INTEGER;
+  `,
 ];
 
 export function migrate(db: Db): void {

@@ -37,6 +37,16 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: '',
     description: 'Claude Code runtime model (empty = CLI default)',
   },
+  'bring.default_list': {
+    default: '',
+    description:
+      'Bring! list id used when none is given (empty = your first list)',
+  },
+  'push.apns.production': {
+    default: true,
+    description:
+      'Use the production APNs server (false = sandbox, for dev builds)',
+  },
   'agent.max_rounds': {
     default: 8,
     description: 'Max tool rounds per question',
@@ -56,6 +66,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
       'settings',
       'status',
       'catchup',
+      'bring',
     ],
     description: 'Op groups the agent may use as tools (app_only ops never)',
     safety: true,
