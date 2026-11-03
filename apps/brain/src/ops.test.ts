@@ -506,3 +506,23 @@ test('"switch to Claude" via the agent (default tool groups) only proposes; the 
   );
   assert.equal(direct.ok && !direct.proposed, true);
 });
+
+test('skill index uses the frontmatter description, not the first frontmatter line', async () => {
+  const t = makeApp();
+  t.app.skills.put(
+    'skill',
+    'zug',
+    '---\nname: zug\ndescription: "Prüft Zugverbindungen"\n---\n# Zug\nBenutze curl.',
+  );
+  t.app.skills.put('skill', 'plain', '---\nname: plain\n---\n# Plain skill\nx');
+  const l = t.app.skills.list('skill');
+  assert.equal(
+    l.find((x) => x.name === 'zug')!.description,
+    'Prüft Zugverbindungen',
+  );
+  assert.equal(
+    l.find((x) => x.name === 'plain')!.description,
+    'Plain skill',
+  );
+  assert.match(t.app.skills.index(), /zug: Prüft Zugverbindungen/);
+});

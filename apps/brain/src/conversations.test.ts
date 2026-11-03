@@ -56,6 +56,14 @@ test('after 10 min idle: LLM summary replaces old turns, recent turns stay', asy
   assert.equal(turns.length, 2, 'only the 2 most recent turns remain');
   assert.equal(turns[0]!.text, 'Und das Hotel');
   assert.match(t.app.conversations.summaryOf(id)!, /Rom/);
+  // the history is kept in full (flagged), and stays searchable
+  const full = t.app.conversations.get(id)!.turns;
+  assert.equal(full.length, 6);
+  assert.deepEqual(
+    full.map((x) => !!x.compacted),
+    [true, true, true, true, false, false],
+  );
+  assert.ok(t.app.conversations.search('Rom').length > 0);
   assert.equal(
     t.app.memory.search('Rom')[0]!.text,
     'Jan reist nach Rom',

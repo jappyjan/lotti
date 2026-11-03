@@ -79,7 +79,16 @@ export class SkillStore {
 
   private describe(kind: FileKind, f: string): string {
     try {
-      const lines = readFileSync(join(this.dir(kind), f), 'utf8').split('\n');
+      const text = readFileSync(join(this.dir(kind), f), 'utf8');
+      // SKILL.md frontmatter: `description:` wins over the first body line.
+      const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+      const d = fm && /^description:\s*(.+)$/im.exec(fm[1]!);
+      if (d)
+        return d[1]!
+          .trim()
+          .replace(/^["']|["']$/g, '')
+          .slice(0, 140);
+      const lines = (fm ? text.slice(fm[0].length) : text).split('\n');
       const l = lines
         .map((x) =>
           x.replace(/^(#!.*|#+\s*|\/\/\s*|description:\s*)/i, '').trim(),

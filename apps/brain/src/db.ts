@@ -118,6 +118,9 @@ const MIGRATIONS: string[] = [
   /* 6: actions an inbox item offers (JSON array of proposed actions) */ `
   ALTER TABLE inbox ADD COLUMN actions TEXT;
   `,
+  /* 7: compaction keeps the turns (hidden from the prompt, still readable and searchable) */ `
+  ALTER TABLE turns ADD COLUMN compacted INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 export function migrate(db: Db): void {

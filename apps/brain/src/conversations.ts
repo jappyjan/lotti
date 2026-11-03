@@ -9,6 +9,8 @@ export interface Turn {
   text: string;
   channel: string | null;
   at: string;
+  /** Summarised away: no longer part of the model's context, still shown in the history. */
+  compacted?: boolean;
 }
 
 export interface ConversationInfo {
@@ -122,7 +124,8 @@ export class ConversationService {
     });
   }
 
-  turns(conversationId: string, limit = 1000): Turn[] {
+  /** Live turns (the model's context). `all` also returns the compacted ones, flagged. */
+  turns(conversationId: string, limit = 1000, all = false): Turn[] {
     return this.app.db
       .all<{
         id: number;
@@ -130,8 +133,9 @@ export class ConversationService {
         text: string;
         channel: string | null;
         at: number;
+        compacted: number;
       }>(
-        'SELECT * FROM turns WHERE conversation_id=? ORDER BY id LIMIT ?',
+        `SELECT * FROM turns WHERE conversation_id=? ${all ? '' : 'AND compacted=0'} ORDER BY id LIMIT ?`,
         conversationId,
         limit,
       )
@@ -141,6 +145,7 @@ export class ConversationService {
         text: t.text,
         channel: t.channel,
         at: isoLocal(t.at),
+        ...(t.compacted ? { compacted: true } : {}),
       }));
   }
 
@@ -162,7 +167,7 @@ export class ConversationService {
   async compact(id: string): Promise<boolean> {
     const keep = this.app.settings.num('conversation.keep_recent_turns');
     const all = this.app.db.all<{ id: number; role: string; text: string }>(
-      'SELECT id, role, text FROM turns WHERE conversation_id=? ORDER BY id',
+      'SELECT id, role, text FROM turns WHERE conversation_id=? AND compacted=0 ORDER BY id',
       id,
     );
     if (all.length <= keep) return false;
@@ -187,10 +192,8 @@ export class ConversationService {
       return false;
     }
     this.app.db.tx(() => {
-      for (const t of old) {
-        this.app.db.run('DELETE FROM turns WHERE id=?', t.id);
-        this.app.db.run('DELETE FROM turns_fts WHERE turn_id=?', String(t.id));
-      }
+      for (const t of old)
+        this.app.db.run('UPDATE turns SET compacted=1 WHERE id=?', t.id);
       this.app.db.run(
         'UPDATE conversations SET summary=?, compacted_at=? WHERE id=?',
         summary,
@@ -267,7 +270,9 @@ export class ConversationService {
       'SELECT * FROM conversations WHERE id=?',
       id,
     );
-    return c ? { conversation: toInfo(c), turns: this.turns(id) } : undefined;
+    return c
+      ? { conversation: toInfo(c), turns: this.turns(id, 5000, true) }
+      : undefined;
   }
 
   /** FTS5 over titles, summaries and turns. */
