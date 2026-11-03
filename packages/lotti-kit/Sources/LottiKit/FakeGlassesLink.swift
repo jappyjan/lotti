@@ -21,6 +21,10 @@ public final class FakeGlassesLink: GlassesLink {
     /// How often the mic was switched on and off, to check streams are shared, not restarted.
     public private(set) var microphoneStarts = 0
     public private(set) var microphoneStops = 0
+    /// Every `startMicrophone()` call, failed ones included (to check retries back off).
+    public private(set) var microphoneAttempts = 0
+    /// Makes `startMicrophone()` take this long, like the real glasses' ack.
+    public var microphoneDelay: Duration?
     public private(set) var headTracking = false
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
@@ -66,6 +70,8 @@ public final class FakeGlassesLink: GlassesLink {
     public func send(_ event: InputEvent) { inputBroadcast.send(event) }
 
     public func startMicrophone() async throws -> AsyncStream<[Int16]> {
+        microphoneAttempts += 1
+        if let microphoneDelay { try? await Task.sleep(for: microphoneDelay) }
         if let microphoneError { throw microphoneError }
         mic?.finish()
         let (stream, continuation) = AsyncStream<[Int16]>.makeStream()

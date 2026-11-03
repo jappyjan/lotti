@@ -32,7 +32,8 @@ public final class MicrophoneHub {
 
     /// Audio from now on. Opens the glasses' mic if needed; throws if it won't start.
     public func subscribe() async throws -> Subscription {
-        let (stream, continuation) = AsyncStream<[Int16]>.makeStream()
+        // 5 s of chunks, like the link's own stream: a stalled subscriber can't pile up audio.
+        let (stream, continuation) = AsyncStream<[Int16]>.makeStream(bufferingPolicy: .bufferingNewest(100))
         let id = UUID()
         subscribers[id] = continuation
         do {

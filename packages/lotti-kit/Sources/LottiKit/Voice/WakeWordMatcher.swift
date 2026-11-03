@@ -47,11 +47,12 @@ public enum WakeWordMatcher {
         return folded
     }
 
-    /// Within one edit of "loti" after folding, starting with l and ending in i. The ending is
-    /// what tells "Lotti" from "Lotta", "Lotte", "Lotto" and "Lola".
+    /// Within one edit of "loti" after folding, "lo…" with a t, ending in i. The ending is what
+    /// tells "Lotti" from "Lotta", "Lotte", "Lotto" and "Lola"; the "o" and the "t" keep out
+    /// "lady", "Loki", "Lori" and "Lolly", which folding alone would let through.
     static func isName(_ word: String) -> Bool {
         let name = normalized(word)
-        guard name.count >= 3, name.first == "l", name.last == "i" else { return false }
+        guard name.count >= 3, name.hasPrefix("lo"), name.contains("t"), name.last == "i" else { return false }
         return editDistance(Array(name), Array("loti")) <= 1
     }
 

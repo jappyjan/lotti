@@ -1,20 +1,24 @@
 @preconcurrency import CoreML
 import Foundation
+import LottiKit
 @preconcurrency import SoundAnalysis
 
 /// `wake-word test`: runs the trained model on the held-out clips the way the app does
 /// (SoundAnalysis, `hey_lotti` confidence against the app's threshold) and reports per group.
 enum Evaluate {
-    static let threshold = 0.8
+    static let threshold = WakeWordDetector.defaultThreshold
 
+    /// Without a trained model and clips (a fresh checkout, CI) there is nothing to measure: it
+    /// says so and succeeds, so `nx run-many -t test` stays green.
     static func run() throws {
         guard FileManager.default.fileExists(atPath: Paths.model.path) else {
-            throw ToolError("no \(Paths.model.path): run `wake-word train` first")
+            return print("Skipped: no \(Paths.model.path). Run `pnpm nx run wake-word:generate` and `wake-word:train` first.")
         }
         try Generate.prepareUserClips()
+        let held = Clip.all().filter(\.isHeldOut)
+        guard !held.isEmpty else { return print("Skipped: no held-out clips in data/. Run `pnpm nx run wake-word:generate` first.") }
         let compiled = try MLModel.compileModel(at: Paths.model)
         let model = try MLModel(contentsOf: compiled)
-        let held = Clip.all().filter(\.isHeldOut)
 
         var table: [String: (hits: Int, total: Int)] = [:]
         var misses: [String] = []

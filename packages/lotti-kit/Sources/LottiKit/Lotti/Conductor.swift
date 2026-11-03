@@ -121,6 +121,8 @@ public final class Conductor {
     @ObservationIgnored var wakeSession: WakeSession?
     @ObservationIgnored var holdSubscription: MicrophoneHub.Subscription?
     @ObservationIgnored var wakeEnabled = false
+    /// Set while the Debug recorder takes clips, so saying "Hey Lotti" for it doesn't wake Lotti.
+    @ObservationIgnored public var wakePaused = false
     @ObservationIgnored var wakeStage2Seconds = 0.0
     /// What the "Hey Lotti" listener is doing, for the status and Debug screens.
     public internal(set) var wakeState: WakeState = .off
@@ -316,13 +318,18 @@ public final class Conductor {
         timer = Task { [weak self] in
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
-            // An unanswered or timed-out screen goes dark; the conversation stays for a while.
-            self.timer = nil
-            self.backStack = []
-            self.mode = .off
-            self.screen = nil
-            self.draw()
+            self.goDark()
         }
+    }
+
+    /// An unanswered or timed-out screen goes dark; the conversation stays for a while.
+    func goDark() {
+        timer?.cancel()
+        timer = nil
+        backStack = []
+        mode = .off
+        screen = nil
+        draw()
     }
 
     /// Sends the newest frame. Frames that were overtaken while a send was running are skipped.
@@ -353,6 +360,13 @@ public final class Conductor {
         abortWakeSession(reason: "hold-to-talk started")
         timer?.cancel()
         thinking?.cancel()
+        // A hold whose mic was still starting when you let go: drop it, so its subscription
+        // can't be left open (that would keep the glasses' mic on for good).
+        listening?.cancel()
+        if let subscription = holdSubscription {
+            holdSubscription = nil
+            Task { await microphone.unsubscribe(subscription) }
+        }
         backStack = []
         mode = .listening
         show(Screen(.listening, "Listening…"), timeout: false)
@@ -365,6 +379,10 @@ public final class Conductor {
         let audio: AsyncStream<[Int16]>
         do {
             let subscription = try await microphone.subscribe()
+            if Task.isCancelled {
+                await microphone.unsubscribe(subscription)
+                return ""
+            }
             holdSubscription = subscription
             audio = subscription.stream
             usingPhoneMic = false

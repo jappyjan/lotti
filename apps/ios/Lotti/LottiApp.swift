@@ -118,7 +118,7 @@ enum Settings {
 
     /// How sure the sound classifier must be to start checking a candidate (Debug).
     static var wakeThreshold: Double {
-        get { UserDefaults.standard.object(forKey: wakeThresholdKey) as? Double ?? 0.8 }
+        get { UserDefaults.standard.object(forKey: wakeThresholdKey) as? Double ?? WakeWordDetector.defaultThreshold }
         set { UserDefaults.standard.set(newValue, forKey: wakeThresholdKey) }
     }
 

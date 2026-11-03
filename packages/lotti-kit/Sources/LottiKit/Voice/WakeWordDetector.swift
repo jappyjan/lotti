@@ -19,6 +19,8 @@ public struct WakeCandidate: Sendable {
 @MainActor
 public final class WakeWordDetector {
     public static let sampleRate = 16_000
+    /// Classifier confidence for a candidate, unless Debug sets another.
+    public static let defaultThreshold = 0.8
 
     private let classifier: any SoundClassifier
     private var ring: AudioRingBuffer
@@ -40,7 +42,7 @@ public final class WakeWordDetector {
     private var maxScore = 0.0
 
     public init(
-        classifier: any SoundClassifier, threshold: Double = 0.8, window: Duration = .seconds(1),
+        classifier: any SoundClassifier, threshold: Double = defaultThreshold, window: Duration = .seconds(1),
         overlap: Double = 0.5, preRoll: Duration = .seconds(2)
     ) {
         self.classifier = classifier

@@ -13,7 +13,7 @@ struct WakeWordMatcherTests {
 
     @Test(arguments: [
         "a lotta", "Hey Lotte", "Lotto", "hey Otto", "Lotti", "Lotti, wie spät ist es", "hey Lola", "Hotel", "hey lotta fun",
-        "", "hey",
+        "", "hey", "hey Lotto", "hallo Lotta", "hi Lola", "hey Hotel", "hey lady", "hey Loki", "hey Lori", "hey Lolly",
     ])
     func rejectsWhatIsNotTheWakePhrase(_ text: String) {
         #expect(WakeWordMatcher.match(text) == nil, "\(text)")
@@ -24,6 +24,7 @@ struct WakeWordMatcherTests {
         #expect(WakeWordMatcher.match("Hey Lotti.")?.command == "")
         #expect(WakeWordMatcher.match("hey lottie what's the weather?")?.command == "what's the weather?")
         #expect(WakeWordMatcher.match("Hey Lotti 5 minutes timer")?.command == "5 minutes timer")
+        #expect(WakeWordMatcher.match("okay hey Lotti what's up")?.command == "what's up")
     }
 }
 

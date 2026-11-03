@@ -45,7 +45,7 @@ extension Conductor {
 
     /// Classifier confidence needed for a candidate (Debug).
     public var wakeThreshold: Double {
-        get { wakeDetector?.threshold ?? 0.8 }
+        get { wakeDetector?.threshold ?? WakeWordDetector.defaultThreshold }
         set { wakeDetector?.threshold = newValue }
     }
 
@@ -56,7 +56,10 @@ extension Conductor {
     func restartWake() {
         wakeTask?.cancel()
         wakeTask = nil
+        let wasListening = wakeSession?.confirmed == true && mode == .listening
         abortWakeSession(reason: "restarting")
+        // A wake listen has nothing feeding it any more: don't leave "Listening…" up.
+        if wasListening { goDark() }
         guard wakeEnabled, wakeDetector != nil, link.status.isConnected else {
             wakeState = .off
             if microphone.keepOpen { Task { await microphone.setKeepOpen(false) } }
@@ -72,17 +75,21 @@ extension Conductor {
             var healthy = false
             do {
                 let subscription = try await microphone.subscribe()
+                if Task.isCancelled {
+                    await microphone.unsubscribe(subscription)
+                    return
+                }
                 wakeState = .listening
                 wakeLog("mic on")
                 healthy = await consumeWake(subscription)
                 await microphone.unsubscribe(subscription)
                 wakeLog("mic stopped")
+                if !healthy, !Task.isCancelled { wakeState = .unavailable("No audio from the glasses' mic") }
             } catch {
                 wakeState = .unavailable(error.localizedDescription)
                 wakeLog("glasses mic unavailable: \(error.localizedDescription)")
             }
             if Task.isCancelled { return }
-            if !healthy { wakeState = .unavailable("No audio from the glasses' mic") }
             try? await Task.sleep(for: delay)
             delay = healthy ? timing.micRetry : min(delay * 2, timing.micRetryMax)
         }
@@ -92,9 +99,11 @@ extension Conductor {
         }
     }
 
-    /// Reads the shared mic until it ends. True if audio arrived.
+    /// Reads the shared mic until it ends. True if audio kept coming for longer than the watchdog
+    /// limit (a mic that sends a burst and stalls counts as unhealthy, so the retries back off).
     private func consumeWake(_ subscription: MicrophoneHub.Subscription) async -> Bool {
-        var received = false
+        var firstChunk: ContinuousClock.Instant?
+        var lastChunk: ContinuousClock.Instant?
         var reset = false
         var reported = 0.0
         var levelMax = 0.0
@@ -115,7 +124,8 @@ extension Conductor {
             return false
         }
         for await chunk in subscription.stream {
-            received = true
+            if firstChunk == nil { firstChunk = .now }
+            lastChunk = .now
             let active = wakeGate.process(chunk)
             levelMax = max(levelMax, wakeGate.level)
             chunks += 1
@@ -132,8 +142,9 @@ extension Conductor {
                 feedWake(session, chunk, active: active)
                 continue
             }
-            // Hold-to-talk has the audio now; start the detector from scratch when it's over.
-            if mode == .listening {
+            // Hold-to-talk has the audio now (or the Debug recorder does); start the detector from
+            // scratch when it's over.
+            if mode == .listening || wakePaused {
                 reset = true
                 continue
             }
@@ -142,10 +153,12 @@ extension Conductor {
                 detector.reset()
                 reset = false
             }
-            if let candidate = await detector.process(chunk, active: active), mode != .listening, wakeSession == nil {
+            if let candidate = await detector.process(chunk, active: active), !Task.isCancelled,
+               mode != .listening, !wakePaused, wakeSession == nil {
                 // The firmware's navigation screen is up: there is no Lotti screen to listen on.
                 if link.displaySuspended {
                     wakeLog(String(format: "candidate %.2f ignored: navigation screen is up", candidate.score))
+                    wakeLast = String(format: "%.2f ignored: navigation screen is up", candidate.score)
                 } else {
                     beginWakeSession(candidate)
                 }
@@ -157,7 +170,16 @@ extension Conductor {
         }
         dog.cancel()
         if await dog.value { wakeLog("no audio for \(limit); mic restarted") }
-        return received
+        // The mic stopped under a running wake listen: answer what was heard (or go dark).
+        if !Task.isCancelled, let session = wakeSession {
+            if session.confirmed, mode == .listening {
+                endWakeCommand(session)
+            } else {
+                abortWakeSession(reason: "mic stopped")
+            }
+        }
+        guard let firstChunk, let lastChunk else { return false }
+        return lastChunk - firstChunk > limit
     }
 
     // MARK: - Candidate and confirmation
@@ -207,7 +229,7 @@ extension Conductor {
     private func confirmWake(_ session: WakeSession) {
         session.confirmed = true
         session.confirmTimer?.cancel()
-        wakeLog(String(format: "confirmed %.2f: %@", session.score, session.transcript))
+        wakeLog(String(format: "confirmed %.2f, listen started: %@", session.score, session.transcript))
         wakeLast = String(format: "%.2f confirmed: ", session.score) + session.transcript
         timer?.cancel()
         thinking?.cancel()
@@ -220,9 +242,9 @@ extension Conductor {
     }
 
     private func rejectWake(_ session: WakeSession) {
-        let heard = session.transcript.isEmpty ? "(nothing)" : session.transcript
+        let heard = session.transcript.isEmpty ? "(nothing heard)" : session.transcript
         wakeLog(String(format: "rejected %.2f: %@", session.score, heard))
-        wakeLast = String(format: "%.2f rejected: ", session.score) + heard
+        wakeLast = String(format: "%.2f rejected, no \"Hey Lotti\" in %@: ", session.score, "\(timing.wakeConfirm)") + heard
         abortWakeSession(reason: nil)
     }
 
@@ -233,13 +255,16 @@ extension Conductor {
         session.confirmTimer?.cancel()
         session.input.finish()
         session.task?.cancel()
-        if let reason { wakeLog(session.confirmed ? "listen ended: \(reason)" : "candidate dropped: \(reason)") }
+        if let reason {
+            wakeLog(session.confirmed ? "listen ended: \(reason)" : "candidate dropped: \(reason)")
+            if !session.confirmed { wakeLast = String(format: "%.2f dropped: ", session.score) + reason }
+        }
         wakeDetector?.reset()
         endedWake(session)
     }
 
     private func endedWake(_ session: WakeSession) {
-        wakeStage2Seconds += Double(session.samples) / 16_000
+        wakeStage2Seconds += Double(session.samples) / Double(WakeWordDetector.sampleRate)
         reportWakeMinutes()
     }
 
@@ -261,7 +286,8 @@ extension Conductor {
         case .noCommand:
             wakeLog("no command after the wake phrase")
             abortWakeSession(reason: "no command")
-            turnOff()
+            // Probably a false wake: go dark, but keep the conversation.
+            goDark()
         }
     }
 
@@ -273,7 +299,7 @@ extension Conductor {
         session.input.finish()
         wakeDetector?.reset()
         endedWake(session)
-        wakeLog("listen ended after \(String(format: "%.1f", Double(session.samples) / 16_000)) s of audio")
+        wakeLog("listen ended after \(String(format: "%.1f", Double(session.samples) / Double(WakeWordDetector.sampleRate))) s of audio")
         mode = .working
         show(Screen(.working, "Let me think…"), timeout: false)
         guard let task = session.task else { return }
@@ -285,8 +311,8 @@ extension Conductor {
             let heard = final.flatMap { WakeWordMatcher.match($0)?.command }.flatMap { $0.isEmpty ? nil : $0 } ?? session.command
             lastHeard = heard
             if heard.isEmpty {
-                // Probably a false wake: no "Sorry", just go dark.
-                turnOff()
+                // Probably a false wake: no "Sorry", just go dark (the conversation stays).
+                goDark()
             } else {
                 await answer(heard)
             }

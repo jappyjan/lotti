@@ -58,3 +58,6 @@ xcuserdata/
 # Python
 __pycache__/
 *.pyc
+
+# Audio (wake word training clips, your voice): never in git
+*.wav

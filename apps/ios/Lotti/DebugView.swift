@@ -50,25 +50,25 @@ struct DebugView: View {
         if let recorder {
             Section {
                 Button("Record \"Hey Lotti\" (2 s)") { recorder.recordPhrase() }
-                    .disabled(recorder.busy != nil || !link.status.isConnected)
+                    .disabled(recorder.activity != nil || !link.status.isConnected)
                 Button("Record 30 × \"Hey Lotti\" in a row") { recorder.recordSeries() }
-                    .disabled(recorder.busy != nil || !link.status.isConnected)
-                if recorder.isSeries {
+                    .disabled(recorder.activity != nil || !link.status.isConnected)
+                if case .series = recorder.activity {
                     Button("Stop", role: .destructive) { recorder.stop() }
                 }
-                if recorder.busy == "Recording background…" {
+                if recorder.activity == .background {
                     Button("Stop background", role: .destructive) { recorder.stop() }
                 } else {
                     Button("Record background") { recorder.startBackground() }
-                        .disabled(recorder.busy != nil || !link.status.isConnected)
+                        .disabled(recorder.activity != nil || !link.status.isConnected)
                 }
-                if let busy = recorder.busy { Text(busy).foregroundStyle(.secondary) }
+                if let busy = recorder.busyText { Text(busy).foregroundStyle(.secondary) }
                 if let error = recorder.error { Text(error).foregroundStyle(.red) }
                 LabeledContent("Saved", value: "\(recorder.counts["hey_lotti"] ?? 0) Hey Lotti, \(recorder.counts["background"] ?? 0) background")
             } header: {
                 Text("Record training clips")
             } footer: {
-                Text("From the glasses' mic, saved in Documents/wakeword. Copy them to packages/wake-word/data/user and retrain.")
+                Text("From the glasses' mic, saved in Documents/wakeword. \"Hey Lotti\" doesn't wake Lotti while recording, and leaving this screen stops it. Copy them to packages/wake-word/data/user and retrain.")
             }
         }
     }
@@ -170,7 +170,9 @@ struct DebugView: View {
             }
         }
         .navigationTitle("Debug")
-        .onAppear { if recorder == nil { recorder = WakeWordRecorder(hub: conductor.microphone) } }
+        .onAppear { if recorder == nil { recorder = WakeWordRecorder(conductor: conductor) } }
+        // No recording you can't see (or stop).
+        .onDisappear { recorder?.stop() }
     }
 
     /// The last map bitmap the glasses got, or a placeholder. Tap for the full-size image.

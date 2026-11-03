@@ -15,16 +15,32 @@ import Observation
 final class WakeWordRecorder {
     static let root = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appending(path: "wakeword")
 
-    private(set) var busy: String?
+    enum Activity: Equatable {
+        case phrase
+        /// Clip `index` of `count`; `pause` between clips.
+        case series(index: Int, count: Int, pause: Bool)
+        case background
+    }
+
+    private(set) var activity: Activity?
     private(set) var counts: [String: Int] = [:]
     private(set) var error: String?
 
-    private let hub: MicrophoneHub
+    private let conductor: Conductor
     private var task: Task<Void, Never>?
 
-    init(hub: MicrophoneHub) {
-        self.hub = hub
+    init(conductor: Conductor) {
+        self.conductor = conductor
         refresh()
+    }
+
+    var busyText: String? {
+        switch activity {
+        case nil: nil
+        case .phrase: "Say \"Hey Lotti\"…"
+        case .series(let index, let count, let pause): pause ? "…" : "Say \"Hey Lotti\" now (\(index)/\(count))"
+        case .background: "Recording background…"
+        }
     }
 
     func refresh() {
@@ -36,57 +52,53 @@ final class WakeWordRecorder {
 
     /// One 2 s clip. Say "Hey Lotti" right after tapping.
     func recordPhrase() {
-        guard task == nil else { return }
-        busy = "Say \"Hey Lotti\"…"
-        task = Task {
-            await capture(label: "hey_lotti", seconds: 2, piece: 2)
-            finish()
-        }
+        run(.phrase) { await $0.capture(label: "hey_lotti", seconds: 2, piece: 2) }
     }
 
     /// `count` clips in a row, a pause between: say "Hey Lotti" at each prompt, vary tone, speed and distance.
     func recordSeries(count: Int = 30) {
-        guard task == nil else { return }
-        task = Task {
+        run(.series(index: 1, count: count, pause: false)) { recorder in
             for index in 1...count where !Task.isCancelled {
-                busy = "Say \"Hey Lotti\" now (\(index)/\(count))"
-                await capture(label: "hey_lotti", seconds: 2, piece: 2)
-                busy = "…"
+                recorder.activity = .series(index: index, count: count, pause: false)
+                guard await recorder.capture(label: "hey_lotti", seconds: 2, piece: 2) else { return }
+                recorder.activity = .series(index: index, count: count, pause: true)
                 try? await Task.sleep(for: .seconds(0.8))
             }
-            finish()
         }
     }
 
-    /// Background audio (talk, TV, noise), cut into 1 s pieces until stopped.
+    /// Background audio (talk, TV, noise), cut into 1 s pieces until stopped (at most 15 minutes).
     func startBackground() {
-        guard task == nil else { return }
-        busy = "Recording background…"
-        task = Task {
-            await capture(label: "background", seconds: nil, piece: 1)
-            finish()
-        }
+        run(.background) { await $0.capture(label: "background", seconds: 15 * 60, piece: 1) }
     }
 
     func stop() { task?.cancel() }
 
-    var isSeries: Bool { busy?.hasPrefix("Say") == true || busy == "…" }
-
-    private func finish() {
-        task = nil
-        busy = nil
-        refresh()
+    /// Runs one recording job. The wake word is paused meanwhile: the clips are full of "Hey Lotti".
+    private func run(_ first: Activity, _ job: @escaping @MainActor (WakeWordRecorder) async -> Void) {
+        guard task == nil else { return }
+        activity = first
+        error = nil
+        conductor.wakePaused = true
+        task = Task {
+            await job(self)
+            conductor.wakePaused = false
+            task = nil
+            activity = nil
+            refresh()
+        }
     }
 
-    private func capture(label: String, seconds: Double?, piece: Double) async {
-        error = nil
+    /// Records from the glasses' mic. False if the mic wouldn't start.
+    private func capture(label: String, seconds: Double, piece: Double) async -> Bool {
+        let hub = conductor.microphone
         let subscription: MicrophoneHub.Subscription
         do { subscription = try await hub.subscribe() } catch {
             self.error = error.localizedDescription
-            return
+            return false
         }
         let size = Int(piece * 16_000)
-        let limit = seconds.map { Int($0 * 16_000) }
+        let limit = Int(seconds * 16_000)
         var buffer: [Int16] = []
         var total = 0
         for await chunk in subscription.stream {
@@ -96,11 +108,12 @@ final class WakeWordRecorder {
             while buffer.count >= size {
                 save(Array(buffer.prefix(size)), label: label)
                 buffer.removeFirst(size)
-                refresh()
             }
-            if let limit, total >= limit { break }
+            if total >= limit { break }
         }
         await hub.unsubscribe(subscription)
+        refresh()
+        return true
     }
 
     private func save(_ samples: [Int16], label: String) {
@@ -114,6 +127,7 @@ final class WakeWordRecorder {
             samples.withUnsafeBufferPointer { pcm.int16ChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
             pcm.frameLength = AVAudioFrameCount(samples.count)
             try file.write(from: pcm)
+            counts[label, default: 0] += 1
         } catch {
             self.error = error.localizedDescription
         }
