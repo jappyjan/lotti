@@ -63,7 +63,8 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.heartbeatInterval = .milliseconds(30)
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(150))
+        // Poll instead of one fixed sleep: a loaded CI runner can starve the session's timer task.
+        try? await eventually(timeout: 5) { commands(link).filter { $0 == G2Navigation.cmdHeartbeat }.count >= 2 }
         #expect(commands(link).filter { $0 == G2Navigation.cmdHeartbeat }.count >= 2)
         feed.finish()
         await task.value
@@ -79,7 +80,7 @@ struct NavigationSessionTests {
         try? await Task.sleep(for: .milliseconds(50))
         session.setRoute(route())
         feed.yield(fix(52.5209, 13.4023))  // near the destination
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { ended == .arrived }
         #expect(ended == .arrived)
         #expect(commands(link).contains(G2Navigation.cmdArrive))
         #expect(!link.displaySuspended)
@@ -96,7 +97,7 @@ struct NavigationSessionTests {
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
         try? await Task.sleep(for: .milliseconds(50))
         link.sendNavEvent(.notifyExit)
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { ended == .stopped }
         #expect(ended == .stopped)
         #expect(!link.displaySuspended)
         feed.finish()

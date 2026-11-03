@@ -257,7 +257,8 @@ struct ModelParsingTests {
 
     @Test func parsesAnAccountAndAProvider() throws {
         let account = try #require(AccountInfo(["id": "a", "kind": "imap", "label": "Work", "status": "ok",
-                                                "config": ["mailboxes": ["Inbox", "Work"], "lastSync": "2026-11-03T08:15:00+01:00"]]))
+                                                "lastSyncAt": "2026-11-03T08:15:00+01:00",
+                                                "config": ["mailboxes": ["Inbox", "Work"]]]))
         #expect(account.isConnected)
         #expect(account.list("mailboxes") == ["Inbox", "Work"])
         #expect(account.lastSync != nil)
@@ -425,7 +426,7 @@ extension UserDefaults {
 extension BackendStore {
     /// A store that touches neither the app's defaults nor its Keychain items.
     static func testing() -> BackendStore {
-        BackendStore(defaults: .testing(), keychain: Keychain(service: "lotti-tests-\(UUID().uuidString)"))
+        BackendStore(defaults: .testing(), keychain: Keychain(memory: MemorySecrets()))
     }
 }
 
