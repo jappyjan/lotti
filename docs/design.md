@@ -169,11 +169,19 @@ Lotti keeps memories, and you can always ask about them.
 
 ## Phone app
 
-Plain native iOS look: standard lists and controls, one accent colour (the same green). The goal is that you never need it day to day.
+**AI-first:** the app opens to a chat with Lotti, like the ChatGPT or Claude apps: text input, a hold-to-talk mic, streamed status lines, answers, follow-up chips, action buttons (tap = approve, Undo where available), and inline inbox items and catch-up briefs. Questions asked on the glasses appear in the same conversation; a list holds past conversations. Settings sit behind a gear. Plain native iOS look: standard grouped lists and controls, one accent colour (the same green).
+
+### Attention and location indicators (glasses)
+
+Incoming things never appear as full notifications. A **small image indicator** at an edge of the view shows a kind icon (mail, calendar, job, reminder, info) plus a count, and stays in the display-off state. It never covers Lotti's sentence or choices and never opens by itself. The today view gives a one-line summary ("2 Mails, Termin in 10 min") and a choice for the full list; each item opens in full with Dismiss and its actions. A second small icon, a location pin, shows while the phone's location is read and briefly after. Icons are images (EvenHub image containers), not letters.
+
+### Catch-up brief
+
+When Jan comes back after sleep or ≥ 2 h away, putting the glasses on (or opening the app first) gives one short catch-up: what happened, what is next, anything weather-relevant. Nothing relevant means nothing shown. Once per return.
 
 - **Setup:** pair glasses and ring
 - **Status:** connected, batteries
-- **Settings:** Hermes, messengers, privacy
+- **Settings:** a grouped page for everything: Lotti Brain, providers, accounts, MCP servers, jobs, memory, skills and scripts, inbox and catch-up, glasses, phone tools, privacy, push, debug
 - **Memory & log:** what Lotti remembers, what she showed or held back and why. Read and delete only; teaching happens by talking to her.
 
 ## Open questions

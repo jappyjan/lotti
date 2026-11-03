@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: living document. Built so far: glasses link, ring input, the hand-coded screen and today view, on-device chat and voice, phone tools, the Hermes connector, and turn-by-turn navigation on the glasses (arrow + text; see [Navigation](#navigation-port-from-the-even-app)). The UI schema, simulator and messaging are still plans.
+Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses. The UI schema, simulator and messengers are plans.
 
 ## Big picture
 
@@ -8,27 +8,26 @@ Status: living document. Built so far: glasses link, ring input, the hand-coded 
  ┌──────────── Even G2 glasses ────────────┐     ┌──── R1 ring ────┐
  │ display 576×288 · mic (LC3) · touchpads │     │ tap/scroll/hold │
  └───────────────────┬─────────────────────┘     └────────┬────────┘
-                     │ BLE ◄──── ring gestures ───────────┘ BLE (glasses ↔ ring)
-                     │ (reverse-engineered protocol)
+                     │ BLE (sid 0x0D wear, image containers)  │
  ┌───────────────────┴─────────────────────────────────────────────┐
- │                       iPhone: Lotti app                         │
- │  Glasses link · Ring input · Renderer (schema → G2 containers)  │
- │  Voice (push-to-talk, dictation, "Hey Lotti")                   │
- │  Signals (notifications, location, calendar, battery)           │
- │  Navigation (routing, turn-by-turn on the glasses)              │
- │  Brain router ──► on-device brain (Apple Foundation Models)     │
- │        │                                                        │
- │        └──► Hermes connector                                    │
+ │                  iPhone: Lotti app (AI-first)                   │
+ │  Chat · Settings (manages everything) · Glasses link · Renderer │
+ │  Phone tools: location, reminders, timer, navigation            │
+ │  Router ──► BackendBrain (WebSocket)                            │
+ │        └──► offline brain (timer, navigation, reminders)        │
  └────────┼────────────────────────────────────────────────────────┘
-          │ HTTPS (only when escalating)
- ┌────────┴──────────── existing Hermes (not part of Lotti) ───────┐
- │  Your Hermes Agent, its model, tools and memory                 │
+          │ WSS + HTTPS (Tailscale), device token
+ ┌────────┴────────────── Lotti Brain (apps/brain, Docker) ────────┐
+ │ agent loop · providers · tools · MCP client/servers · shell     │
+ │ conversations · memory · dreaming · jobs · inbox · catch-up     │
+ │ SQLite + /data workspace (scripts, skills)                      │
  └─────────────────────────────────────────────────────────────────┘
 ```
 
-The **phone is the hub.** It owns the glasses and ring connection, gathers signals, renders screens and runs the fast brain. Lotti must stay useful offline.
+The **phone is the hub for the glasses and sensors.** **Lotti Brain is the brain.** It reads weather, calendar, mail, the web and Bring! itself, and uses the phone only for sensors and on-device actions (location, timer, reminders, navigation). The glasses and the phone chat are two ways to talk to the same conversation. Without the backend only the offline brain answers.
 
-**Hermes is external.** Lotti ships a connector to it and nothing more. Installing, configuring, choosing models for, or adding tools to Hermes is out of scope for this repo.
+**Product rule:** a thing does not exist until the app can configure and manage it. Every backend feature has a screen in Settings.
+
 
 ## Components
 
@@ -42,13 +41,13 @@ The **phone is the hub.** It owns the glasses and ring connection, gathers signa
 | Messaging        | iOS    | Quick replies to forwarded notifications for the five messengers (see below)                                                      |
 | Navigation       | iOS    | Routing, step tracking, rerouting, `nav` screens on the glasses (see below)                                                       |
 | Memory           | iOS    | What Lotti has learned: who matters, what you ignore, your writing style per person, places. On the phone; viewable and deletable |
-| Brain router     | iOS    | Decides per event: rules → on-device model → Hermes connector                                                                     |
-| On-device brain  | iOS    | Apple Foundation Models with tool calling and guided generation of screens                                                        |
+| Brain router     | iOS    | Backend reachable → `BackendBrain`; otherwise the offline brain                                                                   |
+| Offline brain    | iOS    | Timer, navigation, reminders and a short "I'm offline" sentence (Apple Foundation Models as a helper)                            |
 | Phone tools      | iOS    | Calendar, weather, location, reminders, timer, new reminder; shared by both brains (see below)                                    |
-| Hermes connector | iOS    | Sends a question to your Hermes, runs the phone tools it asks for, gets back a sentence and actions. Address and key in Lotti     |
+| Backend client   | iOS    | `BackendClient`/`BackendBrain`: WebSocket to Lotti Brain, phone tools, inbox, presence; `BackendManagementClient` for Settings    |
 | Simulator        | web    | Renders schema screens at 576×288 with keyboard-as-ring, so UI and prompts can be iterated without glasses                        |
 | UI schema        | shared | Single source of truth for screens; TypeScript, JSON Schema for LLMs, Swift mirror                                                |
-| Persona          | shared | Lotti's system prompt and voice, used by the on-device brain and sent along with Hermes requests                                  |
+| Lotti Brain      | server | Own agent loop, providers, tools, memory, jobs, inbox ([protocol](protocol.md), [apps/brain](../apps/brain/README.md))          |
 
 ## The UI schema idea
 
@@ -61,7 +60,7 @@ Every screen also has an id (to update or dismiss it later), a **priority** (`am
 One schema definition feeds three consumers:
 
 - **TypeScript** (simulator), with validation
-- **JSON Schema**, sent to Hermes so it can answer with a valid screen
+- **JSON Schema**, sent to the backend so it can answer with a valid screen
 - **Swift** (renderer and on-device brain), as `@Generable` types for guided generation
 
 Shared JSON fixtures act as contract tests so all three stay in sync.
@@ -88,7 +87,7 @@ The one genuinely open piece is the foreground notification body: it travels ove
 | Quick replies for messages                                  | ✅          | Short generation, user tone from a few examples                                                                                             |
 | Choosing and filling a screen template                      | ✅          | Guided generation (`@Generable`) produces valid screens directly                                                                            |
 | Simple tools (timer, reminder, calendar lookup, navigation) | ✅          | Tool calling in Foundation Models                                                                                                           |
-| Multi-step research, mail summaries, web, anything agentic  | ❌ → Hermes | Needs a bigger model, more context and whatever tools your Hermes has                                                                       |
+| Multi-step research, mail summaries, web, anything agentic  | ❌ → backend | Needs a bigger model, more context and server tools                                                                       |
 
 ### Which model runs locally
 
@@ -103,7 +102,7 @@ The one genuinely open piece is the foreground notification body: it travels ove
 
 Why this shape:
 
-- **iOS 27 made the Foundation Models API model-agnostic** ("Language Model protocol", "Dynamic Profiles"). Lotti's brain is written once against this API, with tools, guided screen generation and persona. Apple's local model, a Gemma provider, PCC or even the Hermes connector can sit behind it and be swapped per task.
+- **iOS 27 made the Foundation Models API model-agnostic** ("Language Model protocol", "Dynamic Profiles"). Lotti's brain is written once against this API, with tools, guided screen generation and persona. Apple's local model, a Gemma provider, PCC can sit behind it and be swapped per task.
 - **Apple's model for everything.** In S3 it scored 25/35 against Gemma 4 E2B's 23/35. It led on screens, tool calls and replies, tied on triage and summaries, and was about twice as fast. It costs nothing in memory or setup.
 - **Gemma 4 E2B is a tested drop-in, not a dependency.** It was clearly better only at rail suggestions, which template defaults can cover. If real use or the eval harness shows a task falling short, E2B can take it over through the same API. E4B doesn't fit on 8 GB iPhones.
 - **Speech stays on Apple's `SpeechAnalyzer`.** Gemma's audio input is interesting (talk straight to the model), but it's heavier and not needed for v1.
@@ -116,24 +115,22 @@ Known limits (from S3):
 - Rail choices are the weakest output. Fill fixed choices from the template and let the model add one or two.
 - Running in the background (locked phone, BLE wake-ups) is still unmeasured. Measure it once the MVP runs all day and something drains or gets killed.
 
-**Routing (`Router`): Hermes first.**
+**Routing (`Router`): backend first.**
 
-Hermes is the brain. When it's set up, every question goes to it — it has the phone's tools, so the simple tasks work there too, and it can research what the phone can't. The on-device brain answers only when Hermes isn't set up, and hands a question back to Hermes if one ever lands there.
+| Situation                                   | Brain                                                  |
+| ------------------------------------------- | ------------------------------------------------------ |
+| Lotti Brain reachable (WebSocket up)        | `BackendBrain`: every question, glasses or phone       |
+| Backend unreachable                         | offline brain: timer, navigation, reminders, today view |
+| Anything else while offline                 | a short "Ich bin offline" / "I'm offline" sentence     |
 
-| Situation                                                                     | Who answers                             |
-| ----------------------------------------------------------------------------- | --------------------------------------- |
-| Hermes is set up (any question)                                                | Hermes                                  |
-| Hermes isn't set up                                                            | the on-device brain                     |
-| You ask for Hermes: "Hermes, …", "Dig into …"                                 | Hermes (says so if it isn't set up)     |
-| Hermes set up but errors or goes silent for `timing.remote` (2 min of silence) | an error with "Try again"               |
+The backend run is cancellable (double tap sends `cancel`) and its status lines stream to the glasses or phone. A silence-based timeout applies: any status or token restarts the clock. Shell steps and other server tool calls are logged, not shown on the glasses; only status lines show. Deterministic rules still come first: ring "back", gestures, the today view.
 
-The Hermes timeout counts silence, not total time: any traffic from Hermes (answer tokens, keepalives, tool progress) restarts the clock, so a long research answer isn't cut off. Hermes's own tool steps ("web_search", raw commands) are logged, never shown on the glasses; only the phone's tool statuses ("Checking your calendar…") show. Deterministic rules still come before all of this: ring "back", gestures, the today view.
 
 ## Phone tools
 
-One set of tools on the phone, used by the on-device brain, by Hermes and later by the ring's Actions list. Each tool is a `PhoneTool` in LottiKit (name, description, arguments, `read` or `action`); the app implements the real ones in `apps/ios/Lotti/PhoneTools.swift`.
+One set of tools on the phone, used by the offline brain, by Lotti Brain (proxied over the WebSocket) and later by the ring's Actions list. Each tool is a `PhoneTool` in LottiKit (name, description, arguments, `read` or `action`); the app implements the real ones in `apps/ios/Lotti/PhoneTools.swift`.
 
-| Tool              | Kind   | Backed by                                                                        | On-device brain | Hermes            |
+| Tool              | Kind   | Backed by                                                                        | Offline brain | Lotti Brain       |
 | ----------------- | ------ | -------------------------------------------------------------------------------- | --------------- | ----------------- |
 | `calendar`        | read   | EventKit (your chosen calendars)                                                 | ✅              | ✅ if shared      |
 | `weather`         | read   | Open-Meteo at your location                                                      | ✅              | ✅ if shared      |
@@ -147,7 +144,7 @@ Rules (enforced by `Toolbox`, not by prompts):
 
 - **Reads** run as soon as a brain asks, several at once, each with a 10 s limit. Arguments are checked against the tool's parameters first.
 - **Actions never run on a brain's say-so.** A brain can only _prepare_ one: it becomes a choice in the rail ("Timer 10 min"), and runs when you tap it. A wrong transcript or a confused model can't set anything.
-- **You choose what Hermes may read** (Lotti app → Hermes). Unshared reads are left out of Hermes's prompt and refused if asked for anyway.
+- **You choose which phone tools the backend may call** (Settings → Phone tools). The client refuses any other tool name.
 - **No fixed facts in any prompt.** Brains get the date and time; everything about Jan (where he is, his calendar, the weather there) comes from a tool in that turn. Weather needs a location fix (at most 15 minutes old); without one there is no weather rather than another city's.
 - Tool results are written for small models: days by name ("tomorrow", "monday"; the code works out the date), weather spelled out ("Rain today: yes, from 15:00").
 
@@ -155,80 +152,46 @@ Rules (enforced by `Toolbox`, not by prompts):
 
 A single session with tool calling failed on the ~3B model: it made up a free calendar instead of calling the tool, answered as if it were Jan, claimed a timer was set, and broke its output format. One step per job works far better (`LocalPipeline`, `AppleBrain`):
 
-1. **Choose tools.** The local brain only runs when Hermes isn't set up (see Routing above). Rules first: questions the phone can never answer (news, prices, opening hours, "who won", search) get the fixed "Ich frag Hermes" handoff. Then clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", navigation) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`, `hermes_web_news_research`). Hermes is one of the options.
+1. **Choose tools.** The offline brain only runs when the backend is unreachable (see Routing above). Rules first: questions the phone can never answer (news, prices, opening hours, "who won", search) get the short offline sentence. Then clear phrases ("wo bin ich", "Termin", "Wetter", "Schirm", "erinner mich", "Timer", navigation) pick tools instantly. Only otherwise does the model pick 0–3 options from a list, with descriptive option names (`remind_me_later`, `read_existing_reminders`).
 2. **Fill in arguments,** one small step per chosen tool, with only that tool's parameters and no date in the prompt (the model copies a date instead of writing "tomorrow").
-3. **Actions are only prepared** and get a fixed sentence ("Bereit: Timer 10 min. Tipp zum Starten."), so the model can't claim they're done. A hand-off gets "Ich frag Hermes."
+3. **Actions are only prepared** and get a fixed sentence ("Bereit: Timer 10 min. Tipp zum Starten."), so the model can't claim they're done.
 4. **Run the reads** in parallel; the glasses show what's being checked.
 5. **Shorten** results longer than ~280 characters to what the question needs.
-6. **Answer** from the facts only. The answer step also says whether the facts really answer the question; if not, the question goes to Hermes instead of "I don't know". Answer, in a fresh session: the answer's language is detected in code (`NLLanguageRecognizer`, German or English), Jan is addressed as du/you, 24-hour times. Facts are labelled by meaning ("where Jan is right now: …") so they don't get mixed up.
+6. **Answer** from the facts only. The answer step also says whether the facts really answer the question; if not, it says it is offline instead of guessing. Answer, in a fresh session: the answer's language is detected in code (`NLLanguageRecognizer`, German or English), Jan is addressed as du/you, 24-hour times. Facts are labelled by meaning ("where Jan is right now: …") so they don't get mixed up.
 
 Every step is a fresh session with a small prompt, so the 4K context never fills up; follow-ups get the last three turns with their facts. A first form-based planner (one optional field per tool) failed: the model filled in nearly every field. A second planning round after the tools ran only repeated the first, so there is one round.
 
-Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Navigation uses MapKit on the phone, not Hermes: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. An answer that says "I don't know" goes to Hermes. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
+Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel`, 11 German and English questions plus a follow-up: all pass, 0.4–1.7 s per answer (rules: 0.4–1.5 s, model choice adds ~0.6 s). Navigation uses MapKit on the phone, not the backend: it knows where Jan is and the places around him. The search is limited to ~30 km (unlimited, "Media Markt Altenach" found a store 530 km away) and a misheard name is retried with fewer words. A street address in the facts can make Apple's model refuse with "unsupported language"; the answer step then retries with short instructions, then plain text, then shows the facts as they are. `location` is rules-only: the model chooser picked it for "where is the meeting" and mixed Jan's address into the answer. Still seen: the chooser sometimes picks an unrelated tool for an open question (weather for "how tall is the Eiffel tower"), an occasional invented detail ("im Café am Hafen"), and the location tool picked for questions that don't need it. The phone's iOS 27 model may differ; the same tests run there through the app's debug flags.
 
-## Hermes connector
+## Lotti Brain (backend)
 
-Built (`packages/lotti-kit/Sources/LottiKit/Hermes`). Lotti talks to Hermes's API server (`hermes gateway`, OpenAI-compatible `/v1/chat/completions`), with the address and `API_SERVER_KEY` set in the Lotti app (key in the Keychain). Nothing in Hermes needs configuring.
+`apps/brain`: Node 24 + TypeScript, one Docker image, one `/data` volume (SQLite, `workspace/scripts`, `workspace/skills`, provider login state). Env holds only `MASTER_KEY` (secrets are encrypted at rest), an optional `PUBLIC_URL` and the optional APNs key; everything else is set in the app. Setup, pairing and the op list are in [apps/brain/README.md](../apps/brain/README.md); the wire contract is [protocol.md](protocol.md).
 
-**When Lotti asks Hermes:** see the routing table above. Every question is routed on its own and goes into one Hermes session that Lotti continues forever, via the `X-Hermes-Session-Id` header. Hermes stores and compacts the history; the phone persists only the session id (`lotti-<uuid>`, made at the first question, kept in UserDefaults). So a follow-up works an hour, a day or a month later, after an app or gateway restart. There is no reset: not on inactivity, not by a phrase, not from settings. Nothing on the glasses ends it; the on-device brain still resets after 5 minutes of quiet or when the display turns off. Only a dead end at Hermes starts a new session (see "Session, not history" below).
+**Two APIs, one connection.** A live WebSocket (`ask`, streamed `status`, `answer` with ≤3 follow-ups and ≤2 actions, `tool_call`/`tool_result` for phone tools, `perform`, `undo`, `inbox`, `presence`, `location_access`, `push`, `catchup`) and an HTTP management API. The management API is the **operations layer**: one registry of operations, exposed as `POST /api/v1/ops/<name>` for the app and as the **Lotti admin MCP server** for the agent. Operations carry a risk: `free`, `tap` or `app_only`.
 
-**Phone tools for Hermes: Lotti's reply format.** Hermes runs its own tools on its server and never hands tool calls back to the client, so the phone's tools travel inside the conversation as JSON. Lotti's system message (Hermes layers it on top of its own prompt) lists the tools you share and asks for exactly one JSON object per reply:
+**Providers.** Thin adapters: DeepSeek (default, API key), OpenAI and Anthropic (API key), ChatGPT subscription via the Codex CLI ("Sign in with ChatGPT" device flow, started from the app) and Claude subscription via Claude Code with a `claude setup-token` token. The subscription runtimes get Lotti's tools as an MCP server. One active provider plus an optional fallback on error or timeout. Models are settings. Claude subscription use in a third-party app carries a policy risk the user accepted.
 
-```json
-{
-  "type": "call",
-  "status": "Checking your day",
-  "calls": [
-    { "id": "c1", "tool": "calendar", "args": { "from": "2026-11-02" } },
-    { "id": "c2", "tool": "weather", "args": {} }
-  ]
-}
-```
+**Tool split.** Tools are defined once (server tools, phone tools proxied over the socket, Bring!, memory, inbox, jobs, conversations, self-management) and served to the internal agent loop and as an MCP server for the subscription runtimes.
 
-All calls in one reply run at the same time. The phone answers in the same session:
+- `weather` is dynamic: the agent picks place (geocoded by Open-Meteo) or coordinates, date and time range (hourly or daily up to 16 days). There is no hidden default location; "weather here" means calling `location` first.
+- `location` is a phone tool the agent may call any time. Every read emits `location_access`, shows a small location icon on the glasses and is logged in the app.
+- Calendar (Google, iCloud/CalDAV, generic), mail (Gmail, iCloud/IMAP, generic), `web_fetch`, web search with a key, `shell` (workspace cwd, timeout, output cap, no secrets in env, non-root, logged).
+- Bring! (unofficial API, isolated in one client): adds and removes run at once with a "Done" line and **Undo**.
+- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
+- MCP client: stdio and streamable HTTP servers, added and tested in the app, with per-tool confirmation switches.
 
-```json
-{
-  "type": "results",
-  "results": [
-    { "id": "c1", "ok": true, "content": "Mon 2 Nov: 09:30–09:45 Standup" },
-    {
-      "id": "c2",
-      "ok": true,
-      "content": "Weather tomorrow: light rain, 6–11°C"
-    }
-  ]
-}
-```
+**Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces old turns); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.
 
-and Hermes calls again or answers:
+**Memory and dreaming.** SQLite + FTS5, no embeddings. Facts are extracted after compaction or conversation end, plus explicit remember/forget; the top relevant memories go into the prompt. Lotti saves reusable scripts in `workspace/scripts/` and skills in `workspace/skills/<name>/SKILL.md`; the skill index is in the prompt and skills load on demand. A nightly **dreaming** job (03:00, editable) merges duplicates, supersedes contradictions (newest wins), drops stale memories, tidies skills and writes a report.
 
-```json
-{
-  "type": "answer",
-  "sentence": "Standup at 9:30, and take an umbrella.",
-  "followUps": ["Later?"],
-  "actions": [
-    { "tool": "set_timer", "args": { "minutes": 10, "label": "Leave" } }
-  ]
-}
-```
+**Jobs, inbox, indicator, catch-up.** Jobs are cron-scheduled agent runs that report nothing or create an inbox item. Built-ins: meeting soon (10 min before), important mail (every 10 min, LLM triage), dreaming. The **inbox** is server-side truth (`pending → seen → dismissed/expired`); the phone reports shown/opened/dismissed. Items never pop up on the glasses: a small **image indicator** (kind icon plus count) sits at the edge of the view, also in display-off state; the today view gives the summary and all items in full. Pushes queue on the server while offline and APNs (built, off until configured) wakes the app. The **catch-up brief** replaces the fixed morning brief: after ≥ 2 h away, or away across the night window (22:00–09:00) with the phone still or charging, the first presence signal (glasses put on, app opened) gives one short brief, once per return, or nothing if nothing is relevant. Signals: wear on/off (sid `0x0D`), glasses connect/disconnect, gestures, head-up, phone unlock/app open, charging/motion. It works without the wear event. All rules are editable in the app.
 
-Details:
+**Self-management (no CLI).** The admin MCP server is always attached to the agent. Free with a visible line and Undo: jobs, memory, skills, scripts, inbox, catch-up and other non-security settings. Need a tap: switching providers or models, MCP server changes, safety settings. App only, never through the agent: credentials (keys, passwords, OAuth, pairing and admin tokens). External access to the admin MCP is off by default and uses its own token made in the app.
 
-- **Limits:** at most 4 rounds of phone calls per question; with the last results Hermes is told to answer now. The whole question gives up after 2 minutes; double tap cancels sooner.
-- **Hermes asks for what it needs.** Each question carries only the date and time; calendar, weather and location are sent only when Hermes calls for them.
-- **Forgiving parser:** finds the JSON inside fences or prose, accepts `args` or `arguments`, numbers missing ids. A reply that isn't JSON is shown as plain text. Invalid actions are dropped.
-- **Session, not history:** `POST /v1/chat/completions` with `X-Hermes-Session-Id: <id>` makes Hermes load the session's history from its own `state.db` and take only the **last** message of the body as the new turn; it applies the body's system message on top at every request and compacts long sessions itself. So each request is exactly `[system prompt, newest message]` (the question, or the phone's `results` reply), with the same id for every round and every question. Hermes doesn't store the system prompt, so it is rebuilt for every request: a changed "Hermes may read" applies at the next request, also within a question. Every question carries a fresh "Now: …" line. The system prompt also asks Hermes to finish everything within its reply (with the header Hermes may otherwise run `delegate_task` in the background and deliver the result only into the next turn) and to answer only the newest message (an earlier one may have gone unanswered).
-- **Cancelling and dead ends:** Hermes keeps a turn running after its client goes away, and the session's next question would wait behind it. So when double tap, a newer question or the fallback timeout cancels a question, Lotti first sends `POST /v1/runs/{chatcmpl-id}/stop` (the stream's completion id is its run id while the stream is open; best effort, 3 s), then closes the stream; no further request goes out for it. Two dead ends replace the session id (a new `lotti-<uuid>`, saved at once): Hermes answers `not_found` or `unknown_execution` (the session was deleted in its dashboard, and a deleted id stays retired), then the question is asked once more in the new session; or a cancelled question's run is still `queued` after 10 s (`GET /v1/runs/{id}` before the stop: an earlier turn is stuck, e.g. Hermes restarted mid-question and paused the session until someone resolves it), then the next question starts the new session. Both only recover from a session Hermes can't continue; they are not resets.
-- **Trade-offs:** a failed or cancelled question may leave a partial turn in Hermes's session (the phone can't roll it back); data read under a since-hidden read stays in Hermes's history; after changing the address the same id simply starts a fresh session on the new server. The session grows until Hermes compacts it (by default at 75 % of the model's context window), and compaction runs silently, so a question that triggers it may go quiet past the 20 s fallback, be answered on the phone and have its run stopped before the compaction finishes; how Hermes then resumes compaction is untested against a real Hermes. For Lotti a smaller session is cheaper and faster, and keeps compaction short: in Hermes's `config.yaml` set `compression.threshold_tokens` (e.g. 64000) and, with Claude, `prompt_caching.cache_ttl: "1h"` (questions are usually more than 5 minutes apart). **Minimum Hermes:** one with session-continuity header support (`session_continuity_header` in `/v1/capabilities`). An older one ignores the header: it answers without memory of earlier questions, and a question that needs a phone tool breaks after the first round (the results arrive without their question). Lotti doesn't check.
-- **Streaming:** Hermes's `hermes.tool.progress` events and the format's `status` show on the glasses' working screen ("Searching the web…", "Checking your calendar…").
-- **Errors:** unreachable, wrong key, busy or too slow each get a short sentence and a "Try again" choice.
-- **Network:** HTTPS (e.g. `tailscale serve`) or plain HTTP on the local network. Hermes binds to localhost by default, so it has to be reachable from the phone.
+**Safety.** Mail and web content is untrusted. Mitigations: no secrets in the shell env, non-root container, external-effect actions tap-confirmed, credentials app-only, commands logged. Residual risk, accepted for a personal tool: data the agent can read could be sent out via curl.
 
-**Trying it without Hermes:** `python3 packages/lotti-kit/scripts/mock-hermes.py` plays Hermes (two parallel phone calls, then an answer with a timer), keeps per-session history by the header and serves `/v1/capabilities`. `HERMES_URL=… HERMES_KEY=… swift test --filter LiveHermes` runs the connector against it or against your real Hermes (add `HERMES_MOCK=1` against the mock to also check that a follow-up continues the session). `LOTTI_LIVE_MODEL=1 swift test --filter LiveModel` checks the on-device brain's tool use.
+**Not built yet:** WhatsApp, Matrix, Signal, Telegram and iMessage read/write. The inbox `kind`, the tool layout and the accounts screen leave room for them.
 
-Lotti still runs no server of its own. Hermes pushing to the glasses unprompted (a long task finishing later) needs a relay: decision D8, under "Later".
 
 ## Messaging: iMessage, WhatsApp, Signal, Telegram, Matrix
 
@@ -278,7 +241,7 @@ packages/
   ui-schema/    Screen schema (source of truth) + JSON Schema + fixtures
   persona/      Lotti's system prompt and voice
   lotti-kit/    Swift package: glasses link, ring, renderer, brain, signals, messaging,
-                navigation, voice, Hermes connector
+                navigation, voice, backend client
 docs/           vision, architecture, roadmap
 ```
 
@@ -287,14 +250,23 @@ docs/           vision, architecture, roadmap
 | #   | Decision                                                                                                                                                                                | Status                                |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | D1  | Native iOS app with direct BLE; replaces the Even app while connected                                                                                                                   | ✅ decided                            |
-| D2  | Hermes first: every question goes to Hermes when it's set up; the on-device brain answers only without Hermes (was: on-device first, Hermes for escalation) | ✅ decided (2026-11-02)                 |
-| D3  | Hermes is external: Lotti only has a connector; no Hermes setup, model choice or tools in this repo                                                                                     | ✅ decided                            |
+| D2  | ~~Hermes first~~ — superseded (see D13): Lotti Brain first; the offline brain answers only timer, navigation and reminders without the backend | ⛔ superseded (2026-11-03) |
+| D3  | ~~Hermes is external~~ — superseded: Hermes is removed; Lotti has its own backend | ⛔ superseded (2026-11-03) |
 | D4  | Push-to-talk after the MVP; wake word only if push-to-talk feels limiting (then check battery)                                                                                          | ✅ decided                            |
 | D5  | Template-based UI schema instead of free layout                                                                                                                                         | ✅ proposed                           |
 | D6  | Build our own BLE layer in LottiKit, using g2-kit, even-g2-protocol and MentraOS as references; behind `GlassesLink` ([S1](spikes/s1-ble.md#d6-build-our-own-ble-layer))                | ✅ decided                            |
 | D7  | Xcode project: plain checked-in project with synchronized folders, no XcodeGen/Tuist ([S1](spikes/s1-ble.md#d7-plain-checked-in-xcode-project))                                         | ✅ decided                            |
-| D8  | Do we ever need our own relay server (Hermes pushing unprompted, Signal via signal-cli)? Default: no                                                                                    | ⏳ open, revisit after M6             |
+| D8  | Own server for pushes and the brain | ✅ decided: yes (Lotti Brain, 2026-11-03) |
 | D9  | Messaging main path: EU notification forwarding for all five messengers. Needs a paid developer account (entitlements not available to the Personal Team, checked 2026-11-01)           | ⏸ blocked on paid account             |
 | D10 | Navigation routing: MapKit first, alternative providers only if needed                                                                                                                  | ✅ decided (M5; no HERE/Mapbox anywhere) |
 | D11 | Local model: Apple Foundation Model for all tasks, behind the Foundation Models API; Gemma not bundled in v1, E2B a tested drop-in ([S3](spikes/s3-brain.md#model-choice-per-task-d11)) | ✅ decided                            |
 | D12 | A second display layer for popups. Confirmed via `g2.service_id_def.SID` (background vs foreground). The menu widget's content command is mapped: `g2.menu` (sid 0x03) `APP_SEND_MENU_INFO` with selectable items, picks back via EvenHub Cmd 0x15. But the menu is opened by the firmware (Cmd 17 is OS→app); no app-side open command is known. Open: how to open a foreground popup on demand — likely needs a live BLE capture (notification-widget JSON schema, sid 0x04) ([apk-recon](spikes/apk-recon.md)) | ✅ mapped (menu content); ⏳ open-on-demand |
+| D13 | Backend: Node 24 + TypeScript in Nx (`apps/brain`), one Docker image, SQLite + FTS5 on a volume, reached over Tailscale/HTTPS | ✅ decided (2026-11-03) |
+| D14 | Providers: DeepSeek (default, key), OpenAI and Anthropic (key), ChatGPT via Codex sign-in, Claude via Claude Code token; one active plus fallback | ✅ decided |
+| D15 | AI-first phone app: chat first, Settings manage everything ("a thing does not exist until the app can manage it") | ✅ decided |
+| D16 | Indicators, not notifications: small image indicator (kind icon + count) at the edge; location icon on every location read | ✅ decided |
+| D17 | Catch-up brief from wear detection plus away/slept heuristics replaces the morning brief | ✅ decided |
+| D18 | Self-management through the Lotti admin MCP server, no CLI; tap only for providers/models, MCP and safety; credentials app-only | ✅ decided |
+| D19 | Offline brain keeps timer, navigation, reminders; handoffs removed | ✅ decided |
+| D20 | Bring! natively via the unofficial API; adds/removes immediate with Undo | ✅ decided |
+| D21 | Messengers (WhatsApp, Matrix, Signal, Telegram, iMessage) read/write later, not now | ⏳ later |
