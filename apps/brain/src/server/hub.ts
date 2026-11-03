@@ -44,6 +44,18 @@ export class Hub {
       }
     }
   }
+  /** Close every socket of a device (e.g. after it was revoked). */
+  disconnectDevice(deviceId: string): void {
+    for (const c of [...this.conns])
+      if (c.deviceId === deviceId) {
+        try {
+          c.close();
+        } catch {
+          /* already gone */
+        }
+        this.remove(c);
+      }
+  }
   connections(): Conn[] {
     return [...this.conns].filter((c) => c.ready);
   }

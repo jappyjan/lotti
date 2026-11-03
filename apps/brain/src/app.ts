@@ -24,7 +24,7 @@ import { SkillStore } from './skills.ts';
 import { registerNativeTools } from './tools/index.ts';
 import { ToolRegistry, type RunState } from './tools/registry.ts';
 import { systemClock, type Clock } from './util/clock.ts';
-import { deriveKey } from './util/crypto.ts';
+import { decrypt, deriveKey, encrypt } from './util/crypto.ts';
 import { consoleLogger, type Logger } from './util/log.ts';
 
 /** Everything wired together. Services keep a reference to `app` and use it lazily. */
@@ -75,6 +75,7 @@ export function createApp(o: CreateAppOptions): App {
   app.startedAt = app.clock.now();
   app.db = new Db(o.config.dbPath);
   migrate(app.db);
+  verifyMasterKey(app);
   app.integrations = { ...defaultIntegrations(), ...o.integrations };
   app.runs = new Map();
   app.secrets = new SecretsStore(app);
@@ -98,4 +99,29 @@ export function createApp(o: CreateAppOptions): App {
   app.skills.ensureDirs();
   app.scheduler.seedBuiltins();
   return app;
+}
+
+export const MASTER_KEY_MISMATCH =
+  'MASTER_KEY does not match the key this data was created with. Start with the original MASTER_KEY (stored secrets cannot be decrypted otherwise).';
+
+/** Fail fast with a clear message when the data dir belongs to another MASTER_KEY. */
+function verifyMasterKey(app: App): void {
+  const check = app.db.get<{ value: string }>(
+    "SELECT value FROM kv WHERE key='master_key_check'",
+  );
+  const sample =
+    check?.value ??
+    app.db.get<{ value: string }>('SELECT value FROM secrets LIMIT 1')?.value;
+  if (sample) {
+    try {
+      decrypt(app.key, sample);
+    } catch {
+      throw new Error(MASTER_KEY_MISMATCH);
+    }
+  }
+  if (!check)
+    app.db.run(
+      "INSERT INTO kv(key, value) VALUES('master_key_check', ?)",
+      encrypt(app.key, 'lotti'),
+    );
 }

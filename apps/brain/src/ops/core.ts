@@ -329,7 +329,11 @@ export const coreOps = [
     description: 'Revoke a paired device (its token stops working).',
     inputSchema: z.object({ id: z.string() }),
     risk: 'app_only',
-    handler: (i, { app }) => ({ revoked: app.auth.revokeDevice(i.id) }),
+    handler: (i, { app }) => {
+      const revoked = app.auth.revokeDevice(i.id);
+      if (revoked) app.hub.disconnectDevice(i.id);
+      return { revoked };
+    },
   }),
 
   // ---- admin token ---------------------------------------------------------------

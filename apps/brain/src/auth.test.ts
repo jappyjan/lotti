@@ -257,3 +257,74 @@ test('admin MCP endpoint is off until an admin token is created; internal token 
     await srv.close();
   }
 });
+
+test('revoking a device closes its open websocket', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const token = pairDevice(t.app);
+    const c = await WsClient.connect(srv, token);
+    const closed = new Promise<void>((res) => c.ws.once('close', () => res()));
+    const r = (await (
+      await fetch(
+        base(srv.port) + '/api/v1/ops/pairing.revoke_device',
+        j({ id: t.app.auth.devices()[0]!.id }, token),
+      )
+    ).json()) as any;
+    assert.equal(r.result.revoked, true);
+    await closed;
+    await assert.rejects(WsClient.connect(srv, token), /401/);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('pair/code refuses requests that came through a proxy (forwarded headers)', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const r = await fetch(base(srv.port) + '/api/v1/pair/code', {
+      headers: { 'x-forwarded-for': '100.64.0.7' },
+    });
+    assert.equal(r.status, 403);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('oversized websocket frames are rejected without taking the server down', async () => {
+  const t = makeApp();
+  const srv = await startServer(t);
+  try {
+    const token = pairDevice(t.app);
+    const c = await WsClient.connect(srv, token);
+    const closed = new Promise<void>((res) => c.ws.once('close', () => res()));
+    c.ws.send('x'.repeat(2_000_000));
+    await closed;
+    const c2 = await WsClient.connect(srv, token);
+    await c2.close();
+  } finally {
+    await srv.close();
+  }
+});
+
+test('starting with another MASTER_KEY on existing data fails with a clear message', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { createApp, MASTER_KEY_MISMATCH } = await import('./app.ts');
+  const { loadConfig } = await import('./config.ts');
+  const dir = mkdtempSync(join(tmpdir(), 'brain-key-'));
+  const cfg = (k: string) =>
+    loadConfig({ MASTER_KEY: k, DATA_DIR: dir, PORT: '0' });
+  const a = createApp({ config: cfg('first-master-key-0123456789') });
+  a.secrets.set('x', 'y');
+  a.db.close();
+  assert.throws(
+    () => createApp({ config: cfg('other-master-key-0123456789') }),
+    (e: Error) => e.message === MASTER_KEY_MISMATCH,
+  );
+  const again = createApp({ config: cfg('first-master-key-0123456789') });
+  assert.equal(again.secrets.get('x'), 'y');
+  again.db.close();
+});

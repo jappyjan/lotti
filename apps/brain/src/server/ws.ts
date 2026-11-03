@@ -24,7 +24,7 @@ export function closeWebSockets(server: Server): void {
 
 /** Live socket per docs/protocol.md. Attach to the http server; path /ws. */
 export function attachWebSocket(app: App, server: Server): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
   sockets.set(server, wss);
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const url = new URL(req.url ?? '/', 'http://x');

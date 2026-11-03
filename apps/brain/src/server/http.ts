@@ -106,7 +106,12 @@ async function route(
 
   if (path === '/api/v1/pair/code' && method === 'GET') {
     const ip = req.socket.remoteAddress ?? '';
-    if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip))
+    // A reverse proxy / `tailscale serve` on the same host connects from loopback for everyone;
+    // forwarded-* headers mean the request did not originate on this machine.
+    const proxied = ['x-forwarded-for', 'forwarded', 'x-real-ip'].some(
+      (h) => req.headers[h] !== undefined,
+    );
+    if (proxied || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip))
       throw new HttpError(
         403,
         'Only from the server itself (see the server logs)',
