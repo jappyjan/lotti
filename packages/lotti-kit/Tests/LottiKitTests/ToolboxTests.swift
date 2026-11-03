@@ -43,13 +43,14 @@ extension FakeTool {
 
 struct ToolboxTests {
     @Test func runsSeveralCallsAtOnceAndKeepsTheirOrder() async {
-        let calendar = FakeTool("calendar", result: "Standup 9:30", delay: .milliseconds(200))
-        let weather = FakeTool("weather", result: "12°, cloudy", delay: .milliseconds(200))
+        // Each call takes 1 s: one after the other would take 2 s. The margin is for slow CI machines.
+        let calendar = FakeTool("calendar", result: "Standup 9:30", delay: .seconds(1))
+        let weather = FakeTool("weather", result: "12°, cloudy", delay: .seconds(1))
         let toolbox = Toolbox([calendar, weather])
         let started = Date()
         let results = await toolbox.run([ToolCall(id: "c1", tool: "calendar"), ToolCall(id: "c2", tool: "weather")],
                                         allowed: ["calendar", "weather"])
-        #expect(Date().timeIntervalSince(started) < 0.35)
+        #expect(Date().timeIntervalSince(started) < 1.8)
         #expect(results == [ToolResult(id: "c1", ok: true, content: "Standup 9:30"),
                             ToolResult(id: "c2", ok: true, content: "12°, cloudy")])
     }
