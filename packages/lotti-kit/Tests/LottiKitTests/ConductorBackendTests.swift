@@ -169,7 +169,7 @@ struct ConductorBackendTests {
         #expect(backend.received(type: "perform")[0]["actionId"]?.string == "act1")
         #expect(conductor.screen?.rail?.items.map(\.title) == ["Rückgängig"])
         press(.tap)
-        try await eventually { conductor.screen?.text == "Zurückgenommen." }
+        try await eventually { conductor.screen?.text == "Rückgängig gemacht." }
         #expect(backend.received(type: "undo")[0]["undoId"]?.string == "u1")
         #expect(conductor.mode == .done)
     }
@@ -181,6 +181,56 @@ struct ConductorBackendTests {
         try await eventually { conductor.screen?.text == "Zwei Mails, nichts Dringendes." }
         #expect(conductor.screen?.kind == .says && conductor.screen?.rail == nil)
         #expect(client.lastCatchup?.id == "k1")  // and the phone chat has it
+    }
+
+    @Test func aCatchupWaitsWhileTheGlassesAreOffYourFace() async throws {
+        link.sendWear(false)
+        backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails, nichts Dringendes.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup != nil }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(conductor.screen == nil && conductor.mode == .off)
+        link.sendWear(true)
+        conductor.handle(InputEvent(.worn, from: .glasses))
+        #expect(conductor.screen?.text == "Zwei Mails, nichts Dringendes.")
+        #expect(conductor.mode == .showing)
+    }
+
+    @Test func aHeldCatchupOlderThanTwoHoursIsDropped() async throws {
+        let clock = ManualClock(Date())
+        let conductor = Conductor(link: link, brain: brain, backend: client, speech: FakeSpeech(),
+                                  today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: true),
+                                  now: { clock.now })
+        link.sendWear(false)
+        backend.send(#"{"type":"catchup","id":"k2","text":"Alt.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup?.id == "k2" }
+        try await Task.sleep(for: .milliseconds(30))
+        clock.now += 2 * 3600 + 1
+        link.sendWear(true)
+        conductor.handle(InputEvent(.worn, from: .glasses))
+        #expect(conductor.screen == nil && conductor.mode == .off)
+    }
+
+    @Test func aCatchupShowsRightAwayWhileTheWearStateIsUnknown() async throws {
+        #expect(link.wearState == .unknown)
+        backend.send(#"{"type":"catchup","id":"k1","text":"Hallo zurück.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { conductor.screen?.text == "Hallo zurück." }
+    }
+
+    @Test func mirroredMessagesNeverReachTheGlasses() async throws {
+        // The backend also sends the asking socket its own `message` frames (role user and assistant).
+        backend.script = { frame in
+            guard frame["type"]?.string == "ask" else { return MockBackend.defaultReply(frame) }
+            let id = frame["id"]!.string!
+            return [#"{"type":"message","conversationId":"c1","role":"user","text":"Hi","channel":"glasses","at":"2026-11-03T08:16:00+01:00"}"#,
+                    #"{"type":"answer","id":"\#(id)","conversationId":"c1","text":"Hallo!","followUps":[],"actions":[]}"#,
+                    #"{"type":"message","conversationId":"c1","role":"assistant","text":"Hallo!","channel":"glasses","at":"2026-11-03T08:16:01+01:00"}"#]
+        }
+        conductor.ask("Hi")
+        try await eventually { conductor.screen?.text == "Hallo!" && link.frames.last?.main.hasPrefix("Hallo!") == true }
+        let frames = link.frames.count
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(link.frames.count == frames)
+        #expect(conductor.mode == .showing && conductor.screen?.text == "Hallo!")
     }
 
     @Test func aCatchupNeverInterruptsAConversation() async throws {
@@ -196,13 +246,23 @@ struct ConductorBackendTests {
     // MARK: Location indicator
 
     @Test func theLocationIconShowsWhileTheBackendReadsAndBrieflyAfter() async throws {
+        // A long hold, so a slow runner can't make "a moment after" miss it.
+        let rig = try await ConductorBackendTests(locationAfter: .seconds(2))
+        func location() -> G2ImageBox? { rig.link.frames.last?.images.first { $0.id == G2ImageBox.locationID } }
+        rig.backend.send(#"{"type":"location_access","phase":"start","callId":"t1","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { location() != nil }
+        #expect(rig.conductor.locationActive && rig.conductor.mode == .off && rig.link.frames.last?.isDark == true)
+        rig.backend.send(#"{"type":"location_access","phase":"end","callId":"t1","at":"2026-11-03T08:15:02+01:00"}"#)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(location() != nil)  // still there a moment after
+        #expect(rig.conductor.locationActive)
+    }
+
+    @Test func theLocationIconGoesAfterTheHold() async throws {
         func location() -> G2ImageBox? { link.frames.last?.images.first { $0.id == G2ImageBox.locationID } }
         backend.send(#"{"type":"location_access","phase":"start","callId":"t1","at":"2026-11-03T08:15:00+01:00"}"#)
         try await eventually { location() != nil }
-        #expect(conductor.locationActive && conductor.mode == .off && link.frames.last?.isDark == true)
         backend.send(#"{"type":"location_access","phase":"end","callId":"t1","at":"2026-11-03T08:15:02+01:00"}"#)
-        try await Task.sleep(for: .milliseconds(40))
-        #expect(location() != nil)  // still there a moment after
         try await eventually { location() == nil }
         #expect(!conductor.locationActive)
     }
@@ -286,23 +346,23 @@ struct ConductorBackendTests {
         conductor.ask("x")
         try await eventually { conductor.screen?.rail?.current?.title == "Los" }
         press(.tap)
-        try await eventually { conductor.screen?.text == "That didn't work: Bring! ist offline." }
+        try await eventually { conductor.screen?.text == "Hat nicht geklappt: Bring! ist offline." }
     }
 
     @Test func answerImmediateActionUndoGoesThroughTheBackend() async throws {
         backend.script = { frame in
             switch frame["type"]?.string {
             case "ask":
-                return [#"{"type":"answer","id":"\#(frame["id"]!.string!)","text":"Milch ist auf der Liste.","followUps":[],"actions":[],"undo":{"id":"u7","label":"Rückgängig"}}"#]
+                return [#"{"type":"answer","id":"\#(frame["id"]!.string!)","text":"Milch ist auf der Liste.","followUps":[],"actions":[],"undo":{"id":"u7","label":"Remove Milch again"}}"#]
             case "undo":
-                return [#"{"type":"performed","id":"\#(frame["id"]!.string!)","ok":true,"text":"Milch ist wieder runter."}"#]
+                return [#"{"type":"performed","id":"\#(frame["id"]!.string!)","ok":true,"text":"Undone: Remove Milch again"}"#]
             default: return MockBackend.defaultReply(frame)
             }
         }
         conductor.ask("Milch auf die Liste")
         try await eventually { conductor.screen?.rail?.current?.title == "Rückgängig" }
         press(.tap)
-        try await eventually { conductor.screen?.text == "Milch ist wieder runter." }
+        try await eventually { conductor.screen?.text == "Rückgängig gemacht." }
         #expect(backend.received(type: "undo")[0]["undoId"]?.string == "u7")
     }
 

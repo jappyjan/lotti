@@ -62,7 +62,12 @@ struct AccountsView: View {
             await attempt($error) {
                 let start = try await model.call("accounts.google_auth_url")
                 guard let text = start.text("url"), let url = URL(string: text) else { throw BackendError.badResponse }
-                let callback = try await webAuthentication.authenticate(using: url, callbackURLScheme: "lotti")
+                let callback: URL
+                do {
+                    callback = try await webAuthentication.authenticate(using: url, callbackURLScheme: "lotti")
+                } catch let failure as ASWebAuthenticationSessionError where failure.code == .canceledLogin {
+                    return  // you closed the login sheet: nothing went wrong
+                }
                 guard let result = OAuthCallback(callback) else { throw BackendError.badResponse }
                 if let problem = result.error { throw BackendError.server(problem) }
                 guard let code = result.code, let state = result.state ?? start.text("state") else { throw BackendError.badResponse }
@@ -391,6 +396,7 @@ struct BringSection: View {
     @State private var lists: [Selectable] = []
     @State private var email = ""
     @State private var password = ""
+    @State private var confirmLogout = false
     @State private var error: String?
 
     var body: some View {
@@ -414,13 +420,18 @@ struct BringSection: View {
                 }
             }
             if let account = accounts.first(where: { $0.kind == "bring" }), connected || !account.status.isEmpty {
-                Button("Log out of Bring!", role: .destructive) {
-                    Task {
-                        await attempt($error) { _ = try await model.call("accounts.delete", ["id": .string(account.id)]) }
-                        await load()
-                        await changed()
+                Button("Log out of Bring!", role: .destructive) { confirmLogout = true }
+                    .confirmationDialog("Log out of Bring!?", isPresented: $confirmLogout, titleVisibility: .visible) {
+                        Button("Log out", role: .destructive) {
+                            Task {
+                                await attempt($error) { _ = try await model.call("accounts.delete", ["id": .string(account.id)]) }
+                                await load()
+                                await changed()
+                            }
+                        }
+                    } message: {
+                        Text("Lotti can't change your shopping list until you log in again.")
                     }
-                }
             }
             if !connected {
                 TextField("E-mail", text: $email).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)

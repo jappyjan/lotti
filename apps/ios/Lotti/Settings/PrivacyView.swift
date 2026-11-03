@@ -34,24 +34,44 @@ private struct SafetyToggle: View {
     @Environment(AppModel.self) private var model
     let title: String
     let key: String
-    @State private var on = true
-    @State private var loaded = false
+    /// Unknown until the backend said; the switch stays off and disabled until then.
+    @State private var on: Bool?
+    @State private var loadError: String?
     @State private var error: String?
 
     var body: some View {
-        Toggle(title, isOn: Binding(get: { on }, set: { value in
-            on = value
-            Task {
-                await attempt($error) { _ = try await model.call("settings.set_safety", ["key": .string(key), "value": .bool(value)]) }
-            }
-        }))
-        .disabled(!loaded)
-        .errorAlert($error)
-        .task {
-            if let value = (try? await model.call("settings.get", ["key": .string(key)]))?["value"]?.boolValue {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(title, isOn: Binding(get: { on ?? false }, set: { value in
+                let previous = on
                 on = value
-                loaded = true
+                Task {
+                    do {
+                        _ = try await model.call("settings.set_safety", ["key": .string(key), "value": .bool(value)])
+                    } catch {
+                        on = previous  // the backend kept the old value
+                        self.error = error.localizedDescription
+                    }
+                }
+            }))
+            .disabled(on == nil)
+            if let loadError {
+                Text(loadError).font(.caption).foregroundStyle(.red)
             }
+        }
+        .errorAlert($error)
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            if let value = try await model.call("settings.get", ["key": .string(key)])["value"]?.boolValue {
+                on = value
+                loadError = nil
+            } else {
+                loadError = "Lotti Brain didn't send this setting."
+            }
+        } catch {
+            loadError = "Couldn't load: \(error.localizedDescription)"
         }
     }
 }

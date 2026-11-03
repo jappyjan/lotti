@@ -101,6 +101,12 @@ public final class Conductor {
     /// Shared demand for the IMU feed (head-up here, the mascot elsewhere).
     @ObservationIgnored public let imuDemand: IMUDemand
     @ObservationIgnored private var headUpToken: IMUDemand.Token?
+    /// True while `syncHeadUpDemand` waits for the demand: later calls leave the change to it.
+    @ObservationIgnored private var syncingHeadUp = false
+    /// A catch-up brief that came while the glasses were off your face, shown when you put them on.
+    @ObservationIgnored private var heldCatchup: (catchup: Catchup, received: Date)?
+    /// A held brief older than this is dropped instead of shown.
+    static let heldCatchupMaxAge: TimeInterval = 2 * 3600
     /// When the backend last showed a sign of life, so the wait is for silence, not a fixed total time.
     @ObservationIgnored private var remoteActivity = ContinuousClock.now
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -178,13 +184,22 @@ public final class Conductor {
     }
 
     /// Head-up detection holds one `imuDemand` token while it is on. The mascot shares the same
-    /// demand, so neither can cut the other's feed.
+    /// demand, so neither can cut the other's feed. Serialised: a call while an acquire or release
+    /// is still running returns at once, and the running loop catches up with `headTracking`, so
+    /// two quick calls never take two tokens.
     private func syncHeadUpDemand() async {
-        if headTracking, headUpToken == nil {
-            headUpToken = await imuDemand.acquire("headUp")
-        } else if !headTracking, let token = headUpToken {
-            headUpToken = nil
-            await imuDemand.release(token)
+        guard !syncingHeadUp else { return }
+        syncingHeadUp = true
+        defer { syncingHeadUp = false }
+        while true {
+            if headTracking, headUpToken == nil {
+                headUpToken = await imuDemand.acquire("headUp")
+            } else if !headTracking, let token = headUpToken {
+                headUpToken = nil
+                await imuDemand.release(token)
+            } else {
+                return
+            }
         }
     }
 
@@ -221,7 +236,7 @@ public final class Conductor {
         if event.source == .imu, !headTracking, event.gesture == .headUp || event.gesture == .headDown { return }
         reportPresence(event)
         switch event.gesture {
-        case .worn: break  // presence only; nothing to show
+        case .worn: showHeldCatchup()  // otherwise presence only; nothing to show
         case .removed: if mode != .off { turnOff() }
         case .longPress:
             // Display off: only "double tap, then hold" talks (the double tap opens today first).
@@ -446,8 +461,20 @@ public final class Conductor {
     }
 
     /// A catch-up brief arrives as a short answer-like screen, but only while the display is off or
-    /// shows the today view: it never interrupts a conversation.
+    /// shows the today view: it never interrupts a conversation. If the glasses are connected but
+    /// known to be off your face, it waits for the next "worn" (at most `heldCatchupMaxAge`). An
+    /// unknown wear state (not reported yet) shows it right away.
     private func showCatchup(_ catchup: Catchup) {
+        if link.status.isConnected, link.wearState == .removed {
+            heldCatchup = (catchup, now())
+            log("catch-up held until the glasses are worn")
+            return
+        }
+        heldCatchup = nil
+        presentCatchup(catchup)
+    }
+
+    private func presentCatchup(_ catchup: Catchup) {
         switch mode {
         case .off, .today:
             backStack = []
@@ -456,6 +483,13 @@ public final class Conductor {
         default:
             break
         }
+    }
+
+    private func showHeldCatchup() {
+        guard let held = heldCatchup else { return }
+        heldCatchup = nil
+        guard now().timeIntervalSince(held.received) <= Self.heldCatchupMaxAge else { return log("held catch-up too old, dropped") }
+        presentCatchup(held.catchup)
     }
 
     private func turnOff() {
@@ -552,7 +586,7 @@ public final class Conductor {
         thinking?.cancel()
         backStack = []
         mode = .listening
-        show(Screen(.listening, "Listening…"), timeout: false)
+        show(Screen(.listening, say("Ich höre…", "Listening…")), timeout: false)
         lastPartial = ""
         micStopRequested = false
         listening = Task { await listen() }
@@ -592,7 +626,7 @@ public final class Conductor {
     private func stopListening() {
         guard let listening else { return }
         mode = .working
-        show(Screen(.working, "Let me think…"), timeout: false)
+        show(Screen(.working, say("Denke nach…", "Let me think…")), timeout: false)
         thinking = Task {
             await stopMicrophone()
             // The transcript stream ends once the recognizer has the final result.
@@ -602,7 +636,7 @@ public final class Conductor {
             lastHeard = heard
             if heard.isEmpty {
                 mode = .done
-                show(Screen(.done, "Sorry, I didn't catch that."))
+                show(Screen(.done, say("Das habe ich nicht verstanden.", "Sorry, I didn't catch that.")))
             } else {
                 await answer(heard)
             }
@@ -634,7 +668,7 @@ public final class Conductor {
         thinking?.cancel()
         backStack = []
         mode = .working
-        show(Screen(.working, "Let me think…"), timeout: false)
+        show(Screen(.working, say("Denke nach…", "Let me think…")), timeout: false)
         thinking = Task { await answer(question) }
     }
 
@@ -677,13 +711,13 @@ public final class Conductor {
             mode = .showing
             lastError = error.localizedDescription
             log("brain failed: \(error.localizedDescription)")
-            show(Screen(.says, "I can't think right now. \(error.localizedDescription)",
-                        rail: Rail([RailItem("Try again", .ask(question))])))
+            show(Screen(.says, say("Ich kann gerade nicht nachdenken. ", "I can't think right now. ") + error.localizedDescription,
+                        rail: Rail([RailItem(tryAgain, .ask(question))])))
         case nil:
             mode = .showing
             log("brain timed out")
             brain.endConversation()
-            show(Screen(.says, "Sorry, I got stuck on that.", rail: Rail([RailItem("Try again", .ask(question))])))
+            show(Screen(.says, say("Da bin ich hängen geblieben.", "Sorry, I got stuck on that."), rail: Rail([RailItem(tryAgain, .ask(question))])))
         }
     }
 
@@ -720,12 +754,12 @@ public final class Conductor {
             mode = .showing
             lastError = "Backend: \(error.localizedDescription)"
             log("backend failed: \(error.localizedDescription)")
-            show(Screen(.says, (error as? BackendError)?.errorDescription ?? "I can't reach Lotti Brain right now.",
-                        rail: Rail([RailItem("Try again", .ask(question))])))
+            show(Screen(.says, (error as? BackendError)?.errorDescription ?? say("Ich erreiche Lotti Brain gerade nicht.", "I can't reach Lotti Brain right now."),
+                        rail: Rail([RailItem(tryAgain, .ask(question))])))
         case nil:
             mode = .showing
             log("backend timed out")
-            show(Screen(.says, BackendError.timeout.errorDescription!, rail: Rail([RailItem("Try again", .ask(question))])))
+            show(Screen(.says, say("Lotti Brain braucht zu lange.", BackendError.timeout.errorDescription!), rail: Rail([RailItem(tryAgain, .ask(question))])))
         }
     }
 
@@ -743,7 +777,7 @@ public final class Conductor {
         var items = answer.actions.map { RailItem($0.title, .perform($0)) }
         items += answer.followUps.map { RailItem($0, .ask($0)) }
         if let undo = answer.undo {
-            items = Array(items.prefix(limit - 1)) + [RailItem(undo.label, .undo(undo))]
+            items = Array(items.prefix(limit - 1)) + [undoItem(undo)]
         }
         return Rail(items, limit: limit)
     }
@@ -756,8 +790,8 @@ public final class Conductor {
         if let current = screen { backStack.append(current) }
         mode = .working
         if action.target == .server {
-            show(Screen(.working, "Working…"), timeout: false)
-            guard let backend, let id = action.actionId else { return finished(ToolResult(id: action.title, ok: false, content: "Lotti Brain isn't connected."), undo: nil) }
+            show(Screen(.working, say("Mache ich…", "Working…")), timeout: false)
+            guard let backend, let id = action.actionId else { return finished(ToolResult(id: action.title, ok: false, content: notConnected), undo: nil) }
             thinking = Task {
                 do {
                     let performed = try await backend.perform(actionId: id)
@@ -771,7 +805,7 @@ public final class Conductor {
             }
             return
         }
-        let progress = toolbox.tool(named: action.tool)?.spec.progress ?? "Working…"
+        let progress = toolbox.tool(named: action.tool)?.spec.progress ?? say("Mache ich…", "Working…")
         show(Screen(.working, progress), timeout: false)
         let toolbox = self.toolbox
         thinking = Task {
@@ -788,14 +822,16 @@ public final class Conductor {
         thinking?.cancel()
         backStack = []
         mode = .working
-        show(Screen(.working, "Undoing…"), timeout: false)
-        guard let backend else { return finished(ToolResult(id: undo.id, ok: false, content: "Lotti Brain isn't connected."), undo: nil) }
+        show(Screen(.working, say("Mache rückgängig…", "Undoing…")), timeout: false)
+        guard let backend else { return finished(ToolResult(id: undo.id, ok: false, content: notConnected), undo: nil) }
         thinking = Task {
             do {
                 let performed = try await backend.undo(undo.id)
                 guard !Task.isCancelled, mode == .working else { return }
                 log("undo \(undo.id): \(performed.ok ? "ok" : "failed") \(performed.text)")
-                finished(ToolResult(id: undo.id, ok: performed.ok, content: performed.text.isEmpty ? "Undone." : performed.text), undo: nil)
+                // The backend's text repeats its raw label ("Undone: Remove Milch again"): say it plainly.
+                finished(ToolResult(id: undo.id, ok: performed.ok,
+                                    content: performed.ok ? say("Rückgängig gemacht.", "Undone.") : performed.text), undo: nil)
             } catch {
                 guard !Task.isCancelled, mode == .working else { return }
                 finished(ToolResult(id: undo.id, ok: false, content: error.localizedDescription), undo: nil)
@@ -809,7 +845,7 @@ public final class Conductor {
             backStack = []
             if let undo {
                 mode = .showing
-                show(Screen(.says, result.content, rail: Rail([RailItem(undo.label, .undo(undo))])))
+                show(Screen(.says, result.content, rail: Rail([undoItem(undo)])))
             } else {
                 mode = .done
                 show(Screen(.done, result.content))
@@ -817,9 +853,22 @@ public final class Conductor {
         } else {
             lastError = result.content
             mode = .showing
-            show(Screen(.says, "That didn't work: \(result.content)"))
+            show(Screen(.says, say("Hat nicht geklappt: ", "That didn't work: ") + result.content))
         }
     }
+
+    /// The Undo choice. The backend's label describes the inverse ("Remove Milch again"), which
+    /// reads like a new action on the lens, so the choice just says Undo.
+    private func undoItem(_ undo: UndoAction) -> RailItem {
+        RailItem(say("Rückgängig", "Undo"), .undo(undo))
+    }
+
+    // MARK: - Language
+
+    /// The glasses' own words follow the same language as the inbox summary.
+    private func say(_ german: String, _ english: String) -> String { summary.german ? german : english }
+    private var tryAgain: String { say("Nochmal", "Try again") }
+    private var notConnected: String { say("Lotti Brain ist nicht verbunden.", "Lotti Brain isn't connected.") }
 
     private func log(_ message: String) {
         print("[Lotti] \(message)")

@@ -2,6 +2,11 @@ import Foundation
 import LottiKit
 import Observation
 
+/// The app's own words follow the phone's first language, German or English (like the glasses).
+func lang(_ german: String, _ english: String) -> String {
+    Locale.preferredLanguages.first?.hasPrefix("de") == true ? german : english
+}
+
 /// One line in the chat.
 struct ChatItem: Identifiable, Equatable {
     enum Kind: Equatable {
@@ -53,17 +58,31 @@ final class ChatModel {
     @ObservationIgnored private let speech: any SpeechRecognizer
     @ObservationIgnored private let microphone: any Microphone
     @ObservationIgnored private let now: @Sendable () -> Date
+    /// Like the glasses (`Conductor.Timing`): the backend gets `remoteTimeout` of silence (any
+    /// status line or tool call restarts the clock), the offline brain `offlineTimeout` in total.
+    @ObservationIgnored private let remoteTimeout: Duration
+    @ObservationIgnored private let offlineTimeout: Duration
+    @ObservationIgnored private var remoteActivity = ContinuousClock.now
     @ObservationIgnored private var asking: Task<Void, Never>?
     @ObservationIgnored private var listening: Task<Void, Never>?
     @ObservationIgnored private var historyLoaded = false
 
+    /// What a tapped action did, for screens that show it in place (the inbox item).
+    struct ActionResult: Equatable {
+        var ok: Bool
+        var text: String
+    }
+
     init(backend: BackendClient, offline: any Brain, toolbox: Toolbox, speech: any SpeechRecognizer, microphone: any Microphone,
+         remoteTimeout: Duration = .seconds(120), offlineTimeout: Duration = .seconds(25),
          now: @escaping @Sendable () -> Date = { Date() }) {
         self.backend = backend
         self.offline = offline
         self.toolbox = toolbox
         self.speech = speech
         self.microphone = microphone
+        self.remoteTimeout = remoteTimeout
+        self.offlineTimeout = offlineTimeout
         self.now = now
     }
 
@@ -101,15 +120,32 @@ final class ChatModel {
         }
         switch Router.route(backendReachable: backend.isReachable) {
         case .backend:
-            do {
-                let answer = try await backend.ask(text, channel: .phone) { [weak self] line in self?.statusLine = line }
+            let backend = self.backend
+            remoteActivity = ContinuousClock.now
+            let result: Result<BackendAnswer, Error>? = await withTimeout(remoteTimeout, activity: { [weak self] in
+                self?.remoteActivity ?? ContinuousClock.now
+            }) { [weak self] in
+                do {
+                    return .success(try await backend.ask(text, channel: .phone,
+                                                          status: { [weak self] line in self?.statusLine = line },
+                                                          activity: { [weak self] in self?.remoteActivity = ContinuousClock.now }))
+                } catch {
+                    return .failure(error)
+                }
+            }
+            switch result {
+            case .success(let answer):
                 append(answer.answer, offline: false)
-            } catch is CancellationError {
-                items.append(ChatItem(kind: .note, text: "Stopped.", at: now()))
-            } catch BackendError.unreachable {
+            case .failure(let error) where error is CancellationError:
+                items.append(ChatItem(kind: .note, text: lang("Abgebrochen.", "Stopped."), at: now()))
+            case .failure(let error) where error as? BackendError == .unreachable:
                 await askOffline(text)
-            } catch {
+            case .failure(let error):
                 items.append(ChatItem(kind: .error, text: error.localizedDescription, at: now()))
+            case nil:
+                // The backend was silent for too long; withTimeout cancelled the ask, which sends `cancel`.
+                items.append(ChatItem(kind: .error, text: Task.isCancelled ? lang("Abgebrochen.", "Stopped.")
+                                          : BackendError.timeout.errorDescription ?? "Lotti Brain is taking too long.", at: now()))
             }
         case .offline:
             await askOffline(text)
@@ -119,13 +155,24 @@ final class ChatModel {
     /// Timers, navigation, reminders and the local day; everything else gets the short offline sentence.
     private func askOffline(_ text: String) async {
         let context = TodayComposer().nowLine(TodayInfo(now: now()))
-        do {
-            let answer = try await offline.answer(text, context: context) { [weak self] line in self?.statusLine = line }
+        let offline = self.offline
+        let result: Result<Answer, Error>? = await withTimeout(offlineTimeout) { [weak self] in
+            do {
+                return .success(try await offline.answer(text, context: context) { [weak self] line in self?.statusLine = line })
+            } catch {
+                return .failure(error)
+            }
+        }
+        switch result {
+        case .success(let answer):
             append(answer, offline: true)
-        } catch is CancellationError {
-            items.append(ChatItem(kind: .note, text: "Stopped.", at: now()))
-        } catch {
+        case .failure(let error) where error is CancellationError:
+            items.append(ChatItem(kind: .note, text: lang("Abgebrochen.", "Stopped."), at: now()))
+        case .failure(let error):
             items.append(ChatItem(kind: .error, text: error.localizedDescription, at: now()))
+        case nil:
+            offline.endConversation()
+            items.append(ChatItem(kind: .error, text: lang("Da bin ich hängen geblieben.", "Sorry, I got stuck on that."), at: now()))
         }
     }
 
@@ -138,7 +185,9 @@ final class ChatModel {
 
     /// Runs an action you tapped. Phone actions go through the `Toolbox` (timers, reminders,
     /// navigation), server actions through the backend's `perform`. Nothing runs without the tap.
-    func perform(_ action: ProposedAction, in itemID: UUID? = nil) async {
+    /// The result goes into the chat and is returned, for screens that show it in place.
+    @discardableResult
+    func perform(_ action: ProposedAction, in itemID: UUID? = nil) async -> ActionResult {
         if let itemID, let index = items.firstIndex(where: { $0.id == itemID }) {
             items[index].actions.removeAll { $0 == action }
         }
@@ -147,30 +196,34 @@ final class ChatModel {
             guard let id = action.actionId else { return report(ok: false, "That action has no id.", undo: nil) }
             do {
                 let performed = try await backend.perform(actionId: id)
-                report(ok: performed.ok, performed.text.isEmpty ? (performed.ok ? "Done." : "That didn't work.") : performed.text,
-                       undo: performed.undo)
+                return report(ok: performed.ok,
+                              performed.text.isEmpty ? (performed.ok ? lang("Erledigt.", "Done.") : lang("Hat nicht geklappt.", "That didn't work.")) : performed.text,
+                              undo: performed.undo)
             } catch {
-                report(ok: false, error.localizedDescription, undo: nil)
+                return report(ok: false, error.localizedDescription, undo: nil)
             }
         case .phone:
             let result = await toolbox.perform(action)
-            report(ok: result.ok, result.content, undo: nil)
+            return report(ok: result.ok, result.content, undo: nil)
         }
     }
 
-    /// Takes back what Lotti just did.
+    /// Takes back what Lotti just did. The backend's text repeats its raw label ("Undone: Remove
+    /// Milch again"), so success just says Undone.
     func undo(_ undo: UndoAction, in itemID: UUID? = nil) async {
         if let itemID, let index = items.firstIndex(where: { $0.id == itemID }) { items[index].undo = nil }
         do {
             let performed = try await backend.undo(undo.id)
-            report(ok: performed.ok, performed.text.isEmpty ? "Undone." : performed.text, undo: nil)
+            report(ok: performed.ok, performed.ok ? lang("Rückgängig gemacht.", "Undone.") : performed.text, undo: nil)
         } catch {
             report(ok: false, error.localizedDescription, undo: nil)
         }
     }
 
-    private func report(ok: Bool, _ text: String, undo: UndoAction?) {
+    @discardableResult
+    private func report(ok: Bool, _ text: String, undo: UndoAction?) -> ActionResult {
         items.append(ChatItem(kind: ok ? .note : .error, text: text, undo: undo, at: now()))
+        return ActionResult(ok: ok, text: text)
     }
 
     // MARK: - Voice

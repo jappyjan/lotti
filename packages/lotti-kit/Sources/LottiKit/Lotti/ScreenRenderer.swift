@@ -64,16 +64,7 @@ public struct ScreenRenderer: Sendable {
         if style == .choicesBelow { return renderBelow(screen) }
         let layout = style == .wideRail ? TextLayout.wideRail : self.layout
         let columns = screen.rail == nil ? layout.fullWidthColumns : layout.mainColumnsWithRail
-        var lines = Self.wrap(screen.text, columns: columns)
-        if lines.count > layout.lines {
-            lines = Array(lines.prefix(layout.lines))
-            lines[lines.count - 1] = Self.ellipsize(lines[lines.count - 1], columns: columns)
-        }
-        let details = screen.details.flatMap { Self.wrap($0, columns: columns) }
-        if !details.isEmpty, lines.count + 1 + 1 <= layout.lines {
-            lines.append("")
-            lines += details.prefix(layout.lines - lines.count)
-        }
+        let lines = Self.mainLines(screen, columns: columns, maxLines: layout.lines)
         return GlassesFrame(main: lines.joined(separator: "\n"),
                             rail: screen.rail.map { renderRail($0, layout: layout) }, style: style)
     }
@@ -84,16 +75,7 @@ public struct ScreenRenderer: Sendable {
     private func renderBelow(_ screen: Screen) -> GlassesFrame {
         let columns = layout.fullWidthColumns
         let maxLines = screen.rail == nil ? layout.lines : Self.choicesBelowMainLines
-        var lines = Self.wrap(screen.text, columns: columns)
-        if lines.count > maxLines {
-            lines = Array(lines.prefix(maxLines))
-            lines[lines.count - 1] = Self.ellipsize(lines[lines.count - 1], columns: columns)
-        }
-        let details = screen.details.flatMap { Self.wrap($0, columns: columns) }
-        if !details.isEmpty, lines.count + 1 + 1 <= maxLines {
-            lines.append("")
-            lines += details.prefix(maxLines - lines.count)
-        }
+        let lines = Self.mainLines(screen, columns: columns, maxLines: maxLines)
         let rail = screen.rail.map { rail in
             let width = columns - Self.highlightMarker.count
             return rail.items.enumerated().map { index, item in
@@ -102,6 +84,25 @@ public struct ScreenRenderer: Sendable {
             }.joined(separator: "\n")
         }
         return GlassesFrame(main: lines.joined(separator: "\n"), rail: rail, style: .choicesBelow)
+    }
+
+    /// The sentence, cut to `maxLines`, then a blank line and as many details as still fit. An
+    /// opened item (`.original`) always keeps its first detail line, the "Mail · title" header:
+    /// a long body is cut further instead.
+    private static func mainLines(_ screen: Screen, columns: Int, maxLines: Int) -> [String] {
+        let details = screen.details.flatMap { wrap($0, columns: columns) }
+        let reserved = screen.kind == .original && !details.isEmpty && maxLines >= 3 ? 2 : 0  // blank + header
+        let textLines = maxLines - reserved
+        var lines = wrap(screen.text, columns: columns)
+        if lines.count > textLines {
+            lines = Array(lines.prefix(textLines))
+            lines[lines.count - 1] = ellipsize(lines[lines.count - 1], columns: columns)
+        }
+        if !details.isEmpty, lines.count + 1 + 1 <= maxLines {
+            lines.append("")
+            lines += details.prefix(maxLines - lines.count)
+        }
+        return lines
     }
 
     func renderRail(_ rail: Rail, layout: TextLayout) -> String {

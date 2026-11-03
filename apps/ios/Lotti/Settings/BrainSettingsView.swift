@@ -133,6 +133,7 @@ struct BrainSettingsView: View {
 private struct BrainStatusSection: View {
     @Environment(AppModel.self) private var model
     @State private var status: JSONValue?
+    @State private var failure: String?
 
     var body: some View {
         Section("Server") {
@@ -143,11 +144,20 @@ private struct BrainStatusSection: View {
                 LabeledContent("Scheduled jobs", value: "\(Int(status["jobs"]?.number ?? 0))")
                 LabeledContent("Inbox", value: "\(Int(status["inboxPending"]?.number ?? 0)) waiting")
                 LabeledContent("Paired phones", value: "\(Int(status["pairedDevices"]?.number ?? 0))")
+            } else if let failure {
+                Text(failure).foregroundStyle(.red)
             } else {
                 Text("Loading…").foregroundStyle(.secondary)
             }
         }
-        .task(id: model.backend.state) { status = try? await model.call("status.get") }
+        .task(id: model.backend.state) {
+            do {
+                status = try await model.call("status.get")
+                failure = nil
+            } catch {
+                if !Task.isCancelled { failure = error.localizedDescription }
+            }
+        }
     }
 }
 
@@ -158,21 +168,17 @@ private struct DevicesSection: View {
     @State private var devices: [JSONValue] = []
     @State private var newCode: String?
     @State private var error: String?
+    /// The device whose Revoke was tapped, waiting for the confirmation.
+    @State private var revoking: JSONValue?
 
     var body: some View {
         Section {
             ForEach(Array(devices.enumerated()), id: \.offset) { _, device in
-                LabeledContent(device.text("name") ?? "Device") {
+                LabeledContent(device.flag("isSelf") ? "This iPhone" : device.text("name") ?? "Device") {
                     Text(device.flag("connected") ? "Online" : shortDate(device.date("lastSeenAt"))).foregroundStyle(.secondary)
                 }
                 .swipeActions {
-                    Button("Revoke", role: .destructive) {
-                        guard let id = device.text("id") else { return }
-                        Task {
-                            await attempt($error) { _ = try await model.call("pairing.revoke_device", ["id": .string(id)]) }
-                            await load()
-                        }
-                    }
+                    Button("Revoke", role: .destructive) { revoking = device }
                 }
             }
             if let newCode {
@@ -193,11 +199,35 @@ private struct DevicesSection: View {
             Text("Swipe a device to revoke it. A pairing code works once.")
         }
         .errorAlert($error)
+        .confirmationDialog(revoking?.flag("isSelf") == true ? "Revoke this iPhone?" : "Revoke \(revoking?.text("name") ?? "this device")?",
+                            isPresented: Binding(get: { revoking != nil }, set: { if !$0 { revoking = nil } }),
+                            titleVisibility: .visible, presenting: revoking) { device in
+            Button(device.flag("isSelf") ? "Revoke and unpair this iPhone" : "Revoke", role: .destructive) { revoke(device) }
+        } message: { device in
+            if device.flag("isSelf") {
+                Text("This is the phone you are holding. It loses access to Lotti Brain right away and has to be paired again with a new code.")
+            } else {
+                Text("It can't reach Lotti Brain any more until it is paired again.")
+            }
+        }
         .task { await load() }
     }
 
     private func load() async {
         devices = (try? await model.call("pairing.devices"))?.items ?? []
+    }
+
+    private func revoke(_ device: JSONValue) {
+        guard let id = device.text("id") else { return }
+        let isSelf = device.flag("isSelf")
+        Task {
+            await attempt($error) {
+                _ = try await model.call("pairing.revoke_device", ["id": .string(id)])
+                // Our own token is gone: forget the server here too instead of failing every call.
+                if isSelf { model.unpair() }
+            }
+            if !isSelf { await load() }
+        }
     }
 }
 

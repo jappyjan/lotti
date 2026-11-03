@@ -19,6 +19,11 @@ final class MascotHost {
         controller.enabled = enabled
     }
 
+    /// False with Reduce Motion: the head stays neutral and the IMU is never requested for it.
+    func setHeadSyncAllowed(_ allowed: Bool) {
+        controller.headSyncAllowed = allowed
+    }
+
     /// A view that shows the mascot is on screen in the foreground and the switch is on.
     func acquire() {
         holders += 1

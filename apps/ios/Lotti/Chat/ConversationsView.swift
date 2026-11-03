@@ -7,20 +7,28 @@ struct ConversationsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var search = ""
     @State private var found: [ConversationInfo]?
+    @State private var searchError: String?
 
     var body: some View {
         Loaded(load: { model in try await model.call("conversations.list", ["limit": 50]).items.compactMap(ConversationInfo.init) }) { list, _ in
             let shown = found ?? list
-            List(shown) { conversation in
-                if conversation.isOpen {
-                    Button { dismiss() } label: { row(conversation, current: true) }
-                } else {
-                    NavigationLink { ConversationDetailView(conversation: conversation) } label: { row(conversation, current: false) }
+            List {
+                if let searchError {
+                    Text("Search failed: \(searchError)").foregroundStyle(.red)
+                } else if found != nil, shown.isEmpty {
+                    Text("No matches.").foregroundStyle(.secondary)
+                }
+                ForEach(shown) { conversation in
+                    if conversation.isOpen {
+                        Button { dismiss() } label: { row(conversation, current: true) }
+                    } else {
+                        NavigationLink { ConversationDetailView(conversation: conversation) } label: { row(conversation, current: false) }
+                    }
                 }
             }
             .searchable(text: $search, prompt: "Search conversations")
             .onSubmit(of: .search) { Task { await runSearch() } }
-            .onChange(of: search) { if search.isEmpty { found = nil } }
+            .onChange(of: search) { if search.isEmpty { found = nil; searchError = nil } }
         }
         .navigationTitle("Conversations")
     }
@@ -43,9 +51,15 @@ struct ConversationsView: View {
     private func runSearch() async {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return found = nil }
-        let result = try? await model.call("conversations.search", ["query": .string(query), "limit": 20])
-        // Hits may be conversations or turns that name their conversation; list what we can read as conversations.
-        found = result?.items.compactMap { ConversationInfo($0) ?? $0["conversation"].flatMap(ConversationInfo.init) }
+        do {
+            let result = try await model.call("conversations.search", ["query": .string(query), "limit": 20])
+            // Hits may be conversations or turns that name their conversation; list what we can read as conversations.
+            found = result.items.compactMap { ConversationInfo($0) ?? $0["conversation"].flatMap(ConversationInfo.init) }
+            searchError = nil
+        } catch {
+            found = []
+            searchError = error.localizedDescription
+        }
     }
 }
 

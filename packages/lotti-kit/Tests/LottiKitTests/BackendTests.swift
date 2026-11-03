@@ -22,8 +22,9 @@ struct BackendClientTests {
         #expect(backend.headers == ["wss://brain.test/ws Bearer tok"])
         #expect(client.welcome?.conversationId == "c1")
         #expect(client.welcome?.settings["activeProvider"] == "test")
-        // After hello the app asks for the whole inbox.
-        try await eventually { !backend.received(type: "inbox_sync").isEmpty }
+        // The backend sends the whole inbox after `welcome` by itself: no `inbox_sync` on connect.
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(backend.received(type: "inbox_sync").isEmpty)
     }
 
     @Test func reconnectsWithBackoffAfterADrop() async throws {
@@ -50,7 +51,7 @@ struct BackendClientTests {
         let client = try await ready()
         let before = backend.connectCount
         client.reconnectNow()
-        try await eventually { backend.received(type: "inbox_sync").count >= 2 }
+        try await eventually { backend.received(type: "inbox_sync").count == 1 }
         #expect(backend.connectCount == before)
     }
 
@@ -99,6 +100,40 @@ struct BackendClientTests {
         #expect(ask["locale"]?.string == "de")
         #expect(ask["now"]?.string?.contains("T") == true)
         #expect(BackendDates.parse(ask["now"]?.string ?? "") != nil)
+    }
+
+    @Test func askIdsAreUUIDs() async throws {
+        let client = try await ready()
+        _ = try await client.ask("Hi")
+        _ = try await client.ask("Hi again")
+        let ids = backend.received(type: "ask").compactMap { $0["id"]?.string }
+        #expect(ids.count == 2 && Set(ids).count == 2)
+        #expect(ids.allSatisfy { UUID(uuidString: $0) != nil })
+    }
+
+    @Test func aSilentBackendFailsTheAskAsUnreachableAndReconnects() async throws {
+        // The socket looks open but nothing comes back for the ask: not even a status line.
+        backend.script = { frame in frame["type"]?.string == "ask" ? [] : MockBackend.defaultReply(frame) }
+        let client = Fixtures.client(backend, firstFrameTimeout: .milliseconds(150))
+        try await eventually { client.isReachable }
+        await #expect(throws: BackendError.unreachable) { try await client.ask("Hi") }
+        try await eventually { backend.connectCount == 2 && client.isReachable }
+    }
+
+    @Test func aStatusLineKeepsTheAskAlive() async throws {
+        backend.script = { frame in
+            guard frame["type"]?.string == "ask" else { return MockBackend.defaultReply(frame) }
+            return [#"{"type":"status","id":"\#(frame["id"]!.string!)","text":"Denke nach …"}"#]
+        }
+        let client = Fixtures.client(backend, firstFrameTimeout: .milliseconds(100))
+        try await eventually { client.isReachable }
+        let task = Task { try await client.ask("Hi") }
+        try await eventually { !backend.received(type: "ask").isEmpty }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(client.isReachable && backend.connectCount == 1)
+        let id = backend.received(type: "ask")[0]["id"]!.string!
+        backend.send(#"{"type":"answer","id":"\#(id)","conversationId":"c1","text":"Spät, aber da.","followUps":[],"actions":[]}"#)
+        #expect(try await task.value.text == "Spät, aber da.")
     }
 
     @Test func askingWithoutASocketThrowsUnreachable() async throws {
@@ -318,8 +353,39 @@ struct BackendClientTests {
         #expect(BackendDates.parse(first["at"]?.string ?? "") != nil)
         #expect(backend.received(type: "presence")[1]["event"]?.string == "glasses_worn")
 
-        let offline = Fixtures.client(MockBackend(), start: false)
-        offline.presence(.headUp)  // nothing to assert but it must not crash or queue
+    }
+
+    @Test func presenceWithoutASocketIsSentAfterWelcomeIfFresh() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 1_000_000))
+        let client = Fixtures.client(backend, now: { clock.now }, start: false)
+        client.presence(.glassesRemoved)
+        clock.now += 1
+        client.presence(.gesture, detail: "tap")
+        clock.now += 1
+        client.presence(.gesture, detail: "double_tap")  // the latest of a kind wins
+        clock.now += 1
+        client.presence(.glassesWorn)
+        clock.now += 20
+        client.start()
+        try await eventually { backend.received(type: "presence").count == 3 }
+        try await Task.sleep(for: .milliseconds(30))
+        let sent = backend.received(type: "presence")
+        #expect(sent.map { $0["event"]?.string } == ["glasses_removed", "gesture", "glasses_worn"])
+        #expect(sent[1]["detail"]?.string == "double_tap")
+        #expect(BackendDates.parse(sent[0]["at"]?.string ?? "") == Date(timeIntervalSince1970: 1_000_000))
+    }
+
+    @Test func stalePresenceIsDroppedOnReconnect() async throws {
+        let clock = ManualClock(Date(timeIntervalSince1970: 1_000_000))
+        let client = Fixtures.client(backend, now: { clock.now }, start: false)
+        client.presence(.headUp)
+        clock.now += 31
+        client.presence(.glassesWorn)
+        client.start()
+        try await eventually { client.isReachable }
+        try await eventually { backend.received(type: "presence").count == 1 }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(backend.received(type: "presence").map { $0["event"]?.string } == ["glasses_worn"])
     }
 
     @Test func catchupLocationAndMessagesAreExposed() async throws {

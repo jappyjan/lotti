@@ -69,7 +69,11 @@ private struct MascotDrawingDriver<Content: View>: View {
                     .onChange(of: controller.pitch) { applyHead() }
                     .onChange(of: controller.roll) { applyHead() }
                     .onChange(of: controller.yaw) { applyHead() }
-                    .onChange(of: reduceMotion) { applyHead(); applyGlasses(controller.glassesOn, animated: false) }
+                    .onChange(of: reduceMotion) {
+                        host.setHeadSyncAllowed(!reduceMotion)
+                        applyHead()
+                        applyGlasses(controller.glassesOn, animated: false)
+                    }
             }
         }
         .onAppear { visible = true; sync() }
@@ -82,6 +86,8 @@ private struct MascotDrawingDriver<Content: View>: View {
     private func sync() {
         let want = visible && enabled && scenePhase == .active
         host.setEnabled(enabled)
+        // Reduce Motion: no head following, so no IMU demand for it either.
+        host.setHeadSyncAllowed(!reduceMotion)
         if want, !held {
             held = true
             host.acquire()

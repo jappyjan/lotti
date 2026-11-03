@@ -60,6 +60,7 @@ public final class BackendClient {
     @ObservationIgnored private let policy: ReconnectPolicy
     @ObservationIgnored private let toolTimeout: Duration
     @ObservationIgnored private let requestTimeout: Duration
+    @ObservationIgnored private let firstFrameTimeout: Duration
     @ObservationIgnored private let now: @Sendable () -> Date
     @ObservationIgnored private let broadcast = Broadcast<BackendEvent>()
 
@@ -74,6 +75,10 @@ public final class BackendClient {
     @ObservationIgnored private var performs: [String: CheckedContinuation<BackendPerformed, Error>] = [:]
     /// `inbox_event`s that couldn't be sent yet; flushed after the next `welcome`.
     @ObservationIgnored private var outbox: [BackendRequest] = []
+    /// Presence that happened without a socket: the latest of each kind, sent after the next
+    /// `welcome` if it is still fresh (`presenceMaxAge`).
+    @ObservationIgnored private var heldPresence: [PresenceEvent: (at: Date, detail: String?)] = [:]
+    static let presenceMaxAge: TimeInterval = 30
     @ObservationIgnored private var outgoing: [(BackendRequest, (@MainActor (Error) -> Void)?)] = []
     @ObservationIgnored private var draining = false
 
@@ -81,13 +86,16 @@ public final class BackendClient {
         var status: @MainActor (String) -> Void
         var activity: @MainActor () -> Void
         var continuation: CheckedContinuation<BackendAnswer, Error>
+        /// Closes the socket if the backend says nothing at all about the ask in time.
+        var watchdog: Task<Void, Never>?
     }
 
     public init(
         transport: any BackendTransport = URLSessionBackendTransport(), toolbox: Toolbox = Toolbox(),
         configuration: BackendConfiguration? = nil, inbox: InboxStore = InboxStore(),
         policy: ReconnectPolicy = ReconnectPolicy(), toolTimeout: Duration = .seconds(10),
-        requestTimeout: Duration = .seconds(30), now: @escaping @Sendable () -> Date = { Date() }
+        requestTimeout: Duration = .seconds(30), firstFrameTimeout: Duration = .seconds(6),
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.toolbox = toolbox
@@ -96,6 +104,7 @@ public final class BackendClient {
         self.policy = policy
         self.toolTimeout = toolTimeout
         self.requestTimeout = requestTimeout
+        self.firstFrameTimeout = firstFrameTimeout
         self.now = now
     }
 
@@ -174,7 +183,10 @@ public final class BackendClient {
         welcome = nil
         let pending = asks
         asks = [:]
-        for ask in pending.values { ask.continuation.resume(throwing: BackendError.unreachable) }
+        for ask in pending.values {
+            ask.watchdog?.cancel()
+            ask.continuation.resume(throwing: BackendError.unreachable)
+        }
         let performing = performs
         performs = [:]
         for continuation in performing.values { continuation.resume(throwing: BackendError.unreachable) }
@@ -211,26 +223,31 @@ public final class BackendClient {
             broadcast.send(.connected(welcome))
             for request in outbox { fire(request) }
             outbox = []
-            fire(.inboxSync)
+            flushPresence()
+            // No `inbox_sync` here: the backend sends the whole inbox right after `welcome`.
         case .status(let id, let text):
+            markAlive(id)
             asks[id]?.status(text)
             asks[id]?.activity()
             broadcast.send(.status(askId: id, text: text))
         case .answer(let answer):
-            guard let ask = asks.removeValue(forKey: answer.id) else { return }
+            guard let ask = takeAsk(answer.id) else { return }
             var answer = answer
             answer.actions = validated(answer.actions)
             ask.continuation.resume(returning: answer)
         case .error(let id, let message):
             lastError = message
-            if let id, let ask = asks.removeValue(forKey: id) {
+            if let id, let ask = takeAsk(id) {
                 ask.continuation.resume(throwing: BackendError.server(message))
             } else if let id, let continuation = performs.removeValue(forKey: id) {
                 continuation.resume(throwing: BackendError.server(message))
             }
             broadcast.send(.error(id: id, message: message))
         case .toolCall(let call):
-            if let askId = call.askId { asks[askId]?.activity() }
+            if let askId = call.askId {
+                markAlive(askId)
+                asks[askId]?.activity()
+            }
             Task { await self.answer(call) }
         case .locationAccess(let access):
             broadcast.send(.locationAccess(access))
@@ -288,6 +305,9 @@ public final class BackendClient {
 
     // MARK: - Calls
 
+    /// Unique across launches and devices (the backend keys running asks by id).
+    private func newAskID() -> String { UUID().uuidString.lowercased() }
+
     private func nextID(_ prefix: String) -> String {
         requestCounter += 1
         return "\(prefix)\(requestCounter)"
@@ -322,12 +342,13 @@ public final class BackendClient {
         activity: @escaping @MainActor () -> Void = {}
     ) async throws -> BackendAnswer {
         guard isReachable else { throw BackendError.unreachable }
-        let id = nextID("ask-")
+        let id = newAskID()
         let locale = locale ?? (LocalPipeline.language(of: text) == "German" ? "de" : "en")
         let request = BackendRequest.ask(id: id, text: text, channel: channel, now: now(), locale: locale)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                asks[id] = PendingAsk(status: status, activity: activity, continuation: continuation)
+                asks[id] = PendingAsk(status: status, activity: activity, continuation: continuation,
+                                      watchdog: watchdog(for: id))
                 fire(request) { [self] error in failAsk(id, error) }
             }
         } onCancel: {
@@ -336,11 +357,37 @@ public final class BackendClient {
     }
 
     private func failAsk(_ id: String, _ error: Error) {
-        asks.removeValue(forKey: id)?.continuation.resume(throwing: error)
+        takeAsk(id)?.continuation.resume(throwing: error)
+    }
+
+    private func takeAsk(_ id: String) -> PendingAsk? {
+        guard let ask = asks.removeValue(forKey: id) else { return nil }
+        ask.watchdog?.cancel()
+        return ask
+    }
+
+    /// The backend acknowledged the ask (status, tool call, answer or error): the socket is alive.
+    private func markAlive(_ id: String) {
+        asks[id]?.watchdog?.cancel()
+        asks[id]?.watchdog = nil
+    }
+
+    /// The backend answers every ask with a status line right away. If nothing at all comes for
+    /// it within `firstFrameTimeout`, the socket is dead even if it looks open: fail the ask with
+    /// `.unreachable` (so the caller answers offline) and close it, which makes the loop reconnect.
+    private func watchdog(for id: String) -> Task<Void, Never> {
+        let timeout = firstFrameTimeout
+        return Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled, let self, self.asks[id] != nil else { return }
+            self.lastError = "Lotti Brain didn't respond."
+            self.failAsk(id, BackendError.unreachable)
+            self.connection?.close()
+        }
     }
 
     private func cancelAsk(_ id: String) {
-        guard let ask = asks.removeValue(forKey: id) else { return }
+        guard let ask = takeAsk(id) else { return }
         ask.continuation.resume(throwing: CancellationError())
         fire(.cancel(id: id))
     }
@@ -396,11 +443,24 @@ public final class BackendClient {
         if isReachable { fire(.inboxSync) }
     }
 
-    /// Tells the backend what the glasses and the phone are doing. Dropped without a socket:
-    /// stale presence is worse than none.
+    /// Tells the backend what the glasses and the phone are doing. Without a socket the latest
+    /// event of each kind is kept and sent after the next `welcome`, with its own time, if it is at
+    /// most 30 s old: stale presence is worse than none.
     public func presence(_ event: PresenceEvent, detail: String? = nil) {
-        guard isReachable else { return }
+        guard isReachable else {
+            heldPresence[event] = (now(), detail)
+            return
+        }
         fire(.presence(event, at: now(), detail: detail))
+    }
+
+    private func flushPresence() {
+        let held = heldPresence
+        heldPresence = [:]
+        let fresh = held.filter { now().timeIntervalSince($0.value.at) <= Self.presenceMaxAge }
+        for (event, value) in fresh.sorted(by: { $0.value.at < $1.value.at }) {
+            fire(.presence(event, at: value.at, detail: value.detail))
+        }
     }
 
     // MARK: - Streams

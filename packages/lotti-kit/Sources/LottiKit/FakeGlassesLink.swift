@@ -21,6 +21,8 @@ public final class FakeGlassesLink: GlassesLink {
     public private(set) var headTracking = false
     /// Every `setHeadTracking` call, oldest first.
     public private(set) var headTrackingCalls: [Bool] = []
+    /// How long `setHeadTracking` takes, like the BLE round trip (zero by default).
+    public var headTrackingDelay: Duration = .zero
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
     public private(set) var wearState: WearState = .unknown
@@ -90,6 +92,7 @@ public final class FakeGlassesLink: GlassesLink {
     public func sendAudio(_ samples: [Int16]) { mic?.yield(samples) }
 
     public func setHeadTracking(_ enabled: Bool) async {
+        if headTrackingDelay > .zero { try? await Task.sleep(for: headTrackingDelay) }
         headTracking = enabled
         headTrackingCalls.append(enabled)
     }

@@ -144,6 +144,8 @@ struct McpServer: Identifiable, Equatable {
     var confirmation: [String: Bool]
     var status: String?
     var lastError: String?
+    /// A bearer token or env value is stored (`mcp.list` `hasCredential`).
+    var hasCredential: Bool
 
     init?(_ json: JSONValue) {
         guard let id = json.text("id") else { return nil }
@@ -159,6 +161,7 @@ struct McpServer: Identifiable, Equatable {
         confirmation = flags
         status = json.text("status")
         lastError = json.text("lastError")
+        hasCredential = json.flag("hasCredential")
     }
 
     func needsConfirmation(_ tool: String) -> Bool { confirmation[tool] ?? true }

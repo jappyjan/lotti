@@ -14,20 +14,25 @@ struct ProvidersView: View {
                 Section {
                     Picker("Answers with", selection: Binding(
                         get: { providers.first(where: \.active)?.id ?? "" },
-                        set: { id in select(active: id, fallback: providers.first(where: \.fallback)?.id ?? "", reload) })) {
-                        ForEach(providers) { Text($0.label).tag($0.id) }
+                        set: { id in
+                            // The fallback can't be the active one too: picking it clears the fallback.
+                            let fallback = providers.first(where: \.fallback)?.id ?? ""
+                            select(active: id, fallback: fallback == id ? "" : fallback, reload)
+                        })) {
+                        ForEach(providers) { Text(pickerLabel($0)).tag($0.id) }
                     }
                     Picker("Fallback", selection: Binding(
                         get: { providers.first(where: \.fallback)?.id ?? "" },
                         set: { id in select(active: providers.first(where: \.active)?.id ?? "", fallback: id, reload) })) {
                         Text("None").tag("")
-                        ForEach(providers.filter { !$0.active }) { Text($0.label).tag($0.id) }
+                        ForEach(providers.filter { !$0.active }) { Text(pickerLabel($0)).tag($0.id) }
                     }
                 } header: {
                     Text("Model")
                 } footer: {
                     Text("The fallback answers when the active provider fails or is too slow.")
                 }
+                WebSearchKeySection()
                 Section("Providers") {
                     ForEach(providers) { provider in
                         NavigationLink { ProviderDetailView(provider: provider) } label: {
@@ -45,6 +50,10 @@ struct ProvidersView: View {
             .errorAlert($error)
         }
         .navigationTitle("AI providers")
+    }
+
+    private func pickerLabel(_ provider: ProviderInfo) -> String {
+        provider.configured ? provider.label : "\(provider.label) (not set up)"
     }
 
     private func select(active: String, fallback: String, _ reload: @escaping @MainActor () async -> Void) {
@@ -68,11 +77,15 @@ struct ProviderDetailView: View {
     @State private var loginMessage: String?
     @State private var busy = false
     @State private var error: String?
+    @State private var confirmRemove = false
+    /// The model the backend has, to put back when the field is emptied.
+    @State private var savedModel: String
 
     init(provider: ProviderInfo) {
         self.provider = provider
         _configured = State(initialValue: provider.configured)
         _modelName = State(initialValue: provider.model)
+        _savedModel = State(initialValue: provider.model)
     }
 
     /// What a subscription device login shows: open the page, type the code.
@@ -92,6 +105,12 @@ struct ProviderDetailView: View {
         }
         .navigationTitle(provider.label)
         .errorAlert($error)
+        .confirmationDialog(provider.isRuntime ? "Sign out of \(provider.label)?" : "Remove the \(provider.label) API key?",
+                            isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button(provider.isRuntime ? "Sign out" : "Remove key", role: .destructive) { removeCredential() }
+        } message: {
+            Text(provider.active ? "Lotti answers with this provider: it stops working until you set it up again." : "You can set it up again any time.")
+        }
         .task { await loadModels() }
         .task(id: login) { await pollLogin() }
     }
@@ -104,14 +123,7 @@ struct ProviderDetailView: View {
             Button("Save key") { saveCredential(apiKey) { apiKey = "" } }
                 .disabled(apiKey.trimmingCharacters(in: .whitespaces).isEmpty)
             if configured {
-                Button("Remove key", role: .destructive) {
-                    Task {
-                        await attempt($error) {
-                            _ = try await model.call("providers.clear_credential", ["provider": .string(provider.id)])
-                            configured = false
-                        }
-                    }
-                }
+                Button("Remove key", role: .destructive) { confirmRemove = true }
             }
         } header: {
             Text("API key")
@@ -156,15 +168,18 @@ struct ProviderDetailView: View {
         }
         if configured {
             Section {
-                Button("Sign out", role: .destructive) {
-                    Task {
-                        await attempt($error) {
-                            _ = try await model.call(provider.id == "codex" ? "providers.codex_logout" : "providers.clear_credential",
-                                                     ["provider": .string(provider.id)])
-                            configured = false
-                        }
-                    }
-                }
+                Button("Sign out", role: .destructive) { confirmRemove = true }
+            }
+        }
+    }
+
+    /// Remove key (API providers) or Sign out (subscriptions), after the confirmation.
+    private func removeCredential() {
+        Task {
+            await attempt($error) {
+                _ = try await model.call(provider.id == "codex" ? "providers.codex_logout" : "providers.clear_credential",
+                                         ["provider": .string(provider.id)])
+                configured = false
             }
         }
     }
@@ -245,18 +260,87 @@ struct ProviderDetailView: View {
         } header: {
             Text("Model")
         } footer: {
-            Text(provider.isRuntime ? "Empty uses the command line tool's default." : "Return saves a typed model id.")
+            Text("Return saves a typed model id. Leave it as it is to keep the current model.")
         }
     }
 
     private func setModel(_ name: String) {
         let value = name.trimmingCharacters(in: .whitespaces)
-        guard !value.isEmpty else { return }
-        Task { await attempt($error) { _ = try await model.call("providers.set_model", ["provider": .string(provider.id), "model": .string(value)]) } }
+        // The backend needs a model id: an emptied field just shows the current one again.
+        guard !value.isEmpty else { return modelName = savedModel }
+        Task {
+            await attempt($error) {
+                _ = try await model.call("providers.set_model", ["provider": .string(provider.id), "model": .string(value)])
+                savedModel = value
+            }
+        }
     }
 
     private func loadModels() async {
         guard let result = try? await model.call("providers.models", ["provider": .string(provider.id)]) else { return }
         suggestions = (result["models"]?.array ?? []).compactMap { $0.string ?? $0.text("id") }
+    }
+}
+
+/// The Brave Search key behind Lotti's web search: write-only, stored as the backend secret
+/// `search.brave.api_key`. The status comes from `secrets.list` (names only, never values).
+private struct WebSearchKeySection: View {
+    @Environment(AppModel.self) private var model
+    static let secretName = "search.brave.api_key"
+    @State private var isSet: Bool?
+    @State private var key = ""
+    @State private var error: String?
+    @State private var confirmRemove = false
+
+    var body: some View {
+        Section {
+            StatusRow(title: "Key", value: isSet.map { $0 ? "Set" : "Not set" } ?? "…", good: isSet)
+            SecretField(title: isSet == true ? "Replace key" : "Brave Search API key", text: $key)
+            Button(isSet == true ? "Replace key" : "Save key") { save() }
+                .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if isSet == true {
+                Button("Remove key", role: .destructive) { confirmRemove = true }
+            }
+        } header: {
+            Text("Web search (Brave)")
+        } footer: {
+            Text("Lets Lotti search the web. The key is stored encrypted on your Lotti Brain and is never shown again.")
+        }
+        .errorAlert($error)
+        .confirmationDialog("Remove the web search key?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove key", role: .destructive) { remove() }
+        } message: {
+            Text("Lotti can't search the web until you add a key again.")
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        do {
+            let secrets = try await model.call("secrets.list", ["prefix": .string("search.brave.")]).items
+            isSet = secrets.contains { $0.text("name") == Self.secretName }
+        } catch {
+            isSet = nil
+        }
+    }
+
+    private func save() {
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task {
+            await attempt($error) {
+                _ = try await model.call("secrets.set", ["name": .string(Self.secretName), "value": .string(value)])
+                key = ""
+                isSet = true
+            }
+        }
+    }
+
+    private func remove() {
+        Task {
+            await attempt($error) {
+                _ = try await model.call("secrets.delete", ["name": .string(Self.secretName)])
+                isSet = false
+            }
+        }
     }
 }

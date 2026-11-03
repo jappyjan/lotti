@@ -288,7 +288,7 @@ struct ChatModelTests {
         let (chat, _) = makeChat()
         #expect(!chat.isOnline)
         chat.send("  Wie spät ist es?  ")
-        while chat.isAsking { await Task.yield() }
+        await eventually { !chat.isAsking }
         #expect(chat.items.map(\.kind) == [.user, .lotti])
         #expect(chat.items[0].text == "Wie spät ist es?")
         #expect(chat.items[1].text == "echo: Wie spät ist es?")
@@ -302,14 +302,14 @@ struct ChatModelTests {
         #expect(chat.items.isEmpty)
         chat.send("one")
         chat.send("two")
-        while chat.isAsking { await Task.yield() }
+        await eventually { !chat.isAsking }
         #expect(chat.items.filter { $0.kind == .user }.count == 1)
     }
 
     @Test func aFailingBrainShowsAnError() async {
         let (chat, _) = makeChat(brain: FailingBrain())
         chat.send("hi")
-        while chat.isAsking { await Task.yield() }
+        await eventually { !chat.isAsking }
         #expect(chat.items.last?.kind == .error)
     }
 
@@ -317,7 +317,7 @@ struct ChatModelTests {
         let tool = CountingTool()
         let (chat, _) = makeChat(brain: ActionBrain(), tools: [tool])
         chat.send("timer")
-        while chat.isAsking { await Task.yield() }
+        await eventually { !chat.isAsking }
         let item = try #require(chat.items.last)
         let action = try #require(item.actions.first)
         #expect(await tool.runs == 0)
@@ -343,7 +343,7 @@ struct ChatModelTests {
         for _ in 0..<100 where chat.draft.isEmpty { try await Task.sleep(for: .milliseconds(20)) }
         #expect(chat.draft == "set a timer")
         chat.endTalking()
-        while chat.items.count < 2 || chat.isAsking { try await Task.sleep(for: .milliseconds(20)) }
+        await eventually { chat.items.count >= 2 && !chat.isAsking }
         #expect(chat.items.first?.text == "set a timer")
         #expect(!chat.isListening)
         #expect(chat.draft.isEmpty)
@@ -392,6 +392,19 @@ struct ChatModelTests {
         #expect(try await choice.answer("a", context: "", status: { _ in }).sentence == "apple: a")
         available = false
         #expect(try await choice.answer("b", context: "", status: { _ in }).sentence == "rules: b")
+    }
+}
+
+/// Polls until `condition` holds. Records an issue after `timeout` seconds instead of hanging the run.
+@MainActor
+func eventually(timeout: Double = 5, _ condition: () -> Bool) async {
+    let deadline = Date().addingTimeInterval(timeout)
+    while !condition() {
+        if Date() > deadline {
+            Issue.record("condition not met in \(timeout) s")
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(5))
     }
 }
 

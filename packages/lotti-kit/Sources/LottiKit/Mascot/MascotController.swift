@@ -6,8 +6,9 @@ import Observation
 /// `stop()` otherwise (disappear, background); `enabled` is the settings switch.
 ///
 /// - The glasses pose follows the link's connection and wear state (debounced, off when unknown).
-/// - While started, enabled and worn, the controller takes an `IMUDemand` token and turns gravity
-///   samples into `pitch` / `roll` targets for the view to ease to over `animationDuration`.
+/// - While started, enabled, worn and `headSyncAllowed`, the controller takes an `IMUDemand` token
+///   and turns gravity samples into `pitch` / `roll` targets for the view to ease to over
+///   `animationDuration`.
 /// - Without a usable IMU (no samples within `noSampleTimeout`) the head stays neutral, the wear
 ///   pose keeps working, and one line is logged. Nothing is thrown or shown.
 @MainActor
@@ -29,6 +30,12 @@ public final class MascotController {
     /// The settings switch. Off behaves like stopped.
     public var enabled = true {
         didSet { if enabled != oldValue { reconcile() } }
+    }
+
+    /// Whether the head may follow the glasses. False (e.g. with Reduce Motion) keeps the head
+    /// neutral and never asks for the IMU feed; the glasses pose still follows the wear state.
+    public var headSyncAllowed = true {
+        didSet { if headSyncAllowed != oldValue { updateHead() } }
     }
 
     @ObservationIgnored private let link: any GlassesLink
@@ -158,7 +165,7 @@ public final class MascotController {
     }
 
     private func updateHead() {
-        let want = running && glassesOn
+        let want = running && glassesOn && headSyncAllowed
         guard want != headRequested else { return }
         headRequested = want
         if want {

@@ -15,6 +15,7 @@ struct ConductorTests {
         conductor = Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date(), events: [], weather: Weather(temperature: 12, condition: "cloudy"))),
+            inboxSummary: InboxSummary(german: false),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
                           finalTranscript: .milliseconds(200)))
     }
@@ -114,7 +115,7 @@ struct ConductorTests {
     func conductorWithRemote(_ remote: FakeRemote, tools: [any PhoneTool] = []) -> Conductor {
         Conductor(
             link: link, brain: brain, remote: remote, toolbox: Toolbox(tools), speech: speech, phoneMicrophone: phoneMic,
-            today: FixedToday(info: TodayInfo(now: Date())),
+            today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: false),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
                           finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
     }
@@ -259,11 +260,12 @@ struct ConductorTests {
         let remote = FakeRemote()
         let conductor = conductorWithRemote(remote)
         remote.answers = ["Milch auf die Liste": Answer(sentence: "Milch ist auf der Liste.", followUps: ["Noch was?"],
-                                                        undo: UndoAction(id: "u1", label: "Rückgängig"))]
+                                                        undo: UndoAction(id: "u1", label: "Remove Milch again"))]
         conductor.ask("Milch auf die Liste")
         try await eventually { conductor.screen?.text == "Milch ist auf der Liste." }
-        #expect(conductor.screen?.rail?.items.map(\.title) == ["Noch was?", "Rückgängig"])
-        #expect(conductor.screen?.rail?.items.last?.action == .undo(UndoAction(id: "u1", label: "Rückgängig")))
+        // The choice says Undo, not the backend's label for the inverse action.
+        #expect(conductor.screen?.rail?.items.map(\.title) == ["Noch was?", "Undo"])
+        #expect(conductor.screen?.rail?.items.last?.action == .undo(UndoAction(id: "u1", label: "Remove Milch again")))
     }
 
     // MARK: Voice

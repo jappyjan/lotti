@@ -105,10 +105,13 @@ struct McpDetailView: View {
     @State private var secretName = ""
     @State private var secretValue = ""
     @State private var confirmDelete = false
+    @State private var confirmClearSecret = false
+    @State private var hasCredential: Bool
     @State private var error: String?
 
     init(server: McpServer) {
         self.server = server
+        _hasCredential = State(initialValue: server.hasCredential)
         _name = State(initialValue: server.name)
         _url = State(initialValue: server.url)
         _command = State(initialValue: server.command)
@@ -138,6 +141,7 @@ struct McpDetailView: View {
                 if let problem = server.lastError, testNote == nil { Text(problem).font(.footnote).foregroundStyle(.red) }
             }
             Section {
+                StatusRow(title: "Secret", value: hasCredential ? "Set" : "Not set", good: hasCredential ? true : nil)
                 Picker("Secret", selection: $secretKey) {
                     if server.transport == "http" { Text("Bearer token").tag("bearer") }
                     Text("Environment variable").tag("env")
@@ -148,6 +152,9 @@ struct McpDetailView: View {
                 SecretField(title: "Value", text: $secretValue)
                 Button("Save secret") { saveSecret() }
                     .disabled(secretValue.isEmpty || (secretKey == "env" && secretName.isEmpty))
+                if hasCredential {
+                    Button("Remove secrets", role: .destructive) { confirmClearSecret = true }
+                }
             } header: {
                 Text("Credentials")
             } footer: {
@@ -177,6 +184,11 @@ struct McpDetailView: View {
             Button("Remove", role: .destructive) {
                 Task { await attempt($error) { _ = try await model.call("mcp.delete", ["id": .string(server.id)]); dismiss() } }
             }
+        }
+        .confirmationDialog("Remove the stored secrets of \(server.name)?", isPresented: $confirmClearSecret, titleVisibility: .visible) {
+            Button("Remove secrets", role: .destructive) { clearSecret() }
+        } message: {
+            Text("The bearer token and environment values are deleted. A server that needs them stops working.")
         }
     }
 
@@ -225,7 +237,18 @@ struct McpDetailView: View {
                 _ = try await model.call("mcp.set_credential", ["id": .string(server.id), "key": .string(key), "value": .string(value)])
                 secretValue = ""
                 secretName = ""
+                hasCredential = true
                 testNote = "Secret saved."
+            }
+        }
+    }
+
+    private func clearSecret() {
+        Task {
+            await attempt($error) {
+                _ = try await model.call("mcp.clear_credential", ["id": .string(server.id)])
+                hasCredential = false
+                testNote = "Secrets removed."
             }
         }
     }

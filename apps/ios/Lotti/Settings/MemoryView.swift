@@ -9,6 +9,9 @@ struct MemoryView: View {
     @State private var adding = false
     @State private var newText = ""
     @State private var error: String?
+    @State private var searchError: String?
+    /// The memory whose swipe Delete waits for the confirmation.
+    @State private var deleting: MemoryInfo?
 
     var body: some View {
         Loaded(load: { model in try await model.call("memory.list", ["limit": 300]).items.compactMap(MemoryInfo.init) }) { memories, reload in
@@ -18,7 +21,8 @@ struct MemoryView: View {
                 }
                 Section {
                     let shown = results ?? memories
-                    if shown.isEmpty { Text(results == nil ? "Nothing remembered yet." : "No matches.").foregroundStyle(.secondary) }
+                    if let searchError { Text("Search failed: \(searchError)").foregroundStyle(.red) }
+                    if shown.isEmpty, searchError == nil { Text(results == nil ? "Nothing remembered yet." : "No matches.").foregroundStyle(.secondary) }
                     ForEach(shown) { memory in
                         NavigationLink { MemoryDetailView(memory: memory) { await reload() } } label: {
                             VStack(alignment: .leading, spacing: 2) {
@@ -28,12 +32,7 @@ struct MemoryView: View {
                             }
                         }
                         .swipeActions {
-                            Button("Delete", role: .destructive) {
-                                Task {
-                                    await attempt($error) { _ = try await model.call("memory.delete", ["id": .string(memory.id)]) }
-                                    await reload()
-                                }
-                            }
+                            Button("Delete", role: .destructive) { deleting = memory }
                         }
                     }
                 }
@@ -43,7 +42,18 @@ struct MemoryView: View {
             }
             .searchable(text: $query, prompt: "Search memories")
             .onSubmit(of: .search) { Task { await search() } }
-            .onChange(of: query) { if query.isEmpty { results = nil } }
+            .onChange(of: query) { if query.isEmpty { results = nil; searchError = nil } }
+            .confirmationDialog("Delete this memory?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { memory in
+                Button("Delete", role: .destructive) {
+                    Task {
+                        await attempt($error) { _ = try await model.call("memory.delete", ["id": .string(memory.id)]) }
+                        await reload()
+                    }
+                }
+            } message: { memory in
+                Text(memory.text)
+            }
             .alert("Remember", isPresented: $adding) {
                 TextField("What should Lotti remember?", text: $newText)
                 Button("Save") {
@@ -64,9 +74,15 @@ struct MemoryView: View {
     private func search() async {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return results = nil }
-        let found = try? await model.call("memory.search", ["query": .string(text), "limit": 30])
-        // Hits may wrap the memory (`{memory, score}`) or be the memory itself.
-        results = found?.items.compactMap { MemoryInfo($0) ?? $0["memory"].flatMap(MemoryInfo.init) }
+        do {
+            let found = try await model.call("memory.search", ["query": .string(text), "limit": 30])
+            // Hits may wrap the memory (`{memory, score}`) or be the memory itself.
+            results = found.items.compactMap { MemoryInfo($0) ?? $0["memory"].flatMap(MemoryInfo.init) }
+            searchError = nil
+        } catch {
+            results = []
+            searchError = error.localizedDescription
+        }
     }
 }
 
@@ -77,6 +93,7 @@ struct MemoryDetailView: View {
     let changed: @MainActor () async -> Void
     @State private var text: String
     @State private var error: String?
+    @State private var confirmDelete = false
 
     init(memory: MemoryInfo, changed: @escaping @MainActor () async -> Void) {
         self.memory = memory
@@ -109,20 +126,25 @@ struct MemoryDetailView: View {
                 }
             }
             Section {
-                Button("Delete", role: .destructive) {
-                    Task {
-                        await attempt($error) {
-                            _ = try await model.call("memory.delete", ["id": .string(memory.id)])
-                            await changed()
-                            dismiss()
-                        }
-                    }
-                }
+                Button("Delete", role: .destructive) { confirmDelete = true }
             }
         }
         .navigationTitle("Memory")
         .navigationBarTitleDisplayMode(.inline)
         .errorAlert($error)
+        .confirmationDialog("Delete this memory?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await attempt($error) {
+                        _ = try await model.call("memory.delete", ["id": .string(memory.id)])
+                        await changed()
+                        dismiss()
+                    }
+                }
+            }
+        } message: {
+            Text("Lotti forgets it for good.")
+        }
     }
 }
 

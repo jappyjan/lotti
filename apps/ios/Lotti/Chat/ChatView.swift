@@ -60,18 +60,16 @@ private struct EmptyChat: View {
     let mascot: MascotHost
     @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
 
-    private var german: Bool { Locale.preferredLanguages.first?.hasPrefix("de") ?? false }
-
     var body: some View {
         VStack(spacing: 8) {
             if mascotEnabled {
                 MascotView(host: mascot).frame(width: 200, height: 200)
-                Text(german ? "Hi Jan, frag mich was" : "Hi Jan, ask me anything").font(.title3.weight(.semibold))
+                Text(lang("Hi Jan, frag mich was", "Hi Jan, ask me anything")).font(.title3.weight(.semibold))
             } else {
                 Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.green)
-                Text("Ask Lotti anything").font(.title3.weight(.semibold))
+                Text(lang("Frag Lotti, was du willst", "Ask Lotti anything")).font(.title3.weight(.semibold))
             }
-            Text("Type, or hold the microphone and speak.").foregroundStyle(.secondary)
+            Text(lang("Tippe, oder halte das Mikrofon und sprich.", "Type, or hold the microphone and speak.")).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 40)
@@ -207,13 +205,16 @@ struct ChatRow: View {
         }
     }
 
+    /// Says Undo; the backend's label describes the inverse ("Remove Milch again") and reads like a
+    /// new action, so it is only the accessibility hint.
     private func undoButton(_ undo: UndoAction) -> some View {
         Button {
             Task { await chat.undo(undo, in: item.id) }
         } label: {
-            Label(undo.label, systemImage: "arrow.uturn.backward")
+            Label(lang("Rückgängig", "Undo"), systemImage: "arrow.uturn.backward")
         }
         .buttonStyle(.bordered)
+        .accessibilityHint(undo.label)
     }
 
     private var catchup: some View {
@@ -272,7 +273,19 @@ private struct ComposerBar: View {
                 .onLongPressGesture(minimumDuration: 100, maximumDistance: 80, perform: {}, onPressingChanged: { pressing in
                     if pressing { focused = false; chat.beginTalking() } else { chat.endTalking() }
                 })
-                .accessibilityLabel("Hold to talk")
+                .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(chat.isListening ? "Stop talking" : "Hold to talk")
+                .accessibilityHint(chat.isListening ? "Sends what you said." : "Activate to start listening, activate again to send.")
+                // VoiceOver can't hold: activating toggles listening instead.
+                .accessibilityAction {
+                    if chat.isListening {
+                        chat.endTalking()
+                    } else {
+                        focused = false
+                        chat.beginTalking()
+                    }
+                }
         } else {
             Button { chat.send(chat.draft) } label: { circle("arrow.up", .green) }
                 .accessibilityLabel("Send")

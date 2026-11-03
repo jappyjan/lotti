@@ -146,9 +146,12 @@ enum Fixtures {
     @MainActor
     static func client(_ backend: MockBackend, tools: [any PhoneTool] = [], toolTimeout: Duration = .seconds(10),
                        policy: ReconnectPolicy = ReconnectPolicy(initial: .milliseconds(20), maximum: .milliseconds(80)),
+                       firstFrameTimeout: Duration = .seconds(6),
+                       now: @escaping @Sendable () -> Date = { Date() },
                        start: Bool = true) -> BackendClient {
         let client = BackendClient(transport: backend, toolbox: Toolbox(tools), configuration: config, policy: policy,
-                                   toolTimeout: toolTimeout, requestTimeout: .seconds(2))
+                                   toolTimeout: toolTimeout, requestTimeout: .seconds(2), firstFrameTimeout: firstFrameTimeout,
+                                   now: now)
         if start { client.start() }
         return client
     }

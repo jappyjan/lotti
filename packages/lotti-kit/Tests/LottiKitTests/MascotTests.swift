@@ -10,6 +10,19 @@ final class FakeClock: @unchecked Sendable {
     func advance(_ s: TimeInterval) { lock.withLock { t += s } }
 }
 
+/// A deterministic generator (SplitMix64), so noise tests are the same on every run.
+struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
 /// Collects log lines.
 final class LogBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -114,14 +127,40 @@ struct MascotHeadTests {
 
     @Test func noiseAtRestStaysExactlyNeutral() {
         var m = HeadAngleMapper()
-        var rng = SystemRandomNumberGenerator()
+        var rng = SeededGenerator(seed: 42)
         var worst = 0.0
         for i in 0..<500 {
-            let jitter = { Double.random(in: -2...2, using: &rng) }  // +-2 degrees of noise
+            // Just inside the 2 degree dead zone: the filter can't leave it, so the head never moves.
+            let jitter = { Double.random(in: -1.9...1.9, using: &rng) }
             let a = m.feed(gravity(pitch: 15 + jitter(), roll: jitter()), straightAhead: 15, at: Double(i))
             worst = max(worst, abs(a?.pitch ?? 0), abs(a?.roll ?? 0))
         }
-        #expect(worst < 1.5)
+        #expect(worst == 0)
+    }
+
+    @Test func oneSampleMovesOnlyPartWayThere() {
+        var m = HeadAngleMapper()
+        _ = settled(&m, gravity(pitch: 15))  // neutral
+        var fresh = HeadAngleMapper()
+        let target = settled(&fresh, gravity(pitch: 30)).pitch
+        let step = m.feed(gravity(pitch: 30), straightAhead: 15, at: 100)?.pitch ?? 0
+        #expect(step > 0 && step < target)
+    }
+
+    @Test func noiseAroundATiltStaysBounded() {
+        var m = HeadAngleMapper()
+        _ = settled(&m, gravity(pitch: 15, roll: 10))  // 8 degrees after the dead zone
+        var rng = SeededGenerator(seed: 7)
+        var low = Double.infinity, high = -Double.infinity
+        for i in 0..<500 {
+            let roll = 10 + Double.random(in: -4...4, using: &rng)
+            let a = m.feed(gravity(pitch: 15, roll: roll), straightAhead: 15, at: Double(100 + i))
+            low = min(low, a?.roll ?? 0)
+            high = max(high, a?.roll ?? 0)
+        }
+        // The low-pass never overshoots the noise: the head stays within 8 +- 4 degrees.
+        #expect(low >= 4 - 1e-9 && high <= 12 + 1e-9)
+        #expect(high - low < 8)
     }
 
     @Test func rejectsBadSamplesAndKeepsTheTarget() {
@@ -209,6 +248,28 @@ struct IMUDemandTests {
         #expect(!link.headTracking)
     }
 
+    @Test func quickHeadUpSyncsTakeOneToken() async throws {
+        let link = FakeGlassesLink()
+        link.headTrackingDelay = .milliseconds(50)
+        await link.connect(DiscoveredGlasses(id: "1", name: "G2"))
+        let conductor = makeConductor(link)
+        // Two reconnects in a row while the first acquire still waits for the link.
+        let first = Task { await conductor.glassesConnected() }
+        let second = Task { await conductor.glassesConnected() }
+        await first.value
+        await second.value
+        try await eventually { link.headTracking }
+        #expect(conductor.imuDemand.holderCount == 1)
+        // Switching off while an acquire is in flight still ends with no token.
+        await conductor.setHeadTracking(false)
+        #expect(conductor.imuDemand.holderCount == 0)
+        let again = Task { await conductor.setHeadTracking(true) }
+        try await eventually { conductor.imuDemand.holderCount == 1 }  // acquire waits for the link
+        await conductor.setHeadTracking(false)
+        await again.value
+        try await eventually { conductor.imuDemand.holderCount == 0 && !link.headTracking }
+    }
+
     @Test func headUpGesturesAreIgnoredWhenOnlyTheMascotNeedsTheFeed() async {
         let link = FakeGlassesLink()
         let conductor = makeConductor(link)
@@ -242,13 +303,14 @@ struct MascotControllerTests {
         }
     }
 
-    /// Lets observation callbacks and stream tasks run.
+    /// Lets observation callbacks and stream tasks run; records an issue if `condition` never holds.
     private func settle(_ rig: Rig, until condition: () -> Bool) async {
-        for _ in 0..<200 {
+        for _ in 0..<400 {
             await rig.controller.settled()
             if condition() { return }
             try? await Task.sleep(for: .milliseconds(5))
         }
+        Issue.record("settle: condition not met in 2 s")
     }
 
     @Test func unknownLinkMeansNeutralOffAndNoImuTraffic() async {
@@ -309,7 +371,7 @@ struct MascotControllerTests {
         rig.controller.enabled = true
         await settle(rig) { rig.controller.glassesOn }
         // Starting again is a fresh first appearance: no animation.
-        #expect(!rig.controller.animated || rig.controller.glassesOn)
+        #expect(rig.controller.glassesOn && !rig.controller.animated)
     }
 
     @Test func removingTheGlassesStopsHeadSyncButKeepsTheMascot() async {
@@ -352,6 +414,40 @@ struct MascotControllerTests {
         rig.clock.advance(1.1)
         rig.controller.tick()
         #expect(!rig.controller.glassesOn)
+    }
+
+    @Test func samplesThatStopDegradeToNeutral() async {
+        let rig = Rig()
+        await wornController(rig)
+        rig.link.sendIMU(x: Float(sin(30.0 * .pi / 180)), y: 0, z: Float(cos(30.0 * .pi / 180)))
+        await settle(rig) { rig.controller.headSyncActive }
+        #expect(rig.controller.pitch != 0)
+        rig.clock.advance(6)
+        rig.controller.checkHealth()
+        #expect(!rig.controller.headSyncActive)
+        #expect(rig.controller.pitch == 0 && rig.controller.roll == 0)
+        #expect(rig.log.lines.count == 1)
+    }
+
+    @Test func withoutHeadSyncTheMascotNeverAsksForTheImu() async {
+        let rig = Rig()
+        rig.controller.headSyncAllowed = false  // Reduce Motion
+        rig.controller.start()
+        await rig.connectWorn()
+        rig.controller.tick()
+        rig.clock.advance(1.1)
+        rig.controller.tick()
+        await rig.controller.settled()
+        #expect(rig.controller.glassesOn)  // the glasses still follow the wear state
+        #expect(rig.link.headTrackingCalls.isEmpty)
+        #expect(!rig.demand.isActive && !rig.controller.headSyncActive)
+        // Allowing it later starts the head; forbidding it again releases the feed.
+        rig.controller.headSyncAllowed = true
+        await settle(rig) { rig.link.headTracking }
+        rig.controller.headSyncAllowed = false
+        await rig.controller.settled()
+        #expect(!rig.link.headTracking && !rig.demand.isActive)
+        #expect(rig.controller.pitch == 0 && rig.controller.roll == 0)
     }
 
     @Test func samplesAfterADegradeRecoverTheHead() async {

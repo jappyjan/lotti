@@ -17,6 +17,7 @@ struct PushView: View {
     @State private var importing = false
     @State private var note: String?
     @State private var error: String?
+    @State private var confirmRemoveKey = false
 
     var body: some View {
         List {
@@ -84,7 +85,12 @@ struct PushView: View {
                 .disabled(keyID.isEmpty || teamID.isEmpty || keyText.isEmpty)
             if status?.flag("apnsConfigured") == true {
                 Button("Send a test push") { sendTest() }
-                Button("Remove the APNs key", role: .destructive) { removeKey() }
+                Button("Remove the APNs key", role: .destructive) { confirmRemoveKey = true }
+                    .confirmationDialog("Remove the APNs key?", isPresented: $confirmRemoveKey, titleVisibility: .visible) {
+                        Button("Remove key", role: .destructive) { removeKey() }
+                    } message: {
+                        Text("Lotti Brain can't wake the app with pushes until you send a key again.")
+                    }
             }
             if let note { Text(note).font(.footnote).foregroundStyle(.secondary) }
         } header: {

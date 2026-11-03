@@ -46,6 +46,7 @@ struct InboxView: View {
     @Environment(ChatModel.self) private var chat
     @State private var history: [InboxItem] = []
     @State private var error: String?
+    @State private var confirmDismissAll = false
 
     var body: some View {
         let open = model.backend.inbox.active(at: .now)
@@ -62,12 +63,7 @@ struct InboxView: View {
                     }
                 }
                 Section {
-                    Button("Dismiss all", role: .destructive) {
-                        Task {
-                            await attempt($error) { _ = try await model.call("inbox.dismiss_all") }
-                            model.backend.syncInbox()
-                        }
-                    }
+                    Button("Dismiss all", role: .destructive) { confirmDismissAll = true }
                 }
             }
             if !history.isEmpty {
@@ -80,6 +76,16 @@ struct InboxView: View {
         }
         .navigationTitle("Inbox")
         .errorAlert($error)
+        .confirmationDialog("Dismiss everything in the inbox?", isPresented: $confirmDismissAll, titleVisibility: .visible) {
+            Button("Dismiss all", role: .destructive) {
+                Task {
+                    await attempt($error) { _ = try await model.call("inbox.dismiss_all") }
+                    model.backend.syncInbox()
+                }
+            }
+        } message: {
+            Text("The items move to History, on the glasses too.")
+        }
         .task { await loadHistory() }
         .refreshable {
             model.backend.syncInbox()
@@ -111,6 +117,9 @@ struct InboxItemView: View {
     @Environment(\.dismiss) private var dismiss
     let itemId: String
     var fallback: InboxItem?
+    /// The action running now, and what each one that ran said (keyed by `actionKey`).
+    @State private var running: String?
+    @State private var results: [String: ChatModel.ActionResult] = [:]
 
     var body: some View {
         let item = model.backend.inbox.item(itemId) ?? fallback
@@ -129,10 +138,10 @@ struct InboxItemView: View {
                     if let expires = item.expiresAt { LabeledContent("Expires", value: shortDate(expires)) }
                     if let source = item.sourceRef { LabeledContent("Source", value: source) }
                 }
-                if !item.actions.isEmpty && item.isActive(at: .now) {
+                if !item.actions.isEmpty && (item.isActive(at: .now) || !results.isEmpty) {
                     Section {
                         ForEach(Array(item.actions.enumerated()), id: \.offset) { _, action in
-                            Button(action.title) { Task { await chat.perform(action) } }
+                            actionRow(action)
                         }
                     }
                 }
@@ -152,6 +161,34 @@ struct InboxItemView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if let item = model.backend.inbox.item(itemId), item.status == .pending { model.backend.inboxEvent(itemId, .opened) }
+        }
+    }
+
+    private func actionKey(_ action: ProposedAction) -> String { action.actionId ?? action.title }
+
+    /// The action as a button with a spinner while it runs; afterwards what it did, in place, and
+    /// the button stays off so it isn't run twice.
+    @ViewBuilder private func actionRow(_ action: ProposedAction) -> some View {
+        let key = actionKey(action)
+        Button {
+            running = key
+            Task {
+                let result = await chat.perform(action)
+                results[key] = result
+                running = nil
+            }
+        } label: {
+            HStack {
+                Text(action.title)
+                Spacer()
+                if running == key { ProgressView() }
+            }
+        }
+        .disabled(running != nil || results[key] != nil)
+        if let result = results[key] {
+            Label(result.text, systemImage: result.ok ? "checkmark.circle" : "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(result.ok ? Color.secondary : Color.red)
         }
     }
 }

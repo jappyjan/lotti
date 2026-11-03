@@ -37,6 +37,7 @@ struct SettingsView: View {
             Section {
                 NavigationLink { PrivacyView() } label: { row("Privacy", "hand.raised", nil) }
                 NavigationLink { PushView() } label: { row("Push notifications", "bell.badge", nil) }
+                NavigationLink { AdvancedSettingsView() } label: { row("Advanced", "slider.horizontal.3", nil) }
                 NavigationLink { DebugView(model: model, brain: services.brain, navigation: services.navigation) } label: { row("Debug", "ladybug", nil) }
             }
         }
