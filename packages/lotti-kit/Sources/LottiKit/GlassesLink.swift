@@ -110,7 +110,12 @@ public protocol GlassesLink: AnyObject, Observable {
     func startMicrophone() async throws -> AsyncStream<[Int16]>
     func stopMicrophone() async
     /// Report head-up / head-down (from the glasses' IMU) as `.headUp` / `.headDown` inputs.
+    /// Prefer `IMUDemand` over calling this directly: it is reference-counted, so several users
+    /// (head-up, the mascot) can share the feed.
     func setHeadTracking(_ enabled: Bool) async
+    /// Raw gravity samples while head tracking is on (about one a second on the G2). Each call
+    /// returns a new stream; listening adds no traffic on the link.
+    func imuSamples() -> AsyncStream<IMUSample>
     /// Wear detection: `.unknown` until the glasses report. Changes also arrive as `.worn` /
     /// `.removed` inputs. **Unverified on hardware:** the sid 0x0D layout is a best guess (see
     /// `G2Events.wearState`).

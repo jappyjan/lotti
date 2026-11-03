@@ -65,6 +65,7 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var lastImuLog: TimeInterval = 0
     @ObservationIgnored private var headUp = HeadUpDetector(config: HeadUpSettings().config)
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()
+    @ObservationIgnored private let imuBroadcast = Broadcast<IMUSample>()
     @ObservationIgnored private var deduplicator = InputDeduplicator()
     @ObservationIgnored private var microphone: MicSession?
     @ObservationIgnored private var strayMicPackets = 0
@@ -344,6 +345,8 @@ public final class G2Link: NSObject, GlassesLink {
         set { headUp.config = newValue }
     }
 
+    public func imuSamples() -> AsyncStream<IMUSample> { imuBroadcast.stream() }
+
     public func setHeadTracking(_ enabled: Bool) async {
         headTrackingWanted = enabled
         headUp.reset()
@@ -388,6 +391,7 @@ public final class G2Link: NSObject, GlassesLink {
         let now = ProcessInfo.processInfo.systemUptime
         lastImuSample = now
         guard headTrackingWanted else { return }
+        imuBroadcast.send(IMUSample(x: x, y: y, z: z))
         if now - lastImuLog >= imuLogInterval {
             lastImuLog = now
             let pitch = headUp.pitch(x: x, y: y, z: z).map { String(format: "%.0f°", $0) } ?? "?"

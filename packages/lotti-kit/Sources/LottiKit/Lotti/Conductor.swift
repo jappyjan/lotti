@@ -98,6 +98,9 @@ public final class Conductor {
     @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
+    /// Shared demand for the IMU feed (head-up here, the mascot elsewhere).
+    @ObservationIgnored public let imuDemand: IMUDemand
+    @ObservationIgnored private var headUpToken: IMUDemand.Token?
     /// When the backend last showed a sign of life, so the wait is for silence, not a fixed total time.
     @ObservationIgnored private var remoteActivity = ContinuousClock.now
     @ObservationIgnored private var eventsTask: Task<Void, Never>?
@@ -130,6 +133,7 @@ public final class Conductor {
         timing: Timing = Timing(), now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.link = link
+        self.imuDemand = IMUDemand(link: link)
         self.brain = brain
         self.remote = remote
         self.backend = backend
@@ -170,14 +174,26 @@ public final class Conductor {
 
     public func setHeadTracking(_ enabled: Bool) async {
         headTracking = enabled
-        if link.status.isConnected { await link.setHeadTracking(enabled) }
+        await syncHeadUpDemand()
+    }
+
+    /// Head-up detection holds one `imuDemand` token while it is on. The mascot shares the same
+    /// demand, so neither can cut the other's feed.
+    private func syncHeadUpDemand() async {
+        if headTracking, headUpToken == nil {
+            headUpToken = await imuDemand.acquire("headUp")
+        } else if !headTracking, let token = headUpToken {
+            headUpToken = nil
+            await imuDemand.release(token)
+        }
     }
 
     /// Call after the glasses (re)connect: the page is new, so redraw, and turn head tracking on.
     public func glassesConnected() async {
         shownFrame = nil
         backend?.presence(.glassesConnected)
-        await link.setHeadTracking(headTracking)
+        await syncHeadUpDemand()
+        await imuDemand.reassert()
         draw()
     }
 
@@ -201,6 +217,8 @@ public final class Conductor {
 
     public func handle(_ event: InputEvent) {
         log("\(event) in \(mode)")
+        // The IMU can be on for the mascot alone: head-up only counts while head-up is switched on.
+        if event.source == .imu, !headTracking, event.gesture == .headUp || event.gesture == .headDown { return }
         reportPresence(event)
         switch event.gesture {
         case .worn: break  // presence only; nothing to show
