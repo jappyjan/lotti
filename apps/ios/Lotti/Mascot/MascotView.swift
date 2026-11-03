@@ -15,7 +15,7 @@ enum MascotSetting {
 struct MascotView: View {
     let host: MascotHost
     var body: some View {
-        MascotPoseDriver(host: host) { pose in
+        MascotDrawingDriver(host: host) { pose in
             RaccoonView(glassesProgress: pose.glasses, headPitch: pose.pitch, headRoll: pose.roll, headYaw: pose.yaw)
         }
     }
@@ -26,7 +26,7 @@ struct MascotAvatarView: View {
     let host: MascotHost
     var size: CGFloat = 32
     var body: some View {
-        MascotPoseDriver(host: host) { pose in
+        MascotDrawingDriver(host: host) { pose in
             RaccoonAvatar(glassesProgress: pose.glasses, headPitch: pose.pitch, headRoll: pose.roll, headYaw: pose.yaw)
                 .frame(width: size, height: size)
         }
@@ -34,28 +34,28 @@ struct MascotAvatarView: View {
 }
 
 /// The values the art is drawn from.
-struct MascotPose: Equatable {
+struct MascotDrawing: Equatable {
     var glasses = 0.0, pitch = 0.0, roll = 0.0, yaw = 0.0
 }
 
-/// Observes the controller, eases its output into a `MascotPose` the art can animate, and keeps
+/// Observes the controller, eases its output into a `MascotDrawing` the art can animate, and keeps
 /// the host's ref-count right (foreground and visible and enabled only).
-private struct MascotPoseDriver<Content: View>: View {
+private struct MascotDrawingDriver<Content: View>: View {
     let host: MascotHost
-    @ViewBuilder let content: (MascotPose) -> Content
+    @ViewBuilder let content: (MascotDrawing) -> Content
 
     @AppStorage(MascotSetting.key) private var enabled = MascotSetting.defaultValue
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var pose: MascotPose
+    @State private var pose: MascotDrawing
     @State private var visible = false
     @State private var held = false
 
-    init(host: MascotHost, @ViewBuilder content: @escaping (MascotPose) -> Content) {
+    init(host: MascotHost, @ViewBuilder content: @escaping (MascotDrawing) -> Content) {
         self.host = host
         self.content = content
         // First appearance shows the current state without animating.
-        _pose = State(initialValue: MascotPose(glasses: host.controller.glassesOn ? 1 : 0))
+        _pose = State(initialValue: MascotDrawing(glasses: host.controller.glassesOn ? 1 : 0))
     }
 
     private var controller: MascotController { host.controller }
@@ -107,7 +107,7 @@ private struct MascotPoseDriver<Content: View>: View {
 
     private func applyHead() {
         // No head following with Reduce Motion: stay neutral.
-        let target = reduceMotion ? MascotPose(glasses: pose.glasses) : MascotPose(
+        let target = reduceMotion ? MascotDrawing(glasses: pose.glasses) : MascotDrawing(
             glasses: pose.glasses, pitch: controller.pitch, roll: controller.roll, yaw: controller.yaw)
         guard target != pose else { return }
         if reduceMotion {

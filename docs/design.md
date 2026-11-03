@@ -188,7 +188,7 @@ When Jan comes back after sleep or ≥ 2 h away, putting the glasses on (or open
 
 A small raccoon in the phone app that wears glasses when yours are on. Purely cosmetic: it carries no information and nothing depends on it.
 
-- **Placement:** in the chat header area of the phone app (the wiring step decides the exact spot). Never on the glasses.
+- **Placement:** large (200 pt) and centred above the greeting in the empty-chat state, and as a small 32 pt head-only avatar in the chat header once the conversation has messages. Nowhere else in the app, apart from the Settings > Glasses switch. Never on the glasses.
 - **Glasses:** on only while the glasses are connected and reported worn; off when unknown or disconnected. Changes shorter than about 1 s are ignored. The first state shown on appearing is not animated.
 - **Head:** while the glasses are worn and the mascot is on screen in the foreground, the raccoon's head follows yours: nod (about ±20°) and tilt (about ±15°), eased between the roughly once-a-second samples. It never turns sideways (see IMU findings).
 - **Without a usable IMU** (no samples within 5 s): the head stays neutral, the glasses still follow wear state, one log line, no error.

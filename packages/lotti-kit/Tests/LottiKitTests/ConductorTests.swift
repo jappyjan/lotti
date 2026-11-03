@@ -446,9 +446,10 @@ struct FixedToday: TodayProvider {
 
 struct TimedOut: Error {}
 
-/// Polls `condition` until it holds, failing after `timeout` seconds.
+/// Polls `condition` until it holds, failing after `timeout` seconds. Generous: it returns as soon
+/// as the condition holds, and a loaded CI runner can stall every test for a second.
 @MainActor
-func eventually(timeout: Double = 1, _ condition: () -> Bool) async throws {
+func eventually(timeout: Double = 5, _ condition: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(timeout)
     while !condition() {
         if Date() > deadline { Issue.record("condition not met in \(timeout) s"); throw TimedOut() }
