@@ -423,7 +423,7 @@ export const integrationOps: Operation[] = [
     description:
       'Add an account entry (kind, label, non-secret config). Credentials go in via accounts.set_credential in the app.',
     inputSchema: z.object({
-      kind: z.string().min(1),
+      kind: z.enum(['google', 'icloud', 'imap', 'caldav']),
       label: z.string().min(1),
       config: z.record(z.string(), z.unknown()).optional(),
     }),

@@ -193,6 +193,50 @@ test('settings.set refuses safety keys, set_safety refuses normal keys', async (
   );
 });
 
+test('settings.set rejects out-of-range numbers and badly formatted strings', async () => {
+  const t = makeApp();
+  const set = async (key: string, value: unknown) =>
+    (await t.app.ops.invoke('settings.set', { key, value }, 'app')) as any;
+  assert.match((await set('agent.silence_timeout_sec', -5)).error, /must be a number from/);
+  assert.match((await set('catchup.away_hours', 0)).error, /must be a number from/);
+  assert.match((await set('conversation.keep_recent_turns', -3)).error, /must be a number from/);
+  assert.match((await set('catchup.night_start', 'banana')).error, /wrong format/);
+  assert.match((await set('catchup.night_start', '25:00')).error, /wrong format/);
+  assert.match((await set('user.name', '')).error, /wrong format/);
+  assert.equal((await set('catchup.night_start', '21:30')).ok, true);
+  assert.equal((await set('agent.silence_timeout_sec', 90)).ok, true);
+  const safety = (await t.app.ops.invoke('settings.set_safety', { key: 'agent.max_rounds', value: 9999 }, 'app')) as any;
+  assert.match(safety.error, /must be a number from/);
+});
+
+test('changing a provider endpoint drops that provider key; the confirm title says so', async () => {
+  const t = makeApp();
+  t.app.secrets.set('provider.deepseek.api_key', 'sk-test');
+  const op = t.app.ops.get('settings.set_safety') as any;
+  assert.match(
+    op.proposalTitle({ key: 'provider.deepseek.base_url', value: 'https://evil.example' }),
+    /removes the saved API key/,
+  );
+  // same value again: nothing to protect, the key stays
+  await t.app.ops.invoke('settings.set_safety', { key: 'provider.deepseek.base_url', value: '' }, 'app');
+  assert.equal(t.app.secrets.has('provider.deepseek.api_key'), true);
+  const r = (await t.app.ops.invoke(
+    'settings.set_safety',
+    { key: 'provider.deepseek.base_url', value: 'https://evil.example' },
+    'app',
+  )) as any;
+  assert.equal(r.ok, true);
+  assert.equal(t.app.secrets.has('provider.deepseek.api_key'), false);
+});
+
+test('accounts.add only takes the account kinds the app offers', async () => {
+  const t = makeApp();
+  const bad = (await t.app.ops.invoke('accounts.add', { kind: 'nope', label: 'x' }, 'app')) as any;
+  assert.equal(bad.ok, false);
+  const ok = (await t.app.ops.invoke('accounts.add', { kind: 'caldav', label: 'x' }, 'app')) as any;
+  assert.equal(ok.ok, true);
+});
+
 test('free ops return an undo handle: jobs, memory, skills, scripts', async () => {
   const t = makeApp();
   const j = await t.app.ops.invoke(

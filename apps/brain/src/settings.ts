@@ -5,10 +5,20 @@ export interface SettingDef {
   description: string;
   /** Safety settings change what the agent may do: setting them is a `tap` op for the agent. */
   safety?: boolean;
+  /** Number settings: allowed range (inclusive). Strings: `pattern` the whole value must match. */
+  min?: number;
+  max?: number;
+  pattern?: RegExp;
 }
 
+const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 export const SETTING_DEFS: Record<string, SettingDef> = {
-  'user.name': { default: 'Jan', description: 'How Lotti addresses you' },
+  'user.name': {
+    default: 'Jan',
+    description: 'How Lotti addresses you',
+    pattern: /^\S.{0,39}$/,
+  },
   'provider.active': {
     default: 'deepseek',
     description: 'Active model provider id',
@@ -57,10 +67,14 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: 8,
     description: 'Max tool rounds per question',
     safety: true,
+    min: 1,
+    max: 30,
   },
   'agent.silence_timeout_sec': {
     default: 60,
     description: 'Give up when the model is silent this long',
+    min: 1,
+    max: 600,
   },
   'agent.op_tool_groups': {
     default: [
@@ -83,14 +97,20 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'conversation.compact_idle_min': {
     default: 10,
     description: 'Compact the conversation after this idle time',
+    min: 1,
+    max: 1440,
   },
   'conversation.new_idle_min': {
     default: 60,
     description: 'Start a new conversation after this idle time',
+    min: 1,
+    max: 10080,
   },
   'conversation.keep_recent_turns': {
     default: 6,
     description: 'Turns kept verbatim when compacting',
+    min: 0,
+    max: 50,
   },
   'shell.enabled': {
     default: true,
@@ -101,11 +121,15 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: 30,
     description: 'Shell command timeout',
     safety: true,
+    min: 1,
+    max: 600,
   },
   'shell.max_output_chars': {
     default: 20000,
     description: 'Shell output cap',
     safety: true,
+    min: 100,
+    max: 200000,
   },
   'web_fetch.enabled': {
     default: true,
@@ -124,18 +148,24 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'catchup.away_hours': {
     default: 2,
     description: 'Away this long without presence = return',
+    min: 0.1,
+    max: 72,
   },
   'catchup.night_start': {
     default: '22:00',
     description: 'Night window start (HH:MM)',
+    pattern: HHMM,
   },
   'catchup.night_end': {
     default: '09:00',
     description: 'Night window end (HH:MM)',
+    pattern: HHMM,
   },
   'catchup.sleep_min_hours': {
     default: 4,
     description: 'Night overlap that counts as slept',
+    min: 0,
+    max: 24,
   },
   'catchup.use_weather': {
     default: true,
@@ -144,15 +174,21 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'inbox.default_expiry_hours': {
     default: 72,
     description: 'Inbox items expire after this (0 = never)',
+    min: 0,
+    max: 8760,
   },
   'memory.stale_days': {
     default: 180,
     description: 'Dreaming drops memories unused this long',
+    min: 1,
+    max: 3650,
   },
   'dreaming.enabled': { default: true, description: 'Nightly dreaming' },
   'jobs.meeting_soon.lead_min': {
     default: 10,
     description: 'Meeting soon: minutes before an event it shows up',
+    min: 1,
+    max: 1440,
   },
 };
 
@@ -191,6 +227,18 @@ export class SettingsService {
         `Setting ${key} expects ${Array.isArray(def.default) ? 'array' : typeof def.default}`,
       );
     }
+    if (typeof value === 'number') {
+      if (
+        !Number.isFinite(value) ||
+        (def.min !== undefined && value < def.min) ||
+        (def.max !== undefined && value > def.max)
+      )
+        throw new Error(
+          `Setting ${key} must be a number from ${def.min ?? '-∞'} to ${def.max ?? '∞'}`,
+        );
+    }
+    if (typeof value === 'string' && def.pattern && !def.pattern.test(value))
+      throw new Error(`Setting ${key} has the wrong format: ${def.description}`);
     this.app.db.run(
       `INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       'setting:' + key,
