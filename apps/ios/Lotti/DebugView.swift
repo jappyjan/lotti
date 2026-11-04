@@ -69,6 +69,25 @@ struct DebugView: View {
                 LabeledContent("Opens at", value: String(format: "%.0f°", link.headUpSettings.config.upAngle))
             }
 
+            Section {
+                LabeledContent("Wear state", value: String(describing: link.wearState))
+                Button("Marker: glasses ON now") { link.addStateMarker("glasses ON") }
+                Button("Marker: glasses OFF now") { link.addStateMarker("glasses OFF") }
+                if link.stateTrace.isEmpty { Text("No state messages from the glasses yet.").foregroundStyle(.secondary) }
+                ForEach(link.stateTrace.reversed().prefix(30)) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.time, format: .dateTime.hour().minute().second()).font(.caption2).foregroundStyle(.secondary)
+                        Text(entry.isMarker ? "MARK \(entry.text)" : entry.text)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(entry.isMarker ? .orange : .primary)
+                    }
+                }
+            } header: {
+                Text("Wear capture")
+            } footer: {
+                Text("Take the glasses off and put them on. Tap the matching marker at the same moment. Every state message the glasses send is listed here and written to the log with the markers.")
+            }
+
             if link.status.isConnected {
                 Section("Try") {
                     Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
