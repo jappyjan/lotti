@@ -76,13 +76,10 @@ async function handleOne(
         const r = await app.ops.invoke(op.name, args, 'mcp');
         // Nobody is on the other end to tap: surface the proposal in the app's inbox to confirm.
         if (r.ok && r.proposed)
-          app.inbox.create({
-            kind: 'info',
-            title: r.proposed.title,
-            summary: 'Requested through the admin MCP. Confirm to apply.',
-            actions: [r.proposed],
-            expiresInHours: 24,
-          });
+          app.actions.toInbox(
+            r.proposed,
+            'Requested through the admin MCP. Confirm to apply.',
+          );
         return ok({
           isError: !r.ok,
           content: [{ type: 'text', text: r.ok ? r.text : r.error }],
@@ -92,9 +89,21 @@ async function handleOne(
         typeof headers['x-lotti-ask'] === 'string'
           ? headers['x-lotti-ask']
           : undefined;
-      const run = (askId && app.runs.get(askId)) || newRun();
+      const attached = askId ? app.runs.get(askId) : undefined;
+      const run = attached ?? newRun();
       const r = await app.tools.call(name, args, { app, run });
-      return ok({ isError: !r.ok, content: [{ type: 'text', text: r.text }] });
+      let text = r.text;
+      // No live ask to show the proposal on (header lost, run already over): the inbox is the next best
+      // place; dropping it would leave the model saying "tap to confirm" with nothing to tap.
+      if (!attached && run.actions.length) {
+        app.log.warn(
+          `tool ${name} proposed ${run.actions.length} action(s) but no live ask matches "${askId ?? ''}": parked in the inbox`,
+        );
+        for (const a of run.actions)
+          app.actions.toInbox(a, 'Lotti proposed this. Confirm to apply.');
+        text += ' It is waiting in the app\'s inbox for the user to confirm.';
+      }
+      return ok({ isError: !r.ok, content: [{ type: 'text', text }] });
     }
     default:
       if (req.method?.startsWith('notifications/')) return null;
