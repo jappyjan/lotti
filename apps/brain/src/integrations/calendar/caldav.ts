@@ -158,7 +158,19 @@ export class CalDav {
       `<c:text-match collation="i;octet">${uid.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</c:text-match>` +
       `</c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`;
     const xml = (await this.dav('REPORT', cal.id, body, { depth: '1' })).text;
-    const hits = elements(xml, 'response').filter((r) => first(r, 'href'));
+    // text-match is a substring match: keep only the resource whose UID is exactly this one.
+    const hasUid = (r: string) =>
+      decode(first(r, 'calendar-data') ?? '')
+        .replace(/\r?\n[ \t]/g, '')
+        .split(/\r?\n/)
+        .some(
+          (l) =>
+            /^UID(;[^:]*)?:/i.test(l) &&
+            l.replace(/^[^:]*:/, '').trim() === uid,
+        );
+    const hits = elements(xml, 'response').filter(
+      (r) => first(r, 'href') && hasUid(r),
+    );
     if (hits.length !== 1)
       throw new Error(
         hits.length ? 'More than one event matches.' : 'Event not found.',

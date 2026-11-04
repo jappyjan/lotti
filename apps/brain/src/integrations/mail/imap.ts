@@ -148,6 +148,16 @@ async function snippetOf(source: Buffer | undefined): Promise<string> {
   }
 }
 
+const EXCLUDED_SPECIAL_USE = [
+  '\\Trash',
+  '\\Junk',
+  '\\Drafts',
+  '\\All',
+  '\\Flagged',
+  '\\Important',
+];
+const SPECIAL_USE = [...EXCLUDED_SPECIAL_USE, '\\Sent', '\\Archive'];
+
 type ListedBox = { path: string; flags?: Set<string>; specialUse?: string };
 
 /**
@@ -156,19 +166,12 @@ type ListedBox = { path: string; flags?: Set<string>; specialUse?: string };
  */
 export function isExcludedMailbox(b: ListedBox): boolean {
   if (b.flags?.has('\\Noselect') || b.flags?.has('\\NonExistent')) return true;
-  if (
-    b.specialUse &&
-    [
-      '\\Trash',
-      '\\Junk',
-      '\\Drafts',
-      '\\All',
-      '\\Flagged',
-      '\\Important',
-    ].includes(b.specialUse)
-  )
-    return true;
-  if (b.specialUse) return false;
+  // imapflow reports only some SPECIAL-USE attributes as `specialUse` (not \Important), so look at the flags too.
+  const special = new Set(
+    [b.specialUse, ...(b.flags ?? [])].filter((x): x is string => !!x),
+  );
+  if (EXCLUDED_SPECIAL_USE.some((u) => special.has(u))) return true;
+  if (b.specialUse || SPECIAL_USE.some((u) => special.has(u))) return false;
   // Servers without SPECIAL-USE: fall back to the usual names.
   return /(^|[/.])(trash|bin|deleted( (items|messages))?|spam|junk( e-?mail)?|drafts?|papierkorb|entw(ü|ue)rfe|all mail|alle nachrichten|starred|important)$/i.test(
     b.path,

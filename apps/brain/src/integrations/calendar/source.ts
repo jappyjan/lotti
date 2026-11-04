@@ -1,5 +1,4 @@
 import type { App } from '../../app.ts';
-import { isoLocal } from '../../util/clock.ts';
 import {
   accountsFor,
   errText,
@@ -301,7 +300,7 @@ export class MergedCalendar implements CalendarSource {
       touchSync(this.app, acc.id);
       return {
         ok: true,
-        text: `"${title}" added (${isoLocal(start)}) to ${acc.label}.`,
+        text: `"${title}" added to ${acc.label}.`,
       };
     } catch (e) {
       return { ok: false, text: `Could not add the event: ${errText(e)}` };

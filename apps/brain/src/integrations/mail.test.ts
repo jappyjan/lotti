@@ -335,6 +335,8 @@ test('imap: all folders skips Trash/Spam/Drafts/All Mail, keeps Sent/Archive, pi
     { path: 'Projekte' },
     { path: 'Papierkorb' },
     { path: 'Weg', flags: new Set(['\\Noselect']) },
+    // imapflow leaves \\Important in the flags, not in specialUse
+    { path: 'Wichtig', flags: new Set(['\\Important', '\\HasNoChildren']) },
   ];
   const { isExcludedMailbox } = await import('./mail/imap.ts');
   assert.deepEqual(

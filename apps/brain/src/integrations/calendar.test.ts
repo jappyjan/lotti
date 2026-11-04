@@ -244,9 +244,13 @@ test('caldav: delete_calendar_event removes a single event by UID, only after pe
     {
       m: 'REPORT',
       u: '/home/123/work/',
-      res: () =>
+      res: (r) =>
         multistatus(
-          `<d:response><d:href>/home/123/work/x.ics</d:href><d:propstat><d:prop><c:calendar-data><![CDATA[${stored}]]></c:calendar-data></d:prop></d:propstat></d:response>`,
+          `<d:response><d:href>/home/123/work/x.ics</d:href><d:propstat><d:prop><c:calendar-data><![CDATA[${stored}]]></c:calendar-data></d:prop></d:propstat></d:response>` +
+            // the UID text-match is a substring match: a sibling whose UID merely contains "e1" comes back too
+            (r.body.includes('text-match')
+              ? `<d:response><d:href>/home/123/work/y.ics</d:href><d:propstat><d:prop><c:calendar-data><![CDATA[${stored.replace('UID:e1', 'UID:e1-copy')}]]></c:calendar-data></d:prop></d:propstat></d:response>`
+              : ''),
         ),
     },
     ...davRoutes(stored),
