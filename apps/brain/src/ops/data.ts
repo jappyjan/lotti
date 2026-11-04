@@ -572,9 +572,11 @@ export const dataOps: Operation[] = [
     }),
     risk: 'free',
     handler(i, { app }) {
+      const changes = Object.entries(i).filter(([, v]) => v !== undefined);
+      // All or nothing: one bad value must not leave the others saved without an undo.
+      for (const [k, v] of changes) app.settings.check('catchup.' + k, v);
       const prev: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(i)) {
-        if (v === undefined) continue;
+      for (const [k, v] of changes) {
         prev[k] = app.settings.get('catchup.' + k);
         app.settings.set('catchup.' + k, v);
       }

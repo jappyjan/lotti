@@ -6,6 +6,7 @@
 # compose file "/docker-compose.coolify.yml" (so ../.. is the repo root). Secret env vars to set in Coolify:
 #   MASTER_KEY   (openssl rand -hex 32; keep it: it decrypts the stored secrets)
 #   TS_AUTHKEY   (Tailscale auth key, reusable or one-off; the tailnet may need to approve the device)
+# and the plain env var PUBLIC_URL=https://lotti-brain.<tailnet>.ts.net (the URL in the pairing QR).
 # Tailnet requirements:
 #   - MagicDNS must be enabled (default) so tailnet hostnames resolve in `brain`
 #   - ACLs must allow lotti-brain -> the devices you want to reach (default allow-all)

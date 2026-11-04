@@ -107,6 +107,59 @@ struct AppModelTests {
         #expect(!model.isPaired)
     }
 
+    @Test func aWrongCodeSaysSo() async {
+        let http = StubHTTP { _ in (401, #"{"ok":false,"error":"Invalid, used or expired pairing code"}"#) }
+        let model = model(FakeGlassesLink(), http: http)
+        do {
+            try await model.pair(url: URL(string: "http://x:1")!, code: "nope")
+            Issue.record("expected an error")
+        } catch {
+            #expect(error.localizedDescription.contains("wrong"))
+        }
+    }
+
+    @Test func pairingFailsLoudlyWhenTheTokenCannotBeStored() async {
+        let secrets = MemorySecrets()
+        secrets.rejectsWrites = true
+        let store = BackendStore(defaults: .testing(), keychain: Keychain(memory: secrets))
+        let model = model(FakeGlassesLink(), store: store, http: StubHTTP { _ in (200, #"{"token":"t"}"#) })
+        await #expect(throws: BackendError.self) {
+            try await model.pair(url: URL(string: "http://x:1")!, code: "c")
+        }
+        #expect(!model.isPaired)
+        #expect(store.url == nil)
+        #expect(model.backend.configuration == nil)
+    }
+
+    @Test func pairingAgainKeepsTheOldPairingWhenTheNewTokenCannotBeStored() async throws {
+        let secrets = MemorySecrets()
+        let store = BackendStore(defaults: .testing(), keychain: Keychain(memory: secrets))
+        let old = URL(string: "http://old:1")!
+        // each server hands out its own token
+        let model = model(FakeGlassesLink(), store: store, http: StubHTTP { request in
+            (200, request.url?.host == "old" ? #"{"token":"t"}"# : #"{"token":"t2"}"#)
+        })
+        try await model.pair(url: old, code: "c")
+        secrets.rejectsWrites = true
+        await #expect(throws: BackendError.self) {
+            try await model.pair(url: URL(string: "http://new:1")!, code: "c2")
+        }
+        #expect(model.isPaired)
+        #expect(store.url == old)
+        #expect(store.token == "t")
+        #expect(model.backend.configuration?.baseURL == old)
+    }
+
+    @Test func aRateLimitedCodeSaysWait() async {
+        let model = model(FakeGlassesLink(), http: StubHTTP { _ in (429, #"{"ok":false,"error":"Too many attempts"}"#) })
+        do {
+            try await model.pair(url: URL(string: "http://x:1")!, code: "nope")
+            Issue.record("expected an error")
+        } catch {
+            #expect(error.localizedDescription.contains("few minutes"))
+        }
+    }
+
     @Test func unpairingForgetsEverything() async throws {
         let store = BackendStore.testing()
         let model = model(FakeGlassesLink(), store: store, http: StubHTTP { _ in (200, #"{"token":"t"}"#) })

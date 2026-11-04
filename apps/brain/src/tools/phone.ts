@@ -4,7 +4,7 @@ import type { ToolDef } from './registry.ts';
 export const locationTool: ToolDef = {
   name: 'location',
   description:
-    "The phone's current position (lat/lon, place name if known). Ask for it only when the question needs where Jan is. The user sees a location indicator while it runs.",
+    "The phone's current position (lat/lon, place name if known). Ask for it only when the question needs where the user is. The user sees a location indicator while it runs.",
   inputSchema: z.object({}),
   kind: 'phone',
   status: { de: 'Frage Standort ab …', en: 'Getting your location …' },

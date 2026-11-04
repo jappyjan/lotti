@@ -21,7 +21,7 @@ export async function printPairingBanner(
       `  Link         : ${link}`,
       '',
       qr,
-      '  Enter the URL and code in the Lotti app (Settings > Backend), or scan the QR code.',
+      '  Enter the URL and code in the Lotti app (Settings > Lotti Brain), or scan the QR code.',
       '======================================================================',
       '',
     ].join('\n'),

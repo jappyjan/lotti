@@ -10,6 +10,12 @@ export MASTER_KEY=$(openssl rand -hex 32)      # keep it: it decrypts the stored
 docker compose -f apps/brain/docker-compose.yml up -d --build
 docker compose -f apps/brain/docker-compose.yml logs brain   # pairing code + URL + QR on first start
 
+# Coolify + Tailscale (no published port, no public domain): see apps/brain/docker-compose.coolify.yml
+#   Application from the private repo, build pack "Docker Compose", base directory "/apps/brain",
+#   compose file "/docker-compose.coolify.yml"; secret env vars MASTER_KEY and TS_AUTHKEY, plus PUBLIC_URL
+#   (https://lotti-brain.<tailnet>.ts.net). The pairing code is in the `brain` container log.
+#   The phone reaches it over HTTPS only (iOS blocks plain http:// to a tailnet name).
+
 # Local
 pnpm nx build brain && MASTER_KEY=... DATA_DIR=./data PORT=8787 node apps/brain/dist/main.js
 pnpm nx run-many -t build test typecheck -p brain
