@@ -110,29 +110,35 @@ export class ToolRegistry {
     rawArgs: unknown,
     ctx: ToolContext,
   ): Promise<{ ok: boolean; text: string }> {
+    const log = (ok: boolean, text: string, t0: number) =>
+      this.app.log[ok ? 'info' : 'warn'](
+        `tool ${name} ${ok ? 'ok' : 'FAILED'} ${Date.now() - t0}ms args=${clip(JSON.stringify(rawArgs ?? {}), 200)} -> ${clip(text.replace(/\s+/g, ' '), 200)}`,
+      );
+    const t0 = Date.now();
     const t = this.all().find((x) => x.name === name);
-    if (!t) return { ok: false, text: `Unknown tool: ${name}` };
+    if (!t) {
+      const text = `Unknown tool: ${name}`;
+      log(false, text, t0);
+      return { ok: false, text };
+    }
     const parsed = t.inputSchema.safeParse(rawArgs ?? {});
     if (!parsed.success) {
-      return {
-        ok: false,
-        text:
-          'Invalid arguments: ' +
-          parsed.error.issues
-            .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
-            .join('; '),
-      };
+      const text =
+        'Invalid arguments: ' +
+        parsed.error.issues
+          .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+          .join('; ');
+      log(false, text, t0);
+      return { ok: false, text };
     }
     try {
-      return {
-        ok: true,
-        text: clip(await t.handler(parsed.data, ctx), 30_000),
-      };
+      const text = clip(await t.handler(parsed.data, ctx), 30_000);
+      log(true, text, t0);
+      return { ok: true, text };
     } catch (e) {
-      return {
-        ok: false,
-        text: `Error: ${e instanceof Error ? e.message : String(e)}`,
-      };
+      const text = `Error: ${e instanceof Error ? e.message : String(e)}`;
+      log(false, text, t0);
+      return { ok: false, text };
     }
   }
 }

@@ -38,7 +38,7 @@ Both sides are built against this file. Change it first, then the code.
 | `error`           | `id?`, `message`                                                                                                                                           |
 | `tool_call`       | `callId`, `askId?`, `name`, `args` (JSON object). Phone tools: `location`, `reminders`. The app replies with `tool_result` within 10 s.                    |
 | `location_access` | `phase` (`start`\|`end`), `callId`, `at` — the app shows/hides the location icon on the glasses and logs the read                                          |
-| `performed`       | `id` (the perform/undo request id), `ok`, `text`, `undo?`                                                                                                  |
+| `performed`       | `id` (the perform/undo request id), `ok`, `text`, `result?`, `undo?`                                                                                               |
 | `inbox`           | `full` (bool), `items` (upserts, or the whole list if `full`), `removedIds`                                                                                |
 | `push`            | `item` (an inbox item) — also sent as `inbox` change; queued server side while offline and delivered on reconnect                                          |
 | `catchup`         | `id`, `text`, `at` — one catch-up brief, shown as the first chat message / on the glasses                                                                  |
@@ -49,7 +49,7 @@ Both sides are built against this file. Change it first, then the code.
 
 `actions[]`: `{id, title, target: "phone"|"server", tool?, args?}`.
 
-- `target: "server"` — tap sends `perform {actionId}`; server runs it and replies `performed`.
+- `target: "server"` — tap sends `perform {actionId}`; server runs it, lets the model word the outcome (it also lands in the conversation and is broadcast as a `message`), and replies `performed` with that wording in `text` and the tool's raw output in `result` (not for display). If the model can't answer within 20 s, `text` is a plain "Done." / "That didn't work: …".
 - `target: "phone"` — the app runs it itself through its `Toolbox` (`set_timer`, `create_reminder`, `start_navigation`) after the tap. Actions never run on a brain's say-so.
 - `undo: {id, label}` is present after immediate actions (Bring! add/remove, self-management). The app sends `undo {undoId}`.
 
