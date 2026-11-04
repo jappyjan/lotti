@@ -33,14 +33,14 @@ struct AccountsView: View {
                         Label("Google (Mail, Calendar)", systemImage: AccountKind.google.icon)
                     }
                     .disabled(working)
-                    ForEach([AccountKind.icloud, .imap, .caldav], id: \.self) { kind in
+                    ForEach([AccountKind.icloud, .imap, .caldav, .ics], id: \.self) { kind in
                         Button { adding = kind } label: { Label(kind.title, systemImage: kind.icon) }
                     }
                     Button("Google OAuth client…", systemImage: "key") { googleSetup = true }
                 } header: {
                     Text("Add an account")
                 } footer: {
-                    Text("Google needs an OAuth client of your own (Google Cloud console → Credentials). Enter it once under \"Google OAuth client\".")
+                    Text("Google needs an OAuth client of your own (Google Cloud console → Credentials). Enter it once under \"Google OAuth client\". An ICS calendar needs no client: paste the calendar's secret link (Google: \"Secret address in iCal format\", Microsoft 365: \"Publish calendar\").")
                 }
                 BringSection(accounts: accounts) { await reload() }
             }
@@ -53,24 +53,15 @@ struct AccountsView: View {
         .navigationTitle("Accounts")
     }
 
-    /// Google's OAuth in the system browser sheet: the backend builds the login URL, the browser
-    /// comes back to `lotti://oauth?code=…&state=…`, the backend trades the code for tokens.
+    /// Google's OAuth in the system browser sheet: the backend builds the login URL and says which scheme the
+    /// browser comes back to (`callbackScheme`), then trades the code for tokens.
     private func signInWithGoogle(_ reload: @escaping @MainActor () async -> Void) {
         working = true
         Task {
             defer { working = false }
             await attempt($error) {
                 let start = try await model.call("accounts.google_auth_url")
-                guard let text = start.text("url"), let url = URL(string: text) else { throw BackendError.badResponse }
-                let callback: URL
-                do {
-                    callback = try await webAuthentication.authenticate(using: url, callbackURLScheme: "lotti")
-                } catch let failure as ASWebAuthenticationSessionError where failure.code == .canceledLogin {
-                    return  // you closed the login sheet: nothing went wrong
-                }
-                guard let result = OAuthCallback(callback) else { throw BackendError.badResponse }
-                if let problem = result.error { throw BackendError.server(problem) }
-                guard let code = result.code, let state = result.state ?? start.text("state") else { throw BackendError.badResponse }
+                guard let (code, state) = try await OAuthFlow.authorize(start: start, using: webAuthentication) else { return }
                 _ = try await model.call("accounts.google_exchange", ["code": .string(code), "state": .string(state)])
                 await reload()
             }
@@ -78,24 +69,8 @@ struct AccountsView: View {
     }
 }
 
-/// `lotti://oauth?code=…&state=…` (or `error=…`) after a browser login.
-struct OAuthCallback: Equatable {
-    var code: String?
-    var state: String?
-    var error: String?
-
-    init?(_ url: URL) {
-        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
-        func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
-        code = value("code")
-        state = value("state")
-        error = value("error")
-        if code == nil && error == nil { return nil }
-    }
-}
-
 enum AccountKind: String, Identifiable, CaseIterable {
-    case google, icloud, imap, caldav
+    case google, icloud, imap, caldav, ics
     var id: String { rawValue }
 
     var title: String {
@@ -104,6 +79,7 @@ enum AccountKind: String, Identifiable, CaseIterable {
         case .icloud: "iCloud (Mail, Calendar)"
         case .imap: "Mail (IMAP)"
         case .caldav: "Calendar (CalDAV)"
+        case .ics: "Add ICS calendar"
         }
     }
 
@@ -113,39 +89,67 @@ enum AccountKind: String, Identifiable, CaseIterable {
         case .icloud: "icloud"
         case .imap: "envelope"
         case .caldav: "calendar"
+        case .ics: "calendar.badge.clock"
         }
     }
 }
 
-/// The Google OAuth client Lotti Brain signs in with (stored write-only on the backend).
+/// The Google OAuth client Lotti Brain signs in with (stored write-only on the backend). The redirect URI
+/// depends on the client type: an iOS client needs none, a Web client needs the one shown here in the console.
 struct GoogleClientView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var clientId = ""
     @State private var clientSecret = ""
+    @State private var redirect = ""
+    @State private var info: GoogleClientInfo?
+    @State private var copied = false
     @State private var error: String?
 
     var body: some View {
         Form {
             Section {
                 TextField("Client ID", text: $clientId).textInputAutocapitalization(.never).autocorrectionDisabled()
-                SecretField(title: "Client secret (if it has one)", text: $clientSecret)
+                SecretField(title: "Client secret (Web client only)", text: $clientSecret)
+                TextField("Redirect URI (optional)", text: $redirect).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             } footer: {
-                Text("Create an OAuth client in the Google Cloud console and allow the redirect lotti://oauth. Both values are stored encrypted on your Lotti Brain.")
+                Text("An iOS client has no secret and needs nothing else. A Web client has a secret and needs the redirect below in the console. Values are stored encrypted on your Lotti Brain.")
+            }
+            if let info, info.configured {
+                Section {
+                    if let problem = info.error {
+                        Text(problem).font(.footnote).foregroundStyle(.red)
+                    } else {
+                        LabeledContent("Client type", value: info.modeTitle)
+                        if let uri = info.consoleRedirect {
+                            Text(uri).font(.footnote.monospaced()).textSelection(.enabled)
+                            Button(copied ? "Copied" : "Copy redirect URI", systemImage: "doc.on.doc") {
+                                UIPasteboard.general.string = uri
+                                copied = true
+                            }
+                        } else {
+                            Text("iOS client: none needed").foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Redirect URI")
+                }
             }
         }
         .navigationTitle("Google OAuth client")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+            ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
                     var input: [String: JSONValue] = ["clientId": .string(clientId.trimmingCharacters(in: .whitespaces))]
                     if !clientSecret.isEmpty { input["clientSecret"] = .string(clientSecret) }
+                    if !redirect.isEmpty { input["redirectUri"] = .string(redirect.trimmingCharacters(in: .whitespaces)) }
                     Task {
                         await attempt($error) {
-                            _ = try await model.call("accounts.set_google_client", .object(input))
-                            dismiss()
+                            info = GoogleClientInfo(try await model.call("accounts.set_google_client", .object(input)))
+                            copied = false
+                            clientSecret = ""
                         }
                     }
                 }
@@ -153,6 +157,7 @@ struct GoogleClientView: View {
             }
         }
         .errorAlert($error)
+        .task { info = (try? await model.call("accounts.google_client")).map(GoogleClientInfo.init) }
     }
 }
 
@@ -171,14 +176,19 @@ struct AddAccountView: View {
     @State private var url = ""
     @State private var error: String?
     @State private var saving = false
+    @State private var checked: String?
 
     var body: some View {
         Form {
             Section {
                 TextField("Name", text: $label, prompt: Text(kind.title))
-                TextField(kind == .icloud ? "Apple ID" : "User name", text: $user)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
-                SecretField(title: kind == .icloud ? "App-specific password" : "Password", text: $password)
+                if kind == .ics {
+                    SecretField(title: "Secret calendar link", text: $password)
+                } else {
+                    TextField(kind == .icloud ? "Apple ID" : "User name", text: $user)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.emailAddress)
+                    SecretField(title: kind == .icloud ? "App-specific password" : "Password", text: $password)
+                }
                 if kind == .imap {
                     TextField("Server (imap.example.com)", text: $host).textInputAutocapitalization(.never).autocorrectionDisabled()
                     TextField("Port (993)", text: $port).keyboardType(.numberPad)
@@ -187,7 +197,9 @@ struct AddAccountView: View {
                     TextField("Server URL", text: $url).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 }
             } footer: {
-                if kind == .icloud {
+                if kind == .ics {
+                    Text("The calendar's secret link (https:// or webcal://). Anyone with the link can read the calendar: it is stored encrypted on your Lotti Brain and never shown again. Lotti only reads it.")
+                } else if kind == .icloud {
                     Text("Create an app-specific password at account.apple.com → Sign-In and Security. Your Apple ID password does not work.")
                 }
             }
@@ -197,14 +209,20 @@ struct AddAccountView: View {
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Add") { save() }.disabled(saving || user.isEmpty || password.isEmpty || (kind == .imap && host.isEmpty) || (kind == .caldav && url.isEmpty))
+                Button("Add") { save() }.disabled(saving || (kind != .ics && user.isEmpty) || password.isEmpty || (kind == .imap && host.isEmpty) || (kind == .caldav && url.isEmpty))
             }
         }
         .errorAlert($error)
+        .alert("Calendar added", isPresented: Binding(get: { checked != nil }, set: { if !$0 { checked = nil; dismiss() } })) {
+            Button("OK") {}
+        } message: {
+            Text(checked ?? "")
+        }
     }
 
     /// Non-secret settings as the backend reads them (`username`, `imapHost`/`imapPort`, CalDAV `url`).
     var config: [String: JSONValue] {
+        if kind == .ics { return [:] }
         var config: [String: JSONValue] = ["username": .string(user)]
         if kind == .imap {
             config["imapHost"] = .string(host)
@@ -222,10 +240,15 @@ struct AddAccountView: View {
                 let added = try await model.call("accounts.add", ["kind": .string(kind.rawValue), "label": .string(label.isEmpty ? kind.title : label),
                                                                   "config": .object(config)])
                 guard let id = added.text("id") else { throw BackendError.badResponse }
-                _ = try await model.call("accounts.set_credential", ["id": .string(id), "key": "password", "value": .string(password)])
-                _ = try? await model.call("accounts.check", ["id": .string(id)])
+                _ = try await model.call("accounts.set_credential", ["id": .string(id), "key": .string(kind == .ics ? "url" : "password"), "value": .string(password)])
+                let result = try? await model.call("accounts.check", ["id": .string(id)])
                 await done()
-                dismiss()
+                if kind == .ics {
+                    // "N events" when the link works, else why not (the account stays, fix the link in its details).
+                    checked = result?.text("detail") ?? result?.text("error") ?? "Added."
+                } else {
+                    dismiss()
+                }
             }
         }
     }
@@ -242,6 +265,7 @@ struct AccountDetailView: View {
     @State private var status: String
     @State private var problem: String?
     @State private var lastSync: Date?
+    @State private var detail: String?
     @State private var password = ""
     @State private var calendars: [Selectable]?
     @State private var mailboxes: [Selectable]?
@@ -255,7 +279,7 @@ struct AccountDetailView: View {
         _label = State(initialValue: account.label)
         _enabled = State(initialValue: account.isEnabled)
         _calendarService = State(initialValue: account.service("calendar") ?? (account.kind != "imap"))
-        _mailService = State(initialValue: account.service("mail") ?? (account.kind != "caldav"))
+        _mailService = State(initialValue: account.service("mail") ?? (account.kind != "caldav" && account.kind != "ics"))
         _status = State(initialValue: account.status)
         _problem = State(initialValue: account.lastError)
         _lastSync = State(initialValue: account.lastSync)
@@ -268,24 +292,25 @@ struct AccountDetailView: View {
                 StatusRow(title: "Status", value: status.isEmpty ? "Not checked" : status.capitalized, good: ["ok", "connected"].contains(status))
                 LabeledContent("Last sync", value: shortDate(lastSync))
                 if let problem { Text(problem).font(.footnote).foregroundStyle(.red) }
+                if let detail { Text(detail).font(.footnote).foregroundStyle(.secondary) }
                 Button { check() } label: { if checking { ProgressView() } else { Text("Check connection") } }
                     .disabled(checking)
             }
             Section {
                 Toggle("Use this account", isOn: $enabled)
                 Toggle("Calendar", isOn: $calendarService)
-                Toggle("Mail", isOn: $mailService)
+                if account.kind != "ics" { Toggle("Mail", isOn: $mailService) }
                 Button("Save") { saveSettings() }
             } header: {
                 Text("What it is used for")
             }
             if account.kind != "google" {
-                Section("Password") {
-                    SecretField(title: "Replace password", text: $password)
-                    Button("Save password") {
+                Section(account.kind == "ics" ? "Calendar link" : "Password") {
+                    SecretField(title: account.kind == "ics" ? "Replace the secret link" : "Replace password", text: $password)
+                    Button(account.kind == "ics" ? "Save link" : "Save password") {
                         Task {
                             await attempt($error) {
-                                _ = try await model.call("accounts.set_credential", ["id": .string(account.id), "key": "password", "value": .string(password)])
+                                _ = try await model.call("accounts.set_credential", ["id": .string(account.id), "key": .string(account.kind == "ics" ? "url" : "password"), "value": .string(password)])
                                 password = ""
                                 check()
                             }
@@ -297,7 +322,7 @@ struct AccountDetailView: View {
             selectionSection("Calendars", items: $calendars, empty: "Check the connection to list the calendars.", note: "No selection means all of them.") {
                 try await model.call("accounts.set_calendars", ["id": .string(account.id), "calendars": .array($0.map { .string($0) })])
             }
-            if account.kind != "google" {
+            if account.kind != "google" && account.kind != "ics" {
                 selectionSection("Mailboxes", items: $mailboxes, empty: "Check the connection to list the mailboxes.", note: "No selection means the inbox only.") {
                     try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "mailboxes": .array($0.map { .string($0) })])
                 }
@@ -355,7 +380,7 @@ struct AccountDetailView: View {
 
     private func loadSelections() async {
         calendars = (try? await model.call("accounts.calendars", ["id": .string(account.id)]))?.items.compactMap(Selectable.init)
-        if account.kind != "google" {
+        if account.kind != "google" && account.kind != "ics" {
             mailboxes = (try? await model.call("accounts.mailboxes", ["id": .string(account.id)]))?.items.compactMap(Selectable.init)
         }
     }
@@ -380,6 +405,7 @@ struct AccountDetailView: View {
                 let result = try await model.call("accounts.check", ["id": .string(account.id)])
                 status = result.text("status") ?? (result.flag("ok") ? "ok" : "error")
                 problem = result.text("error")
+                detail = result.text("detail")
                 if status == "ok" { lastSync = .now }
                 await loadSelections()
             }

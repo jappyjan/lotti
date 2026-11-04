@@ -1,3 +1,4 @@
+import AuthenticationServices
 import LottiKit
 import SwiftUI
 
@@ -14,7 +15,7 @@ struct McpView: View {
                     ForEach(servers) { server in
                         NavigationLink { McpDetailView(server: server) } label: {
                             LabeledContent(server.name) {
-                                Text(server.enabled ? (server.status == "ok" ? "OK" : server.status?.capitalized ?? "On") : "Off")
+                                Text(server.summary)
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -90,6 +91,7 @@ struct McpAddView: View {
 
 struct McpDetailView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.webAuthenticationSession) private var webAuthentication
     @Environment(\.dismiss) private var dismiss
     let server: McpServer
     @State private var name: String
@@ -107,11 +109,19 @@ struct McpDetailView: View {
     @State private var confirmDelete = false
     @State private var confirmClearSecret = false
     @State private var hasCredential: Bool
+    @State private var signedIn: Bool
+    @State private var authRequired: Bool
+    @State private var needsClient = false
+    @State private var clientId = ""
+    @State private var clientSecret = ""
+    @State private var signingIn = false
     @State private var error: String?
 
     init(server: McpServer) {
         self.server = server
         _hasCredential = State(initialValue: server.hasCredential)
+        _signedIn = State(initialValue: server.signedIn)
+        _authRequired = State(initialValue: server.authRequired)
         _name = State(initialValue: server.name)
         _url = State(initialValue: server.url)
         _command = State(initialValue: server.command)
@@ -140,6 +150,7 @@ struct McpDetailView: View {
                 if let testNote { Text(testNote).font(.footnote).foregroundStyle(.secondary) }
                 if let problem = server.lastError, testNote == nil { Text(problem).font(.footnote).foregroundStyle(.red) }
             }
+            if server.transport == "http" { signInSection }
             Section {
                 StatusRow(title: "Secret", value: hasCredential ? "Set" : "Not set", good: hasCredential ? true : nil)
                 Picker("Secret", selection: $secretKey) {
@@ -188,7 +199,7 @@ struct McpDetailView: View {
         .confirmationDialog("Remove the stored secrets of \(server.name)?", isPresented: $confirmClearSecret, titleVisibility: .visible) {
             Button("Remove secrets", role: .destructive) { clearSecret() }
         } message: {
-            Text("The bearer token and environment values are deleted. A server that needs them stops working.")
+            Text("The bearer token, the sign-in and environment values are deleted. A server that needs them stops working.")
         }
     }
 
@@ -213,6 +224,8 @@ struct McpDetailView: View {
                 let found = (result["tools"]?.array ?? []).compactMap { $0.string ?? $0.text("name") }
                 if !found.isEmpty { tools = Array(Set(found).union(tools)).sorted() }
                 testNote = result.flag("ok") ? "Connected: \(found.count) tools." : (result.text("error") ?? "The test failed.")
+                authRequired = result.flag("authRequired")
+                signedIn = result.flag("signedIn")
                 await loadTools()
             }
         }
@@ -227,6 +240,59 @@ struct McpDetailView: View {
             if let needs = tool["needsConfirmation"]?.boolValue { confirmation[name] = needs }
         }
         tools.sort()
+    }
+
+    /// OAuth login for servers that ask for one. The backend discovers the login page and registers Lotti when the
+    /// server allows it; only a server without that needs you to enter a client id.
+    @ViewBuilder private var signInSection: some View {
+        Section {
+            StatusRow(title: "Sign-in", value: signedIn ? "Signed in" : authRequired ? "Needs sign-in" : "Not signed in", good: signedIn ? true : nil)
+            Button { signIn() } label: { if signingIn { ProgressView() } else { Text(signedIn ? "Sign in again" : "Sign in") } }
+                .disabled(signingIn)
+            if needsClient {
+                TextField("Client ID", text: $clientId).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecretField(title: "Client secret (if it has one)", text: $clientSecret)
+                Button("Save client and sign in") { saveClient() }.disabled(clientId.isEmpty || signingIn)
+            }
+            if signedIn { Button("Sign out", role: .destructive) { confirmClearSecret = true } }
+        } header: {
+            Text("Sign-in")
+        } footer: {
+            Text(needsClient ? "This server has no automatic registration. Enter the client id (and secret) you registered with it; the redirect is shown by the server's console or is lotti://oauth." : "For servers that use OAuth. Tokens stay on your Lotti Brain and refresh by themselves.")
+        }
+    }
+
+    private func signIn() {
+        signingIn = true
+        Task {
+            defer { signingIn = false }
+            do {
+                let start = try await model.call("mcp.oauth_start", ["id": .string(server.id)])
+                guard let (code, state) = try await OAuthFlow.authorize(start: start, using: webAuthentication) else { return }
+                _ = try await model.call("mcp.oauth_exchange", ["code": .string(code), "state": .string(state)])
+                signedIn = true
+                authRequired = false
+                needsClient = false
+                hasCredential = true
+                test()
+            } catch {
+                let text = error.localizedDescription
+                if text.contains("client id") { needsClient = true } else { self.error = text }
+            }
+        }
+    }
+
+    private func saveClient() {
+        Task {
+            await attempt($error) {
+                var input: [String: JSONValue] = ["id": .string(server.id), "clientId": .string(clientId.trimmingCharacters(in: .whitespaces))]
+                if !clientSecret.isEmpty { input["clientSecret"] = .string(clientSecret) }
+                _ = try await model.call("mcp.oauth_set_client", .object(input))
+                clientSecret = ""
+                hasCredential = true
+                signIn()
+            }
+        }
     }
 
     private func saveSecret() {
@@ -248,6 +314,8 @@ struct McpDetailView: View {
             await attempt($error) {
                 _ = try await model.call("mcp.clear_credential", ["id": .string(server.id)])
                 hasCredential = false
+                signedIn = false
+                needsClient = false
                 testNote = "Secrets removed."
             }
         }

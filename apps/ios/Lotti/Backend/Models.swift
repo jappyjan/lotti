@@ -144,8 +144,12 @@ struct McpServer: Identifiable, Equatable {
     var confirmation: [String: Bool]
     var status: String?
     var lastError: String?
-    /// A bearer token or env value is stored (`mcp.list` `hasCredential`).
+    /// A bearer token, OAuth login or env value is stored (`mcp.list` `hasCredential`).
     var hasCredential: Bool
+    /// Signed in with OAuth (`mcp.list` `signedIn`).
+    var signedIn: Bool
+    /// The server answered 401 and wants a sign-in (`mcp.list` `authRequired`).
+    var authRequired: Bool
 
     init?(_ json: JSONValue) {
         guard let id = json.text("id") else { return nil }
@@ -162,9 +166,19 @@ struct McpServer: Identifiable, Equatable {
         status = json.text("status")
         lastError = json.text("lastError")
         hasCredential = json.flag("hasCredential")
+        signedIn = json.flag("signedIn")
+        authRequired = json.flag("authRequired")
     }
 
     func needsConfirmation(_ tool: String) -> Bool { confirmation[tool] ?? true }
+
+    /// One word for the list: off, needs sign-in, signed in, or the connection status.
+    var summary: String {
+        if !enabled { return "Off" }
+        if authRequired { return "Needs sign-in" }
+        if status == "ok" { return signedIn ? "Signed in" : "OK" }
+        return status?.capitalized ?? "On"
+    }
 }
 
 struct AccountInfo: Identifiable, Equatable {
@@ -196,6 +210,33 @@ struct AccountInfo: Identifiable, Equatable {
     var isConnected: Bool { ["ok", "connected"].contains(status) }
 
     func list(_ key: String) -> [String] { (config[key]?.array ?? []).compactMap(\.string) }
+}
+
+/// The Google OAuth client as the backend reports it (`accounts.google_client`): never a secret.
+struct GoogleClientInfo: Equatable {
+    var configured: Bool
+    var mode: String?
+    var redirectUri: String?
+    var error: String?
+
+    init(_ json: JSONValue) {
+        configured = json.flag("configured")
+        mode = json.text("mode")
+        redirectUri = json.text("redirectUri")
+        error = json.text("error")
+    }
+
+    var modeTitle: String {
+        switch mode {
+        case "ios": "iOS"
+        case "web": "Web"
+        case "custom": "Custom redirect"
+        default: "Unknown"
+        }
+    }
+
+    /// The URI to paste into the Google console; nil for an iOS client, which needs none.
+    var consoleRedirect: String? { mode == "ios" ? nil : redirectUri }
 }
 
 /// A calendar or mailbox of an account (`accounts.calendars`, `accounts.mailboxes`).

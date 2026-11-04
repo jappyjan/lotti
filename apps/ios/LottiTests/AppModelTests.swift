@@ -189,6 +189,41 @@ struct BackendStoreTests {
         #expect(OAuthCallback(URL(string: "lotti://oauth")!) == nil)
     }
 
+    @Test func readsTheOAuthReturnOfAGoogleIosClient() throws {
+        let url = URL(string: "com.googleusercontent.apps.123-abc:/oauth2redirect?code=c2&state=s2")!
+        let ok = try #require(OAuthCallback(url))
+        #expect(ok.code == "c2" && ok.state == "s2")
+        let start: JSONValue = ["callbackScheme": "com.googleusercontent.apps.123-abc", "state": "s2"]
+        #expect(OAuthFlow.callbackScheme(start) == "com.googleusercontent.apps.123-abc")
+        #expect(OAuthFlow.callbackScheme(["url": "https://x"]) == "lotti")
+        let result = try OAuthFlow.result(url, start: start)
+        #expect(result.code == "c2" && result.state == "s2")
+        // The state of the start answer fills in when the redirect carries none.
+        #expect(try OAuthFlow.result(URL(string: "lotti://oauth?code=c3")!, start: start).state == "s2")
+        #expect(throws: BackendError.self) { try OAuthFlow.result(URL(string: "lotti://oauth?error=access_denied")!, start: start) }
+    }
+
+    @Test func readsTheGoogleClientInfo() {
+        let ios = GoogleClientInfo(["configured": true, "mode": "ios", "redirectUri": "com.googleusercontent.apps.1:/oauth2redirect"])
+        #expect(ios.consoleRedirect == nil && ios.modeTitle == "iOS")
+        let web = GoogleClientInfo(["configured": true, "mode": "web", "redirectUri": "https://lotti.example/oauth/callback"])
+        #expect(web.consoleRedirect == "https://lotti.example/oauth/callback")
+        #expect(!GoogleClientInfo(["configured": false]).configured)
+    }
+
+    @Test func showsTheMcpSignInState() throws {
+        let needs = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true]))
+        #expect(needs.summary == "Needs sign-in")
+        let signed = try #require(McpServer(["id": "m", "name": "Docs", "status": "ok", "signedIn": true, "hasCredential": true]))
+        #expect(signed.summary == "Signed in" && signed.hasCredential)
+        #expect(try #require(McpServer(["id": "m", "name": "Docs", "enabled": false])).summary == "Off")
+    }
+
+    @Test func offersIcsCalendars() {
+        #expect(AccountKind.allCases.contains(.ics))
+        #expect(AccountKind.ics.title == "Add ICS calendar")
+    }
+
     @Test func readsACodexDeviceLogin() throws {
         let login = try #require(ProviderDetailView.deviceLogin(["verification_uri": "https://auth.openai.com/device", "user_code": "AB12-CD34"]))
         #expect(login.code == "AB12-CD34")
