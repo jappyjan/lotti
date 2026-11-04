@@ -385,7 +385,9 @@ struct AccountDetailView: View {
     private func setAllMailboxes(_ on: Bool) {
         allMailboxes = on
         config["allMailboxes"] = .bool(on)
-        let chosen = (mailboxes ?? []).filter(\.selected).map(\.id)
+        // The explicit selection, not what the list shows: in "All folders" mode it lists every included
+        // folder as selected, and saving that back would replace the earlier choice when switching off.
+        let chosen = config["mailboxes"]?.array?.compactMap(\.string) ?? (mailboxes ?? []).filter(\.selected).map(\.id)
         Task {
             await attempt($error) {
                 _ = try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "mailboxes": .array(chosen.map { .string($0) }), "all": .bool(on)])

@@ -25,6 +25,7 @@ struct ActionCard: View {
                 .tint(destructive ? .red : .green)
                 Button(lang("Nicht jetzt", "Not now"), action: dismiss)
                     .buttonStyle(.bordered)
+                    .tint(.primary)
             }
         }
         .padding(14)
@@ -95,7 +96,7 @@ struct ActionCard: View {
     static func when(_ startISO: String?, _ endISO: String?) -> String? {
         guard let start = date(startISO) else { return nil }
         let day = start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-        let time = Date.FormatStyle(date: .omitted, time: .shortened).locale(Locale(identifier: "de_DE"))
+        let time = Date.FormatStyle().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "de_DE"))
         guard let end = date(endISO) else { return "\(day), \(start.formatted(time))" }
         if Calendar.current.isDate(start, inSameDayAs: end) {
             return "\(day), \(start.formatted(time))–\(end.formatted(time))"
