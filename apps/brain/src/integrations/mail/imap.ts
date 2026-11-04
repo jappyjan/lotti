@@ -148,15 +148,48 @@ async function snippetOf(source: Buffer | undefined): Promise<string> {
   }
 }
 
+type ListedBox = { path: string; flags?: Set<string>; specialUse?: string };
+
+/**
+ * "All folders" leaves out what is noise or a duplicate: Trash, Spam, Drafts, the "All Mail" /
+ * Flagged / Important virtual folders and anything not selectable. Sent and Archive stay.
+ */
+export function isExcludedMailbox(b: ListedBox): boolean {
+  if (b.flags?.has('\\Noselect') || b.flags?.has('\\NonExistent')) return true;
+  if (
+    b.specialUse &&
+    [
+      '\\Trash',
+      '\\Junk',
+      '\\Drafts',
+      '\\All',
+      '\\Flagged',
+      '\\Important',
+    ].includes(b.specialUse)
+  )
+    return true;
+  if (b.specialUse) return false;
+  // Servers without SPECIAL-USE: fall back to the usual names.
+  return /(^|[/.])(trash|bin|deleted( (items|messages))?|spam|junk( e-?mail)?|drafts?|papierkorb|entw(ü|ue)rfe|all mail|alle nachrichten|starred|important)$/i.test(
+    b.path,
+  );
+}
+
 export function imapBackend(
   app: App,
   acc: AccountRow,
   deps: ImapDeps = realImapDeps,
 ): MailBackend {
-  const boxes = () =>
-    strList(acc.config.mailboxes).length
+  const boxes = async (c: ImapLike): Promise<string[]> => {
+    // "All folders" is evaluated per run, so new folders are picked up on their own.
+    if (acc.config.allMailboxes === true)
+      return (await c.list())
+        .filter((b) => !isExcludedMailbox(b))
+        .map((b) => b.path);
+    return strList(acc.config.mailboxes).length
       ? strList(acc.config.mailboxes)
       : ['INBOX'];
+  };
   const settings = () => imapSettings(app, acc);
 
   const fetchSome = async (
@@ -196,7 +229,7 @@ export function imapBackend(
   ) =>
     withClient(deps, settings(), async (c) => {
       const all: MailMessage[] = [];
-      for (const box of boxes()) {
+      for (const box of await boxes(c)) {
         all.push(
           ...(await inMailbox(c, box, async () => {
             const uids = ((await c.search(query, { uid: true })) || []).slice(
@@ -289,6 +322,10 @@ export async function imapMailboxes(
   deps: ImapDeps = realImapDeps,
 ) {
   return withClient(deps, imapSettings(app, acc), async (c) =>
-    (await c.list()).map((b) => ({ id: b.path, name: b.path })),
+    (await c.list()).map((b) => ({
+      id: b.path,
+      name: b.path,
+      excluded: isExcludedMailbox(b),
+    })),
   );
 }

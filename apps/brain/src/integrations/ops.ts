@@ -116,7 +116,7 @@ export const accountOps: Operation[] = [
     name: 'accounts.mailboxes',
     group: 'accounts',
     description:
-      'Mailboxes of an IMAP account (live) with `selected` (default INBOX). Gmail has none.',
+      'Mailboxes of an IMAP account (live) with `selected` (default INBOX; in all-folders mode every folder except `excluded` ones). Gmail has none.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'free',
     handler: (i, { app }) => accountMailboxes(app, acc(app, i.id)),
@@ -125,20 +125,30 @@ export const accountOps: Operation[] = [
     name: 'accounts.set_mailboxes',
     group: 'accounts',
     description:
-      'Choose which mailboxes of an IMAP account Lotti searches (empty = INBOX).',
-    inputSchema: z.object({ id: z.string(), mailboxes: z.array(z.string()) }),
+      'Choose which mailboxes of an IMAP account Lotti searches (empty = INBOX). `all: true` searches all folders except Trash, Spam, Drafts and duplicate "All Mail" folders, including folders created later.',
+    inputSchema: z.object({
+      id: z.string(),
+      mailboxes: z.array(z.string()),
+      all: z.boolean().optional(),
+    }),
     risk: 'tap',
     proposalTitle: (i) => `Choose mailboxes for ${i.id}`,
     handler(i, { app }) {
-      const prev = acc(app, i.id).config.mailboxes ?? [];
-      setConfig(app, i.id, { mailboxes: i.mailboxes });
+      const { config } = acc(app, i.id);
+      const prev = config.mailboxes ?? [];
+      const all = i.all === true;
+      setConfig(app, i.id, { mailboxes: i.mailboxes, allMailboxes: all });
       return out(
-        { id: i.id, mailboxes: i.mailboxes },
+        { id: i.id, mailboxes: i.mailboxes, all },
         {
           undo: {
             label: 'Mailbox selection back',
             op: 'accounts.set_mailboxes',
-            input: { id: i.id, mailboxes: prev },
+            input: {
+              id: i.id,
+              mailboxes: prev,
+              all: config.allMailboxes === true,
+            },
           },
         },
       );

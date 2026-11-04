@@ -305,8 +305,8 @@ test('imap: unread since, search, read, mailbox selection', async () => {
     'app',
   )) as any;
   assert.deepEqual(mb.result, [
-    { id: 'INBOX', name: 'INBOX', selected: true },
-    { id: 'Archive', name: 'Archive', selected: false },
+    { id: 'INBOX', name: 'INBOX', excluded: false, selected: true },
+    { id: 'Archive', name: 'Archive', excluded: false, selected: false },
   ]);
   await t.app.ops.invoke(
     'accounts.set_mailboxes',
@@ -320,6 +320,58 @@ test('imap: unread since, search, read, mailbox selection', async () => {
     'Archiv',
     'Termin morgen',
   ]);
+});
+
+test('imap: all folders skips Trash/Spam/Drafts/All Mail, keeps Sent/Archive, picks up new folders', async () => {
+  const { t, id } = await imapApp();
+  const folders = [
+    { path: 'INBOX' },
+    { path: 'Archive', specialUse: '\\Archive' },
+    { path: 'Sent', specialUse: '\\Sent' },
+    { path: 'Trash', specialUse: '\\Trash' },
+    { path: 'Junk', specialUse: '\\Junk' },
+    { path: 'Drafts', specialUse: '\\Drafts' },
+    { path: '[Gmail]/All Mail', specialUse: '\\All' },
+    { path: 'Projekte' },
+    { path: 'Papierkorb' },
+    { path: 'Weg', flags: new Set(['\\Noselect']) },
+  ];
+  const { isExcludedMailbox } = await import('./mail/imap.ts');
+  assert.deepEqual(
+    folders.filter((f) => !isExcludedMailbox(f)).map((f) => f.path),
+    ['INBOX', 'Archive', 'Sent', 'Projekte'],
+  );
+  await t.app.ops.invoke(
+    'accounts.set_mailboxes',
+    { id, mailboxes: [], all: true },
+    'app',
+  );
+  const both = await t.app.integrations.mail!.unread(
+    new Date(2026, 10, 3, 7, 0).getTime(),
+  );
+  assert.deepEqual(both.map((m) => m.subject).sort(), [
+    'Archiv',
+    'Termin morgen',
+  ]);
+  const mb = (await t.app.ops.invoke(
+    'accounts.mailboxes',
+    { id },
+    'app',
+  )) as any;
+  assert.ok(mb.result.every((b: any) => b.selected === !b.excluded));
+  // switching off falls back to the explicit list (empty = INBOX)
+  await t.app.ops.invoke(
+    'accounts.set_mailboxes',
+    { id, mailboxes: [] },
+    'app',
+  );
+  const inbox = await t.app.integrations.mail!.unread(
+    new Date(2026, 10, 3, 7, 0).getTime(),
+  );
+  assert.deepEqual(
+    inbox.map((m) => m.subject),
+    ['Termin morgen'],
+  );
 });
 
 test('imap: reply goes out via SMTP (icloud defaults) with threading, only after perform', async () => {
