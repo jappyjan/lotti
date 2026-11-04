@@ -9,6 +9,13 @@ import { proposeAction } from '../../tools/proposals.ts';
 import type { ToolDef } from '../../tools/registry.ts';
 import { clip } from '../../util/text.ts';
 import type { McpClient, McpServerConfig } from '../index.ts';
+import {
+  AUTH_REFUSED,
+  SIGN_IN_AGAIN,
+  isAuthError,
+  mcpAccessToken,
+  mcpSignedIn,
+} from './oauth.ts';
 
 const PROTOCOL = '2025-03-26';
 const TIMEOUT_MS = 30_000;
@@ -123,17 +130,19 @@ class HttpSession implements Session {
     private url: string,
     private bearer: string | undefined,
     private fetchFn: typeof fetch,
+    /** OAuth: the current token, or a freshly refreshed one after a 401. Undefined = no OAuth sign-in. */
+    private oauth?: (force: boolean) => Promise<string | undefined>,
   ) {}
 
-  private async post(body: unknown, expectId?: number): Promise<any> {
-    const res = await this.fetchFn(this.url, {
+  private async send(body: unknown, token: string | undefined) {
+    return this.fetchFn(this.url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': PROTOCOL,
         ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}),
-        ...(this.bearer ? { authorization: `Bearer ${this.bearer}` } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -144,10 +153,23 @@ class HttpSession implements Session {
           : String(e);
       throw new Error(`Cannot reach the MCP server at ${this.url}: ${why}`);
     });
+  }
+
+  private async post(body: unknown, expectId?: number): Promise<any> {
+    // An OAuth token wins over a manual bearer.
+    const first = (await this.oauth?.(false)) ?? this.bearer;
+    let res = await this.send(body, first);
+    if (res.status === 401 && this.oauth) {
+      // Refresh once and retry (the token may have been revoked or expired early).
+      const fresh = await this.oauth(true);
+      if (fresh) res = await this.send(body, fresh);
+    }
     this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
     if (res.status === 401 || res.status === 403)
       throw new Error(
-        'MCP server refused the login: set the bearer token in the app.',
+        this.oauth
+          ? SIGN_IN_AGAIN
+          : `${AUTH_REFUSED}: sign in or set the bearer token in the app.`,
       );
     if (!res.ok) throw new Error(`MCP server answered HTTP ${res.status}`);
     if (expectId === undefined) return undefined;
@@ -211,6 +233,9 @@ export class McpClientImpl implements McpClient {
             server.url ?? '',
             this.app.secrets.get(`mcp.${server.id}.bearer`),
             (...a) => this.app.fetch(...a),
+            mcpSignedIn(this.app, server.id)
+              ? (force) => mcpAccessToken(this.app, server, force)
+              : undefined,
           )
         : new StdioSession(
             server.command ?? '',
@@ -274,7 +299,8 @@ export class McpClientImpl implements McpClient {
         tools: (await this.listTools(server)).map((t) => t.name),
       };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      const error = e instanceof Error ? e.message : String(e);
+      return { ok: false, error, authRequired: isAuthError(error) };
     }
   }
 

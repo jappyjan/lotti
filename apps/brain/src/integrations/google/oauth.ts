@@ -1,6 +1,13 @@
-import { createHash, randomBytes } from 'node:crypto';
 import type { App } from '../../app.ts';
 import { newId } from '../../util/crypto.ts';
+import {
+  isHttps,
+  newPkce,
+  newState,
+  savePending,
+  takePending,
+  tokenPost,
+} from '../oauth/common.ts';
 
 export const GOOGLE_SCOPES = [
   'openid',
@@ -10,11 +17,9 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
 ];
-export const DEFAULT_REDIRECT = 'lotti://oauth';
 const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const USERINFO_URL = 'https://openidconnect.googleapis.com/v1/userinfo';
-const PENDING_TTL = 15 * 60_000;
 
 export const GOOGLE_SECRETS = {
   clientId: 'google.client_id',
@@ -22,33 +27,103 @@ export const GOOGLE_SECRETS = {
   redirect: 'google.redirect_uri',
 };
 
+/** The custom scheme Google accepts for iOS-type clients: the client id, reversed. */
+export function iosRedirect(clientId: string): string | undefined {
+  const m = /^(.+)\.apps\.googleusercontent\.com$/.exec(clientId);
+  return m ? `com.googleusercontent.apps.${m[1]}:/oauth2redirect` : undefined;
+}
+
+export interface GoogleRedirect {
+  mode: 'ios' | 'web' | 'custom';
+  redirectUri: string;
+  /** Scheme the app waits for in ASWebAuthenticationSession. */
+  callbackScheme: string;
+}
+
+const schemeOf = (u: string) =>
+  /^([a-z][a-z0-9+.-]*):/i.exec(u)?.[1] ?? 'lotti';
+
+/**
+ * Which redirect URI is used: an explicit override always wins; otherwise an iOS-type client (no secret)
+ * gets the reversed client id, a Web-type client (has a secret) `<PUBLIC_URL>/oauth/callback`.
+ */
+export function googleRedirect(
+  app: App,
+  c: {
+    clientId: string;
+    clientSecret?: string | undefined;
+    explicit?: string | undefined;
+  },
+): GoogleRedirect {
+  if (c.explicit)
+    return {
+      mode: 'custom',
+      redirectUri: c.explicit,
+      callbackScheme: schemeOf(c.explicit),
+    };
+  if (!c.clientSecret) {
+    const r = iosRedirect(c.clientId);
+    if (!r)
+      throw new Error(
+        'This client id does not look like a Google iOS client (…apps.googleusercontent.com). Enter a redirect URI explicitly or use a Web client with a secret.',
+      );
+    return { mode: 'ios', redirectUri: r, callbackScheme: schemeOf(r) };
+  }
+  if (!isHttps(app.config.publicUrl))
+    throw new Error(
+      `A Google Web client needs an HTTPS PUBLIC_URL (now ${app.config.publicUrl}) for its redirect URI.`,
+    );
+  return {
+    mode: 'web',
+    redirectUri: `${app.config.publicUrl}/oauth/callback`,
+    callbackScheme: 'lotti',
+  };
+}
+
 export function googleClient(app: App) {
   const clientId = app.secrets.get(GOOGLE_SECRETS.clientId);
   if (!clientId)
     throw new Error(
       'Google client id is not set: enter it in the app (accounts.set_google_client).',
     );
-  return {
+  const clientSecret = app.secrets.get(GOOGLE_SECRETS.clientSecret);
+  const r = googleRedirect(app, {
     clientId,
-    clientSecret: app.secrets.get(GOOGLE_SECRETS.clientSecret),
-    redirect: app.secrets.get(GOOGLE_SECRETS.redirect) || DEFAULT_REDIRECT,
-  };
+    clientSecret,
+    explicit: app.secrets.get(GOOGLE_SECRETS.redirect),
+  });
+  return { clientId, clientSecret, redirect: r.redirectUri, ...r };
 }
 
-const b64u = (b: Buffer) => b.toString('base64url');
+/** What is configured, without any secret (the app shows the redirect URI to paste into the console). */
+export function googleClientInfo(app: App): {
+  configured: boolean;
+  mode?: GoogleRedirect['mode'];
+  redirectUri?: string;
+  callbackScheme?: string;
+  error?: string;
+} {
+  if (!app.secrets.get(GOOGLE_SECRETS.clientId)) return { configured: false };
+  try {
+    const { mode, redirectUri, callbackScheme } = googleClient(app);
+    return { configured: true, mode, redirectUri, callbackScheme };
+  } catch (e) {
+    return {
+      configured: true,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
 
 /** Step 1: URL for the app to open in a web auth session. PKCE verifier is kept server side per `state`. */
 export function googleAuthUrl(
   app: App,
   opts: { accountId?: string; label?: string } = {},
-): { url: string; state: string; redirectUri: string } {
+): { url: string; state: string; redirectUri: string; callbackScheme: string } {
   const c = googleClient(app);
-  const verifier = b64u(randomBytes(48));
-  const state = b64u(randomBytes(16));
-  app.settings.kvSet(
-    `oauth.google.${state}`,
-    JSON.stringify({ verifier, ...opts, at: app.clock.now() }),
-  );
+  const { verifier, challenge } = newPkce();
+  const state = newState();
+  savePending(app, 'google', state, { verifier, ...opts });
   const q = new URLSearchParams({
     client_id: c.clientId,
     redirect_uri: c.redirect,
@@ -58,31 +133,24 @@ export function googleAuthUrl(
     prompt: 'consent',
     include_granted_scopes: 'true',
     state,
-    code_challenge: b64u(createHash('sha256').update(verifier).digest()),
+    code_challenge: challenge,
     code_challenge_method: 'S256',
   });
-  return { url: `${AUTH_URL}?${q}`, state, redirectUri: c.redirect };
+  return {
+    url: `${AUTH_URL}?${q}`,
+    state,
+    redirectUri: c.redirect,
+    callbackScheme: c.callbackScheme,
+  };
 }
 
-async function tokenRequest(app: App, body: Record<string, string>) {
-  const res = await app.fetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
-  const j: any = await res.json().catch(() => ({}));
-  if (!res.ok)
-    throw new Error(
-      `Google token request failed: ${j.error_description ?? j.error ?? res.status}`,
-    );
-  return j as {
+const tokenRequest = (app: App, body: Record<string, string>) =>
+  tokenPost(app, TOKEN_URL, body, 'Google') as Promise<{
     access_token: string;
     refresh_token?: string;
     expires_in: number;
     id_token?: string;
-  };
-}
+  }>;
 
 export function storeGoogleTokens(
   app: App,
@@ -104,18 +172,11 @@ export async function googleExchange(
   code: string,
   state: string,
 ): Promise<{ accountId: string; email: string | null }> {
-  const raw = app.settings.kvGet(`oauth.google.${state}`);
-  if (!raw)
-    throw new Error('Unknown or already used OAuth state. Start again.');
-  const p = JSON.parse(raw) as {
+  const p = takePending<{
     verifier: string;
     accountId?: string;
     label?: string;
-    at: number;
-  };
-  app.db.run('DELETE FROM kv WHERE key=?', `oauth.google.${state}`);
-  if (app.clock.now() - p.at > PENDING_TTL)
-    throw new Error('The sign-in took too long. Start again.');
+  }>(app, 'google', state);
   const c = googleClient(app);
   const t = await tokenRequest(app, {
     grant_type: 'authorization_code',

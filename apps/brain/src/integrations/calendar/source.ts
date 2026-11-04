@@ -15,6 +15,7 @@ import type {
   CalendarSource,
 } from '../index.ts';
 import { CalDav, type DavCalendar } from './caldav.ts';
+import { expandEvents } from './recur.ts';
 
 export interface CalendarInfo {
   id: string;
@@ -170,9 +171,95 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
   };
 }
 
+// ---- ICS subscription (secret link of a Google / Microsoft 365 calendar), read-only -------------------------
+
+const ICS_CACHE_MS = 15 * 60_000;
+const MAX_FEED = 20_000_000;
+const icsCache = new WeakMap<
+  App,
+  Map<string, { url: string; at: number; text: string }>
+>();
+
+/** `webcal://` is plain https; surrounding whitespace is ignored. */
+export const normalizeIcsUrl = (u: string) =>
+  u.trim().replace(/^webcals?:\/\//i, 'https://');
+
+/** The secret link is a password: it must not appear in any message the app or the log can see. */
+function redactUrl(msg: string, url: string): string {
+  let out = msg.split(url).join('[calendar link]');
+  try {
+    const u = new URL(url);
+    for (const part of [u.pathname + u.search, u.search, u.pathname])
+      if (part.length > 3) out = out.split(part).join('[…]');
+  } catch {
+    /* not a URL: nothing else to hide */
+  }
+  return out;
+}
+
+/** The feed text, cached 15 minutes per account (and per link: a new link is fetched at once). */
+export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
+  const raw = app.secrets.get(`account.${acc.id}.url`);
+  if (!raw)
+    throw new Error('This calendar has no link yet (set it in the app).');
+  const url = normalizeIcsUrl(raw);
+  let m = icsCache.get(app);
+  if (!m) icsCache.set(app, (m = new Map()));
+  const hit = m.get(acc.id);
+  if (hit && hit.url === url && app.clock.now() - hit.at < ICS_CACHE_MS)
+    return hit.text;
+  try {
+    if (!/^https?:\/\//i.test(url)) throw new Error('The link must be https.');
+    const res = await app.fetch(url, {
+      headers: { accept: 'text/calendar, */*' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok)
+      throw new Error(`The calendar link answered HTTP ${res.status}.`);
+    const text = await res.text();
+    if (text.length > MAX_FEED)
+      throw new Error('The calendar feed is too big.');
+    if (!/BEGIN:VCALENDAR/i.test(text))
+      throw new Error('The link did not return a calendar (ICS) feed.');
+    m.set(acc.id, { url, at: app.clock.now(), text });
+    return text;
+  } catch (e) {
+    const cause =
+      e instanceof Error ? (e.cause as Error | undefined) : undefined;
+    const why = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      redactUrl(
+        why === 'fetch failed'
+          ? `Cannot reach the calendar server${cause?.message ? ` (${cause.message})` : ''}.`
+          : why,
+        url,
+      ),
+    );
+  }
+}
+
+export function icsBackend(app: App, acc: AccountRow): CalBackend {
+  return {
+    calendars: async () => {
+      await icsFeed(app, acc);
+      return [{ id: 'ics', name: acc.label }];
+    },
+    async events(_ids, from, to) {
+      return expandEvents(await icsFeed(app, acc), from, to, acc.label);
+    },
+    async create() {
+      throw new Error('ICS calendars are read-only.');
+    },
+  };
+}
+
 export type BackendFactory = (app: App, acc: AccountRow) => CalBackend;
 export const defaultBackend: BackendFactory = (app, acc) =>
-  acc.kind === 'google' ? googleBackend(app, acc) : caldavBackend(app, acc);
+  acc.kind === 'google'
+    ? googleBackend(app, acc)
+    : acc.kind === 'ics'
+      ? icsBackend(app, acc)
+      : caldavBackend(app, acc);
 
 /** All calendar accounts merged. One failing account does not hide the others. */
 export class MergedCalendar implements CalendarSource {
@@ -232,12 +319,26 @@ export class MergedCalendar implements CalendarSource {
         ok: false,
         text: 'The event needs a title and valid start and end.',
       };
-    const accounts = accountsFor(this.app, 'calendar');
+    const all = accountsFor(this.app, 'calendar');
+    const asked = all.find((a) => a.id === args.accountId);
+    if (asked?.kind === 'ics')
+      return {
+        ok: false,
+        text: `${asked.label} is read-only (ICS subscription).`,
+      };
+    // Subscriptions are never a write target.
+    const accounts = all.filter((a) => a.kind !== 'ics');
     const acc =
-      accounts.find((a) => a.id === args.accountId) ??
+      asked ??
       accounts.find((a) => a.config.writeDefault === true) ??
       accounts[0];
-    if (!acc) return { ok: false, text: 'No calendar is connected yet.' };
+    if (!acc)
+      return {
+        ok: false,
+        text: all.length
+          ? 'Only read-only calendars are connected: add a Google or CalDAV calendar to create events.'
+          : 'No calendar is connected yet.',
+      };
     try {
       const selected = strList(acc.config.calendars);
       await this.backend(this.app, acc).create(selected[0], {

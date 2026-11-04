@@ -8,9 +8,9 @@ import { accountCalendars, accountMailboxes } from './connectors.ts';
 import {
   GOOGLE_SECRETS,
   googleAuthUrl,
+  googleClientInfo,
   googleExchange,
 } from './google/oauth.ts';
-import { DEFAULT_REDIRECT } from './google/oauth.ts';
 
 const acc = (app: App, id: string) => {
   const a = accountRow(app, id);
@@ -31,7 +31,7 @@ export const accountOps: Operation[] = [
     name: 'accounts.set_google_client',
     group: 'accounts',
     description:
-      'Store the Google OAuth client (clientId, optional clientSecret, redirectUri default lotti://oauth). Write-only.',
+      'Store the Google OAuth client (clientId, optional clientSecret, optional redirectUri override). Without an override an iOS client (no secret) uses the reversed client id and a Web client (secret) <PUBLIC_URL>/oauth/callback. Write-only; returns the effective redirect.',
     inputSchema: z.object({
       clientId: z.string().min(1),
       clientSecret: z.string().optional(),
@@ -40,23 +40,30 @@ export const accountOps: Operation[] = [
     risk: 'app_only',
     handler(i, { app }) {
       app.secrets.set(GOOGLE_SECRETS.clientId, i.clientId);
+      // A new client replaces the old one completely (secret and override included).
       if (i.clientSecret)
         app.secrets.set(GOOGLE_SECRETS.clientSecret, i.clientSecret);
-      app.secrets.set(
-        GOOGLE_SECRETS.redirect,
-        i.redirectUri || DEFAULT_REDIRECT,
-      );
-      return {
-        configured: true,
-        redirectUri: i.redirectUri || DEFAULT_REDIRECT,
-      };
+      else app.secrets.delete(GOOGLE_SECRETS.clientSecret);
+      if (i.redirectUri)
+        app.secrets.set(GOOGLE_SECRETS.redirect, i.redirectUri);
+      else app.secrets.delete(GOOGLE_SECRETS.redirect);
+      return googleClientInfo(app);
     },
+  }),
+  defineOp({
+    name: 'accounts.google_client',
+    group: 'accounts',
+    description:
+      'Whether a Google OAuth client is set and which redirect URI sign-in uses: {configured, mode: ios|web|custom, redirectUri, callbackScheme, error?}. Never returns secrets.',
+    inputSchema: z.object({}),
+    risk: 'app_only',
+    handler: (_i, { app }) => googleClientInfo(app),
   }),
   defineOp({
     name: 'accounts.google_auth_url',
     group: 'accounts',
     description:
-      'Start Google sign-in: returns {url, state, redirectUri}. The app opens url in a web auth session; Google redirects to lotti://oauth?code=...&state=...; then call accounts.google_exchange. Optional accountId re-connects an existing account.',
+      'Start Google sign-in: returns {url, state, redirectUri, callbackScheme}. The app opens url in a web auth session and waits for callbackScheme; the redirect carries code and state; then call accounts.google_exchange. Optional accountId re-connects an existing account.',
     inputSchema: z.object({
       accountId: z.string().optional(),
       label: z.string().optional(),

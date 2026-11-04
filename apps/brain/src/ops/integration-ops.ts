@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import type { App } from '../app.ts';
 import type { AccountRow, McpServerConfig } from '../integrations/index.ts';
+import {
+  clearMcpOauth,
+  isAuthError,
+  mcpOauthExchange,
+  mcpOauthStart,
+  mcpSignedIn,
+  setManualClient,
+} from '../integrations/mcp/oauth.ts';
 import { newId } from '../util/crypto.ts';
 import { defineOp, out, type Operation } from './registry.ts';
 
@@ -99,7 +107,9 @@ function accountHostChanges(
   return [...new Set([...Object.keys(cur), ...Object.keys(next)])]
     .filter((k) => HOST_KEY.test(k))
     .filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]))
-    .map((k) => `${k} ${next[k] === undefined ? '(removed)' : String(next[k])}`);
+    .map(
+      (k) => `${k} ${next[k] === undefined ? '(removed)' : String(next[k])}`,
+    );
 }
 
 const mcpFields = {
@@ -176,7 +186,10 @@ export const integrationOps: Operation[] = [
         .all<McpRow>('SELECT * FROM mcp_servers ORDER BY created_at')
         .map((r) => ({
           ...toMcp(r),
+          // Counts OAuth secrets too (mcp.<id>.oauth.*), never returns any.
           hasCredential: app.secrets.list(`mcp.${r.id}.`).length > 0,
+          signedIn: mcpSignedIn(app, r.id),
+          authRequired: r.status === 'error' && isAuthError(r.last_error),
         })),
   }),
   defineOp({
@@ -240,16 +253,18 @@ export const integrationOps: Operation[] = [
         ((i.url !== undefined && i.url !== cur.url) ||
           stdioTargetChanged(cur, i)) &&
         app.secrets.list(`mcp.${cur.id}.`).length
-          ? ' (its saved credential is removed)'
+          ? ' (its saved credential and sign-in are removed)'
           : '';
       return `Change MCP server "${cur?.name ?? i.id}": ${ch.join(', ') || 'no change'}${secrets}`;
     },
     handler(i, { app }) {
       const cur = mcpRow(app, i.id);
       if (!cur) throw new Error('No such MCP server.');
-      // A saved bearer / env secret must never follow the server to a new address or command.
-      if (i.url !== undefined && i.url !== cur.url)
+      // A saved bearer / OAuth login / env secret must never follow the server to a new address or command.
+      if (i.url !== undefined && i.url !== cur.url) {
         app.secrets.delete(`mcp.${cur.id}.bearer`);
+        clearMcpOauth(app, cur.id);
+      }
       if (stdioTargetChanged(cur, i))
         for (const x of app.secrets.list(`mcp.${cur.id}.env.`))
           app.secrets.delete(x.name);
@@ -304,7 +319,11 @@ export const integrationOps: Operation[] = [
         i.id,
       );
       if (r.ok) refreshMcp(app);
-      return r;
+      return {
+        ...r,
+        authRequired: r.authRequired ?? false,
+        signedIn: mcpSignedIn(app, i.id),
+      };
     },
   }),
   defineOp({
@@ -352,7 +371,7 @@ export const integrationOps: Operation[] = [
     name: 'mcp.clear_credential',
     group: 'mcp',
     description:
-      'Delete every stored secret of an MCP server (bearer token and env.* values).',
+      'Delete every stored secret of an MCP server (bearer token, OAuth sign-in and env.* values): also signs out.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'app_only',
     handler(i, { app }) {
@@ -361,6 +380,55 @@ export const integrationOps: Operation[] = [
       for (const n of names) app.secrets.delete(n);
       refreshMcp(app);
       return { id: i.id, removed: names.length, hasCredential: false };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_start',
+    group: 'mcp',
+    description:
+      'Start OAuth sign-in to an HTTP MCP server: discovers the authorization server, registers a client when the server allows it, returns {url, state, redirectUri, callbackScheme}. The app opens url in a web auth session; then call mcp.oauth_exchange with the code and state.',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'app_only',
+    async handler(i, { app }) {
+      const row = mcpRow(app, i.id);
+      if (!row) throw new Error('No such MCP server.');
+      return mcpOauthStart(app, toMcp(row));
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_exchange',
+    group: 'mcp',
+    description:
+      'Finish MCP sign-in: the app sends the code and state from the redirect; the backend stores the tokens (encrypted). Returns {id, signedIn}.',
+    inputSchema: z.object({
+      code: z.string().min(1),
+      state: z.string().min(1),
+    }),
+    risk: 'app_only',
+    async handler(i, { app }) {
+      const r = await mcpOauthExchange(app, i.code, i.state, (id: string) => {
+        const row = mcpRow(app, id);
+        return row ? toMcp(row) : undefined;
+      });
+      refreshMcp(app);
+      return { id: r.serverId, signedIn: true };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_set_client',
+    group: 'mcp',
+    description:
+      'Use a registered OAuth client for an MCP server that has no automatic client registration (clientId, optional clientSecret). Write-only.',
+    inputSchema: z.object({
+      id: z.string(),
+      clientId: z.string().min(1),
+      clientSecret: z.string().optional(),
+    }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
+      setManualClient(app, i.id, i.clientId, i.clientSecret);
+      return { id: i.id, configured: true };
     },
   }),
   defineOp({
@@ -457,7 +525,9 @@ export const integrationOps: Operation[] = [
     risk: 'tap',
     proposalTitle(i, app) {
       const cur = accountRow(app, i.id);
-      const hosts = i.config ? accountHostChanges(cur?.config ?? {}, i.config) : [];
+      const hosts = i.config
+        ? accountHostChanges(cur?.config ?? {}, i.config)
+        : [];
       const label =
         i.label !== undefined && i.label !== cur?.label
           ? [`label ${i.label}`]
