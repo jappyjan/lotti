@@ -306,7 +306,7 @@ extension Conductor {
         thinking = Task {
             // The transcript stream ends once the recognizer has the final result.
             let final = await withTimeout(timing.finalTranscript) { await task.value }
-            self.listening = nil
+            if self.listening == task { self.listening = nil }  // not a newer hold's
             guard !Task.isCancelled, mode == .working else { return }
             let heard = final.flatMap { WakeWordMatcher.match($0)?.command }.flatMap { $0.isEmpty ? nil : $0 } ?? session.command
             lastHeard = heard

@@ -27,9 +27,9 @@ The stock Even app works like a phone squeezed onto glasses: menus, apps, featur
 2. **Input that feels native.** Ring and touchpad gestures (tap, double tap, long press, scroll) map to the actions on the current screen.
 3. **Voice.** Push-to-talk (long press) and dictation in v1. "Hey Lotti" wake word if the battery cost is acceptable.
 4. **Phone as sensor hub.** Forward notifications, location and device state to the brain. The brain decides what to do with them.
-5. **Act on things.** Reply to messages (iMessage, WhatsApp, Signal, Telegram, Matrix), set reminders, hand bigger tasks to Hermes.
+5. **Act on things.** Reply to messages (iMessage, WhatsApp, Signal, Telegram, Matrix), set reminders, and hand bigger tasks to Lotti Brain, the own backend. Messenger read/write comes later.
 6. **Navigation.** Turn-by-turn on the glasses, replacing the Even app's navigation.
-7. **On-device first.** Fast, offline, private by default. Escalate to your existing Hermes only when the task needs it.
+7. **Backend first, offline-capable.** Lotti Brain (own server, own memory, own tools) answers; the on-device offline brain keeps timer and navigation working without it. Everything it does is managed in the AI-first phone app.
 
 ## Non-goals (for now)
 
@@ -37,14 +37,15 @@ The stock Even app works like a phone squeezed onto glasses: menus, apps, featur
 - Android. iPhone only.
 - Supporting other glasses. The G2 + R1 are the target. Keep the glasses link behind an interface so others could be added later.
 - Camera features. The G2 has no camera.
-- Setting up or configuring Hermes (models, tools, memory). Lotti only connects to an existing Hermes.
+- Hermes. Lotti has its own backend; it is not a drop-in replacement and Hermes is not supported.
+- Reading and writing WhatsApp, Matrix, Signal, Telegram or iMessage messages: wanted later, not now.
 
 ## Success criteria
 
 - Answering a message in any of the five messengers takes **one glance and one or two ring gestures**, faster than reaching for the phone.
 - A typical day of notifications produces **few, useful** screens. Track the shown-vs-ignored ratio and how often you dismiss.
 - Navigation works as well as the Even app's, so there's no reason to switch back.
-- Push-to-talk → first screen in **< 1.5 s** on-device, **< 4 s** via Hermes.
+- Push-to-talk → first screen in **< 1.5 s** on-device (timer, navigation), **< 4 s** via Lotti Brain (status lines stream meanwhile).
 - Battery: glasses and phone together last a full workday with Lotti running.
 
 ## Constraints

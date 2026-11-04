@@ -10,8 +10,14 @@ public enum RailAction: Equatable, Sendable {
     case dismiss
     /// Run a phone action a brain prepared (timer, reminder). This tap is your approval.
     case perform(ProposedAction)
-    /// Pass this question to Hermes.
-    case askHermes(String)
+    /// Take back what Lotti just did (backend `undo`).
+    case undo(UndoAction)
+    /// The all-items list of the inbox, from item `page * 3`.
+    case openInbox(page: Int)
+    /// Open one inbox item in full (the original) and tell the backend it was opened.
+    case openItem(String)
+    /// Dismiss one inbox item (the backend is told).
+    case dismissItem(String)
 }
 
 public struct RailItem: Equatable, Sendable {
@@ -58,6 +64,10 @@ public struct Screen: Equatable, Sendable {
         case working
         /// One short line that goes away by itself.
         case done
+        /// The all-items list: pick one.
+        case list
+        /// An inbox item word for word, without Lotti's voice.
+        case original
     }
 
     public var kind: Kind

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Any JSON value. Tool arguments and Hermes replies arrive as JSON whose shape we only know at run time.
+/// Any JSON value. Tool arguments and backend messages arrive as JSON whose shape we only know at run time.
 public enum JSONValue: Equatable, Sendable, Codable {
     case string(String)
     case number(Double)

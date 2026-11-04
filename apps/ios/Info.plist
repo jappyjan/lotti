@@ -11,14 +11,26 @@
 	<key>NSAlarmKitUsageDescription</key>
 	<string>Lotti sets timers when you confirm them on the glasses.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
-	<string>Lotti reads your reminders and adds new ones when you confirm them on the glasses.</string>
+	<string>Lotti reads your reminders and adds new ones when you confirm them.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Lotti talks to your Hermes on your network.</string>
-	<!-- Hermes may run on the local network or a tailnet without HTTPS. -->
+	<string>Lotti talks to your Lotti Brain on your network.</string>
+	<!-- Lotti Brain may run on the local network or a tailnet without HTTPS. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- lotti://pair?url=…&code=… (QR code of Lotti Brain) and the OAuth return of account logins. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>de.janjaap.lotti</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lotti</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

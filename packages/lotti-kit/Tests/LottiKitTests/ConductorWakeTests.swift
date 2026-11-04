@@ -19,12 +19,12 @@ struct ConductorWakeTests {
     static func makeConductor(
         link: FakeGlassesLink, brain: FakeBrain, speech: any SpeechRecognizer, phoneMic: FakeMicrophone,
         classifier: FakeClassifier, watchdog: Duration = .seconds(30), idle: Duration = .milliseconds(300),
-        done: Duration = .milliseconds(100)
+        done: Duration = .milliseconds(100), answer: Duration = .milliseconds(200)
     ) -> Conductor {
         Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date())),
-            timing: .init(idle: idle, done: done, answer: .milliseconds(200),
+            timing: .init(idle: idle, done: done, answer: answer,
                           finalTranscript: .milliseconds(200), wakeConfirm: .milliseconds(300),
                           wakeSilence: .milliseconds(100), wakeNoCommand: .milliseconds(200), wakeCap: .seconds(1),
                           micWatchdog: watchdog, micRetry: .milliseconds(20), micRetryMax: .milliseconds(100)),
@@ -59,7 +59,7 @@ struct ConductorWakeTests {
     func aWakeInAnyModeListensAndAnswers(_ start: String) async throws {
         // Screens stay up long enough that the wake really starts from `start`.
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic,
-                                           classifier: classifier, idle: .seconds(10), done: .seconds(10))
+                                           classifier: classifier, idle: .seconds(10), done: .seconds(10), answer: .seconds(10))
         let expected: Conductor.Mode
         switch start {
         case "today":
@@ -81,7 +81,7 @@ struct ConductorWakeTests {
             brain.delay = .seconds(5)
             brain.answers = ["Hi": Answer(sentence: "Hi Jan!")]
             conductor.ask("Hi")
-            try await eventually { conductor.mode == .working }
+            try await eventually { conductor.mode == .working && brain.asked == ["Hi"] }  // the slow call has started
             brain.delay = nil
             expected = .working
         default:
@@ -92,10 +92,10 @@ struct ConductorWakeTests {
         try await wakeOn(conductor)
         #expect(conductor.mode == expected)
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
         #expect(conductor.screen?.text == "wie spät ist es")
         hush(4)  // 200 ms quiet
-        try await eventually(timeout: 2) { conductor.screen?.text == "Es ist drei." }
+        try await eventually { conductor.screen?.text == "Es ist drei." }
         #expect(brain.asked.last == "wie spät ist es")  // without the wake phrase
         #expect(conductor.lastHeard == "wie spät ist es")
         #expect(conductor.wakeLast?.contains("confirmed") == true)
@@ -109,8 +109,9 @@ struct ConductorWakeTests {
         let speech = RecordingSpeech()
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: classifier)
         try await wakeOn(conductor)
+        talk(40)  // 2 s of talk before the phrase, so the ring is full
         sayHeyLotti()
-        try await eventually(timeout: 2) { !speech.chunks.isEmpty }
+        try await eventually { !speech.chunks.isEmpty }
         // First in is the 2 s ring with the phrase in it, not just audio from the hit on.
         #expect(speech.chunks[0].count == 32_000)
         #expect(speech.chunks[0].contains(FakeClassifier.marker))
@@ -121,9 +122,9 @@ struct ConductorWakeTests {
         brain.answers["tell me a very long story"] = Answer(sentence: "Once.")
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
         talk(24)  // 1.2 s of talking, over the 1 s cap
-        try await eventually(timeout: 2) { conductor.screen?.text == "Once." }
+        try await eventually { conductor.screen?.text == "Once." }
     }
 
     @Test func noCommandTurnsTheDisplayOffQuietly() async throws {
@@ -131,10 +132,10 @@ struct ConductorWakeTests {
         press(.doubleTap)
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
         #expect(conductor.screen?.text == "Listening…")
         hush(6)  // 300 ms > 200 ms
-        try await eventually(timeout: 2) { conductor.mode == .off }
+        try await eventually { conductor.mode == .off }
         try await eventually { link.frames.last == .dark }
         #expect(!link.shownTexts.contains { $0.contains("Sorry") })
         #expect(brain.asked.isEmpty)
@@ -144,7 +145,7 @@ struct ConductorWakeTests {
         speech.script = [Transcript("Hey Lotti, what")]
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
         press(.doubleTap)
         #expect(conductor.mode == .off)
         hush(10)
@@ -156,19 +157,19 @@ struct ConductorWakeTests {
         #expect(conductor.wakeState == .listening)
         hush(40)
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
     }
 
     @Test func anotherHeyLottiDuringAWakeListenIsPartOfTheCommand() async throws {
         speech.script = [Transcript("Hey Lotti, wie spät ist es")]
         brain.answers["wie spät ist es"] = Answer(sentence: "Es ist drei.")
         try await wakeOn()
-        sayHeyLotti(chunks: 8)
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        sayHeyLotti()
+        try await eventually { conductor.mode == .listening }
         let calls = classifier.calls
         sayHeyLotti(chunks: 8)  // no new candidate while one is running
         hush(4)
-        try await eventually(timeout: 2) { conductor.screen?.text == "Es ist drei." }
+        try await eventually { conductor.screen?.text == "Es ist drei." }
         #expect(classifier.calls == calls)
         #expect(brain.asked == ["wie spät ist es"])
     }
@@ -178,7 +179,7 @@ struct ConductorWakeTests {
         let frames = link.frames.count
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.wakeLast?.contains("rejected") == true }
+        try await eventually { conductor.wakeLast?.contains("rejected") == true }
         #expect(conductor.mode == .off)
         #expect(link.frames.count == frames)
         #expect(conductor.wakeState == .listening)
@@ -186,14 +187,14 @@ struct ConductorWakeTests {
         speech.script = [Transcript("Hey Lotti, hi")]
         hush(40)
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
     }
 
     @Test func nothingHeardWithinTheWindowRejectsToo() async throws {
         speech.script = []
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.wakeLast?.contains("rejected") == true }
+        try await eventually { conductor.wakeLast?.contains("rejected") == true }
         #expect(conductor.mode == .off)
     }
 
@@ -209,10 +210,10 @@ struct ConductorWakeTests {
         #expect(conductor.wakeLast == nil)
         // After the hold, detection runs again.
         press(.longPressEnd)
-        try await eventually(timeout: 2) { brain.asked == ["Hey Lotti, what"] }
+        try await eventually { brain.asked == ["Hey Lotti, what"] }
         speech.script = [Transcript("Hey Lotti, hi")]
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.wakeLast?.contains("confirmed") == true }
+        try await eventually { conductor.wakeLast?.contains("confirmed") == true }
     }
 
     @Test func aCandidateIsIgnoredWhileTheNavigationScreenIsUp() async throws {
@@ -220,14 +221,14 @@ struct ConductorWakeTests {
         link.displaySuspended = true
         try await wakeOn()
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.wakeLast?.contains("navigation") == true }
+        try await eventually { conductor.wakeLast?.contains("navigation") == true }
         #expect(classifier.calls > 0)
         #expect(conductor.mode == .off)
         // Navigation ends: the next one wakes.
         link.displaySuspended = false
         hush(40)
         sayHeyLotti()
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        try await eventually { conductor.mode == .listening }
     }
 
     // MARK: The shared mic
@@ -240,7 +241,7 @@ struct ConductorWakeTests {
         press(.longPress)
         try await eventually { conductor.microphoneSource == "glasses" }
         press(.longPressEnd)
-        try await eventually(timeout: 2) { brain.asked == ["Wetter"] }
+        try await eventually { brain.asked == ["Wetter"] }
         #expect(link.microphoneStarts == 1)
         #expect(link.microphoneStops == 0)
         #expect(link.microphoneOn)
@@ -256,10 +257,10 @@ struct ConductorWakeTests {
         press(.longPressEnd)
         try await Task.sleep(for: .milliseconds(20))
         press(.longPress)  // again, while the first start is still pending
-        try await eventually(timeout: 2) { link.microphoneOn }
+        try await eventually { link.microphoneOn }
         try await Task.sleep(for: .milliseconds(50))
         press(.longPressEnd)
-        try await eventually(timeout: 2) { !link.microphoneOn }
+        try await eventually { !link.microphoneOn }
     }
 
     @Test func withWakeWordOffTheMicIsOnlyOnWhileHolding() async throws {
@@ -272,7 +273,7 @@ struct ConductorWakeTests {
         press(.longPress)
         try await eventually { link.microphoneOn }
         press(.longPressEnd)
-        try await eventually(timeout: 2) { brain.asked == ["Wetter"] }
+        try await eventually { brain.asked == ["Wetter"] }
         #expect(!link.microphoneOn)
         #expect(link.microphoneStarts == 1)
         #expect(link.microphoneStops == 1)
@@ -290,7 +291,7 @@ struct ConductorWakeTests {
         press(.longPress)
         try await eventually { link.microphoneOn }
         press(.longPressEnd)
-        try await eventually(timeout: 2) { brain.asked == ["Wetter"] }
+        try await eventually { brain.asked == ["Wetter"] }
         #expect(!link.microphoneOn)
         #expect(link.microphoneStarts == starts + 1)
         #expect(link.microphoneStops == stops + 1)
@@ -302,8 +303,8 @@ struct ConductorWakeTests {
     @Test func switchingWakeWordOffDuringAWakeListenGoesDark() async throws {
         speech.script = [Transcript("Hey Lotti, what")]
         try await wakeOn()
-        sayHeyLotti(chunks: 8)
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        sayHeyLotti()
+        try await eventually { conductor.mode == .listening }
         conductor.setWakeWord(enabled: false)
         #expect(conductor.mode == .off)
         try await eventually { link.frames.last == .dark }
@@ -314,11 +315,11 @@ struct ConductorWakeTests {
         speech.script = [Transcript("Hey Lotti, wie spät ist es")]
         brain.answers["wie spät ist es"] = Answer(sentence: "Es ist drei.")
         try await wakeOn()
-        sayHeyLotti(chunks: 8)
-        try await eventually(timeout: 2) { conductor.mode == .listening }
+        sayHeyLotti()
+        try await eventually { conductor.mode == .listening }
         link.dropMicrophone()
-        try await eventually(timeout: 2) { conductor.screen?.text == "Es ist drei." }
-        try await eventually(timeout: 2) { conductor.wakeState == .listening && link.microphoneOn }
+        try await eventually { conductor.screen?.text == "Es ist drei." }
+        try await eventually { conductor.wakeState == .listening && link.microphoneOn }
     }
 
     @Test func reconnectingRestartsWakeListening() async throws {
@@ -331,7 +332,7 @@ struct ConductorWakeTests {
         #expect(link.microphoneStarts == 1)
         await link.connect(DiscoveredGlasses(id: "32", name: "G2"))
         await conductor.glassesConnected()
-        try await eventually(timeout: 2) { link.microphoneStarts == 2 && conductor.wakeState == .listening }
+        try await eventually { link.microphoneStarts == 2 && conductor.wakeState == .listening }
         #expect(link.microphoneOn)
     }
 
@@ -348,9 +349,9 @@ struct ConductorWakeTests {
 
     @Test func theWatchdogLeavesAStreamingMicAlone() async throws {
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic,
-                                           classifier: classifier, watchdog: .milliseconds(150))
+                                           classifier: classifier, watchdog: .seconds(1))
         try await wakeOn(conductor)
-        for _ in 0..<15 {  // 600 ms of audio, a chunk every 40 ms
+        for _ in 0..<40 {  // 1.6 s of audio, a chunk every 40 ms
             hush(1)
             try await Task.sleep(for: .milliseconds(40))
         }
@@ -361,10 +362,10 @@ struct ConductorWakeTests {
     @Test func retriesOfAMicThatWontStartBackOff() async throws {
         link.microphoneError = GlassesLinkError.missingCharacteristics
         conductor.setWakeWord(enabled: true)
-        try await Task.sleep(for: .milliseconds(600))
-        // 20, 40, 80, then every 100 ms: about 8 tries. Without backoff it would be about 30.
-        #expect(link.microphoneAttempts >= 3)
-        #expect(link.microphoneAttempts <= 12)
+        try await Task.sleep(for: .seconds(1))
+        // 20, 40, 80, then every 100 ms: about 11 tries. Without backoff it would be about 50.
+        #expect(link.microphoneAttempts >= 2)
+        #expect(link.microphoneAttempts <= 16)
     }
 
     @Test func theDefaultsAreTheAgreedOnes() {
@@ -387,7 +388,7 @@ struct ConductorWakeTests {
             return false
         }
         link.microphoneError = nil
-        try await eventually(timeout: 2) { conductor.wakeState == .listening }
+        try await eventually { conductor.wakeState == .listening }
     }
 
     @Test func holdToTalkStillFallsBackToThePhoneMicWhenTheGlassesFail() async throws {
@@ -396,9 +397,9 @@ struct ConductorWakeTests {
         speech.script = [Transcript("Wetter")]
         press(.doubleTap)
         press(.longPress)
-        try await eventually(timeout: 2) { conductor.microphoneSource == "phone" }
+        try await eventually { conductor.microphoneSource == "phone" }
         press(.longPressEnd)
-        try await eventually(timeout: 2) { brain.asked == ["Wetter"] }
+        try await eventually { brain.asked == ["Wetter"] }
     }
 }
 

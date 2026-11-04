@@ -21,6 +21,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AA0000000000000000000081 /* Lotti.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Lotti.xcconfig; sourceTree = "<group>"; };
 		AA0000000000000000000006 /* Lotti.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Lotti.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000007 /* LottiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LottiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -57,9 +58,18 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		AA0000000000000000000083 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000081 /* Lotti.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		AA0000000000000000000002 = {
 			isa = PBXGroup;
 			children = (
+				AA0000000000000000000083 /* Config */,
 				AA0000000000000000000004 /* Lotti */,
 				AA0000000000000000000005 /* LottiTests */,
 				AA0000000000000000000003 /* Products */,
@@ -209,6 +219,7 @@
 /* Begin XCBuildConfiguration section */
 		AA0000000000000000000051 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA0000000000000000000081 /* Lotti.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -236,6 +247,7 @@
 		};
 		AA0000000000000000000052 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA0000000000000000000081 /* Lotti.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -257,15 +269,16 @@
 		AA0000000000000000000061 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Lotti.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(LOTTI_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Lotti;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = "$(LOTTI_INFOPLIST)";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lotti connects to your smart glasses over Bluetooth.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Lotti scans the QR code of your Lotti Brain to pair with it.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, and to tell Hermes where you are when you allow it.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, navigation, and when you ask where you are or what is nearby.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens for \"Hey Lotti\" and while you hold to talk.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -278,6 +291,7 @@
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = de.janjaap.lotti;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(LOTTI_SWIFT_CONDITION)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -286,15 +300,16 @@
 		AA0000000000000000000062 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Lotti.entitlements;
+				CODE_SIGN_ENTITLEMENTS = "$(LOTTI_ENTITLEMENTS)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Lotti;
-				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_FILE = "$(LOTTI_INFOPLIST)";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Lotti connects to your smart glasses over Bluetooth.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Lotti scans the QR code of your Lotti Brain to pair with it.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, and to tell Hermes where you are when you allow it.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, navigation, and when you ask where you are or what is nearby.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens for \"Hey Lotti\" and while you hold to talk.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -307,6 +322,7 @@
 				MARKETING_VERSION = 0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = de.janjaap.lotti;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(LOTTI_SWIFT_CONDITION)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = 1;
 			};
@@ -320,6 +336,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = de.janjaap.lotti.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(LOTTI_SWIFT_CONDITION)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lotti.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lotti";
@@ -334,6 +351,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = de.janjaap.lotti.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) $(LOTTI_SWIFT_CONDITION)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				TARGETED_DEVICE_FAMILY = 1;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Lotti.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Lotti";

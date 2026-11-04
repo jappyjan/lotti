@@ -6,7 +6,7 @@ import Foundation
 /// keeps making progress isn't cut off.
 /// Main-actor only, so the work can use main-actor state such as the model session.
 @MainActor
-func withTimeout<T: Sendable>(
+public func withTimeout<T: Sendable>(
     _ duration: Duration,
     activity: (@MainActor @Sendable () -> ContinuousClock.Instant)? = nil,
     _ work: @escaping @MainActor () async -> T

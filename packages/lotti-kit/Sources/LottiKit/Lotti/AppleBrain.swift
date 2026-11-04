@@ -1,9 +1,11 @@
-#if canImport(FoundationModels)
+#if canImport(FoundationModels) && !LOTTI_SKIP_FOUNDATION_MODELS
 import Foundation
 import FoundationModels
 import Observation
 
-/// Lotti's chat on Apple's on-device model (decision D11), as a pipeline of small steps
+/// Lotti's offline chat on Apple's on-device model (decision D11): timers, navigation, reminders
+/// and the local day only; the backend answers everything else, and offline that gets a short
+/// "I'm offline" sentence. A pipeline of small steps
 /// (see `LocalPipeline`): choose tools from a list, fill in each tool's arguments, run the reads,
 /// shorten long results, then write the answer from the facts. Every step is a fresh model
 /// session with a small prompt, so the 4K context never fills up; the conversation is carried
@@ -53,24 +55,36 @@ public final class AppleBrain: Brain {
         let started = Date()
         note("Jan: \(message)")
 
-        // 1. Choose tools: rules first, the model only when no rule matches.
+        // 1. Choose tools: rules first, the model only when no rule matches. Only the offline
+        // tools count; anything else is the backend's and gets the offline sentence.
         let language = LocalPipeline.language(of: message)
+        let names = Set(toolbox.specs.map(\.name))
         let choice: LocalPipeline.Choice
-        if let tools = LocalPipeline.ruleTools(message, tools: toolbox.specs) {
+        switch LocalPipeline.offlinePlan(message, names: names) {
+        case .tools(let tools)?:
             note("rules: \(tools.joined(separator: ", "))")
             choice = LocalPipeline.Choice(tools: tools)
-        } else {
+        case .unsupported?:
+            note("rules: not an offline task")
+            return offline(message, language: language, started: started)
+        case nil:
             choice = try await choose(message, now: context)
         }
-        if choice.tools.contains("hermes") {
-            note("→ Hermes")
-            return Answer(sentence: LocalPipeline.handoffSentence(language: language), handoff: message)
+        if choice.tools.isEmpty {
+            note("→ offline sentence")
+            return offline(message, language: language, started: started)
         }
 
-        // 2. Fill in each chosen tool's arguments.
+        // 2. Fill in each chosen tool's arguments. A timer and a destination are parsed from the
+        // words first (instant and exact); the model only fills in what the parser can't.
         var calls: [ToolCall] = []
         for name in choice.tools {
             guard let spec = toolbox.tool(named: name)?.spec else { continue }
+            if let parsed = OfflineIntents.arguments(for: name, message: message) {
+                note("\(name) arguments parsed: \(JSONValue.object(parsed).json)")
+                calls.append(ToolCall(id: name, tool: name, arguments: parsed))
+                continue
+            }
             let arguments = spec.parameters.isEmpty ? [:] : try await fillIn(spec, message: message, now: context)
             calls.append(ToolCall(id: name, tool: name, arguments: arguments))
         }
@@ -108,6 +122,12 @@ public final class AppleBrain: Brain {
         let answer = try await compose(message, now: context, language: language, facts: facts)
         remember(message, answer.sentence, facts: facts, started: started)
         return answer
+    }
+
+    private func offline(_ message: String, language: String, started: Date) -> Answer {
+        let sentence = LocalPipeline.offlineSentence(language: language)
+        remember(message, sentence, facts: [], started: started)
+        return Answer(sentence: sentence)
     }
 
     private func remember(_ message: String, _ sentence: String, facts: [LocalPipeline.Fact], started: Date) {
@@ -169,9 +189,9 @@ public final class AppleBrain: Brain {
             return try await composeFallback(prompt, language: language, facts: facts)
         }
         if !output.canAnswer || LocalPipeline.soundsUnsure(output.sentence) {
-            // The facts don't hold the answer: Hermes may know. The conductor says so if Hermes isn't set up.
-            note("can't answer (\(output.sentence)) → Hermes")
-            return Answer(sentence: LocalPipeline.handoffSentence(language: language), handoff: message)
+            // The facts don't hold the answer: that is for the backend, which isn't reachable.
+            note("can't answer (\(output.sentence)) → offline sentence")
+            return Answer(sentence: LocalPipeline.offlineSentence(language: language))
         }
         let followUps = output.followUps.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return Answer(sentence: output.sentence.trimmingCharacters(in: .whitespacesAndNewlines), followUps: followUps)

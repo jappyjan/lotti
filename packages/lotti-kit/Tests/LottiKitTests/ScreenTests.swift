@@ -59,6 +59,17 @@ struct ScreenRendererTests {
         #expect(!lines.contains("dropped"))
     }
 
+    @Test func anOpenedItemKeepsItsHeaderUnderALongBody() {
+        let body = Array(repeating: "word", count: 40).joined(separator: " ")
+        let rail = Rail([RailItem("Dismiss", .dismiss)])
+        for renderer in [renderer, ScreenRenderer(style: .choicesBelow)] {
+            let lines = renderer.render(Screen(.original, body, details: ["Mail · Mara"], rail: rail)).main.components(separatedBy: "\n")
+            #expect(lines.last == "Mail · Mara")
+            #expect(lines[lines.count - 2] == "")
+            #expect(lines.count == (renderer.style == .choicesBelow ? ScreenRenderer.choicesBelowMainLines : 5))
+        }
+    }
+
     @Test func wideRailGivesTheChoicesMoreRoom() {
         let renderer = ScreenRenderer(style: .wideRail)
         // 17 characters: would be clipped in the 13-column rail (11 usable), fits in the wide one.

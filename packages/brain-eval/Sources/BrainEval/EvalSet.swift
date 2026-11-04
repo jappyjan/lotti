@@ -1,7 +1,7 @@
 import Foundation
 
 /// The eval set: real-looking notifications and requests plus loose expectations.
-/// Stored as JSON (`Fixtures/s3-eval.json`) so other tools (the web simulator, Hermes) can reuse it.
+/// Stored as JSON (`Fixtures/s3-eval.json`) so other tools (the web simulator, the backend) can reuse it.
 public struct EvalSet: Codable, Sendable {
     public var version: Int
     public var about: String?

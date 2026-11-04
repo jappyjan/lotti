@@ -15,6 +15,7 @@ struct ConductorTests {
         conductor = Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date(), events: [], weather: Weather(temperature: 12, condition: "cloudy"))),
+            inboxSummary: InboxSummary(german: false),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
                           finalTranscript: .milliseconds(200)))
     }
@@ -109,226 +110,128 @@ struct ConductorTests {
         #expect(conductor.mode == .off)
     }
 
-    // MARK: Tools and Hermes
+    // MARK: Backend and offline
 
-    func conductorWithHermes(_ hermes: FakeHermes, tools: [any PhoneTool] = []) -> Conductor {
+    func conductorWithRemote(_ remote: FakeRemote, tools: [any PhoneTool] = []) -> Conductor {
         Conductor(
-            link: link, brain: brain, hermes: hermes, toolbox: Toolbox(tools), speech: speech, phoneMicrophone: phoneMic,
-            today: FixedToday(info: TodayInfo(now: Date())),
+            link: link, brain: brain, remote: remote, toolbox: Toolbox(tools), speech: speech, phoneMicrophone: phoneMic,
+            today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: false),
             timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
                           finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
     }
 
-    @Test func openQuestionsGoToHermesAndSoDoTheirFollowUps() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.answers = ["Tell me about the election": Answer(sentence: "Mostly about taxes.", followUps: ["Polls?"])]
+    @Test func questionsGoToTheBackendAndSoDoTheirFollowUps() async throws {
+        let remote = FakeRemote()
+        let conductor = conductorWithRemote(remote)
+        remote.answers = ["Tell me about the election": Answer(sentence: "Mostly about taxes.", followUps: ["Polls?"])]
         conductor.ask("Tell me about the election")
         try await eventually { conductor.screen?.text == "Mostly about taxes." }
-        #expect(hermes.contexts.first?.hasPrefix("Now: ") == true)
-        #expect(hermes.contexts.first?.contains("Calendar") == false)  // Hermes asks for what it needs
+        #expect(remote.contexts.first?.hasPrefix("Now: ") == true)
+        #expect(remote.contexts.first?.contains("Calendar") == false)  // the backend asks for what it needs
 
-        hermes.answers["Polls?"] = Answer(sentence: "Close race.")
+        remote.answers["Polls?"] = Answer(sentence: "Close race.")
         conductor.handle(InputEvent(.tap, from: .ring))
         try await eventually { conductor.screen?.text == "Close race." }
         #expect(brain.asked.isEmpty)
-        #expect(hermes.asked == ["Tell me about the election", "Polls?"])
+        #expect(remote.asked == ["Tell me about the election", "Polls?"])
 
         conductor.handle(InputEvent(.doubleTap, from: .ring))
-        #expect(brain.ended == 1)  // the on-device conversation ends
+        #expect(brain.ended == 1)  // the offline conversation ends; the backend's goes on
     }
 
-    @Test func glassesOffEndsOnlyTheOnDeviceBrainAndKeepsTheHermesSession() async throws {
-        let transport = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#, #"{"type":"answer","sentence":"Two."}"#])
-        let store = FakeHermesSessionStore()
-        let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true },
-                                 store: store)
-        let conductor = Conductor(
-            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
-            today: FixedToday(info: TodayInfo(now: Date())),
-            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
-        conductor.ask("Tell me about the election", onHermes: true)
-        try await eventually { conductor.screen?.text == "One." }
-        let session = try #require(hermes.sessionID)
-        conductor.handle(InputEvent(.doubleTap, from: .ring))
-        #expect(conductor.mode == .off)
-        #expect(brain.ended == 1)
-        #expect(hermes.sessionID == session)
-
-        conductor.ask("And the polls?", onHermes: true)
-        try await eventually { conductor.screen?.text == "Two." }
-        #expect(transport.sessions == [session, session])
-    }
-
-    @Test func theOnDeviceGapEndsOnlyTheOnDeviceConversation() async throws {
-        let transport = ScriptedHermes([#"{"type":"answer","sentence":"One."}"#, #"{"type":"answer","sentence":"Two."}"#])
-        let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true })
-        let clock = ManualClock(Date(timeIntervalSince1970: 0))
-        let conductor = Conductor(
-            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
-            today: FixedToday(info: TodayInfo(now: Date())),
-            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200), remote: .milliseconds(400)),
-            now: { clock.now })
-        conductor.ask("Tell me about the election", onHermes: true)
-        try await eventually { conductor.screen?.text == "One." }
-        clock.now = Date(timeIntervalSince1970: 301)  // past timing.conversation (300 s)
-        conductor.ask("And the polls?", onHermes: true)
-        try await eventually { conductor.screen?.text == "Two." }
-        #expect(brain.ended == 1)
-        #expect(transport.sessions.count == 2 && Set(transport.sessions).count == 1)  // Hermes continues
-    }
-
-    @Test func doubleTapWhileHermesThinksDropsTheQuestion() async throws {
-        let transport = ScriptedHermes([#"{"type":"answer","sentence":"Too late."}"#])
-        transport.delay = .milliseconds(150)
-        let store = FakeHermesSessionStore()
-        let hermes = HermesBrain(transport: transport, toolbox: Toolbox(), allowedReads: { [] }, isConfigured: { true },
-                                 store: store)
-        let conductor = Conductor(
-            link: link, brain: brain, hermes: hermes, speech: speech, phoneMicrophone: phoneMic,
-            today: FixedToday(info: TodayInfo(now: Date())),
-            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
-        conductor.ask("Tell me about the election", onHermes: true)
-        try await eventually { conductor.mode == .working && !transport.requests.isEmpty }
-        let session = try #require(hermes.sessionID)
-        conductor.handle(InputEvent(.doubleTap, from: .ring))
-        try await Task.sleep(for: .milliseconds(300))  // the answer would have arrived by now
-        #expect(conductor.mode == .off)
-        #expect(transport.replies.count == 1)  // the request was cancelled, not answered
-        #expect(hermes.sessionID == session && store.stored == session)  // the session stays
-    }
-
-    @Test func simpleTasksGoToHermesToo() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.answers = ["Brauche ich einen Schirm?": Answer(sentence: "Ja, ab 15 Uhr regnet es.")]
+    @Test func simpleTasksGoToTheBackendToo() async throws {
+        let remote = FakeRemote()
+        let conductor = conductorWithRemote(remote)
+        remote.answers = ["Brauche ich einen Schirm?": Answer(sentence: "Ja, ab 15 Uhr regnet es.")]
         conductor.ask("Brauche ich einen Schirm?")
         try await eventually { conductor.screen?.text == "Ja, ab 15 Uhr regnet es." }
-        #expect(hermes.asked == ["Brauche ich einen Schirm?"])
         #expect(brain.asked.isEmpty)
     }
 
-    @Test func whenHermesFailsItSaysSoWithTryAgain() async throws {
-        let hermes = FakeHermes()
-        hermes.error = HermesError.http(502, "bad gateway")
-        let conductor = conductorWithHermes(hermes)
+    @Test func whenTheBackendIsUnreachableTheOfflineBrainAnswers() async throws {
+        let remote = FakeRemote()
+        remote.isReachable = false
+        let conductor = conductorWithRemote(remote)
+        brain.answers = ["Timer 5 Minuten": Answer(sentence: "Bereit: Timer 5 min. Tipp zum Starten.")]
+        conductor.ask("Timer 5 Minuten")
+        try await eventually { conductor.screen?.text == "Bereit: Timer 5 min. Tipp zum Starten." }
+        #expect(remote.asked.isEmpty)
+    }
+
+    @Test func whenTheSocketDropsMidQuestionTheOfflineBrainTakesOver() async throws {
+        let remote = FakeRemote()
+        remote.error = BackendError.unreachable
+        let conductor = conductorWithRemote(remote)
+        brain.answers = ["Hi": Answer(sentence: "Offline hi.")]
+        conductor.ask("Hi")
+        try await eventually { conductor.screen?.text == "Offline hi." }
+        #expect(remote.asked == ["Hi"])
+    }
+
+    @Test func whenTheBackendFailsItSaysSoWithTryAgain() async throws {
+        let remote = FakeRemote()
+        remote.error = BackendError.server("The provider is down.")
+        let conductor = conductorWithRemote(remote)
         conductor.ask("Tell me a joke")
-        try await eventually { conductor.screen?.text.contains("Hermes error 502") == true }
-        #expect(conductor.screen?.rail?.current?.action == .askHermes("Tell me a joke"))
-        #expect(brain.asked.isEmpty)
+        try await eventually { conductor.screen?.text == "The provider is down." }
+        #expect(conductor.screen?.rail?.current?.action == .ask("Tell me a joke"))
     }
 
-    @Test func whenHermesGoesQuietItSaysSo() async throws {
-        let hermes = FakeHermes()
-        hermes.delay = .seconds(5)
-        let conductor = conductorWithHermes(hermes)
+    @Test func whenTheBackendGoesQuietItSaysSo() async throws {
+        let remote = FakeRemote()
+        remote.delay = .seconds(5)
+        let conductor = conductorWithRemote(remote)
         conductor.ask("Tell me a joke")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
-        #expect(conductor.screen?.rail?.current?.action == .askHermes("Tell me a joke"))
-        #expect(brain.asked.isEmpty)
+        try await eventually(timeout: 2) { conductor.screen?.text == "Lotti Brain is taking too long." }
+        #expect(conductor.screen?.rail?.current?.action == .ask("Tell me a joke"))
     }
 
-    @Test func whenHermesKeepsWorkingThePhoneWaits() async throws {
-        let hermes = FakeHermes()
-        hermes.delay = .milliseconds(500)
-        hermes.progressEvery = .milliseconds(50)
-        hermes.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
-        let conductor = conductorWithHermes(hermes)
+    @Test func whenTheBackendKeepsWorkingThePhoneWaits() async throws {
+        let remote = FakeRemote()
+        remote.delay = .milliseconds(500)
+        remote.progressEvery = .milliseconds(50)
+        remote.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
+        let conductor = conductorWithRemote(remote)
         conductor.ask("Tell me a joke")
         try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
-        #expect(brain.asked.isEmpty)  // the phone never had to stand in
     }
 
-    @Test func hermesTrafficAloneKeepsThePhoneWaiting() async throws {
-        // Answer tokens and keepalives are activity, not status lines: they must restart the
-        // quiet clock just the same, or a long streaming answer gets cancelled.
-        let hermes = FakeHermes()
-        hermes.delay = .milliseconds(500)
-        hermes.activityEvery = .milliseconds(50)
-        hermes.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
-        let conductor = conductorWithHermes(hermes)
+    @Test func backendTrafficAloneKeepsThePhoneWaiting() async throws {
+        let remote = FakeRemote()
+        remote.delay = .milliseconds(500)
+        remote.activityEvery = .milliseconds(50)
+        remote.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
+        let conductor = conductorWithRemote(remote)
         conductor.ask("Tell me a joke")
         try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
-        #expect(brain.asked.isEmpty)
     }
 
-    @Test func askingForHermesHasNoFallback() async throws {
-        let hermes = FakeHermes()
-        hermes.error = HermesError.http(401, "")
-        let conductor = conductorWithHermes(hermes)
-        conductor.ask("Hermes, plan my week")
-        try await eventually { conductor.screen?.text == "Hermes didn't accept the key." }
-        #expect(brain.asked.isEmpty)
+    @Test func showsWhatTheBackendIsDoing() async throws {
+        let remote = FakeRemote()
+        remote.statuses = ["Suche Mails"]
+        remote.delay = .milliseconds(200)
+        let conductor = conductorWithRemote(remote)
+        conductor.ask("Plan my week")
+        try await eventually { conductor.screen?.text == "Suche Mails…" }
     }
 
-    @Test func withoutHermesThePhoneAnswersEverything() async throws {
-        let hermes = FakeHermes()
-        hermes.isConfigured = false
-        let conductor = conductorWithHermes(hermes)
-        brain.answers = ["Tell me a joke": Answer(sentence: "Okay.")]
-        conductor.ask("Tell me a joke")
-        try await eventually { conductor.screen?.text == "Okay." }
-        #expect(hermes.asked.isEmpty)
-    }
-
-    @Test func sayingHermesSkipsTheOnDeviceBrain() async throws {
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes)
-        hermes.answers = ["flights to Lisbon?": Answer(sentence: "From 89 € on Friday.")]
-        conductor.ask("Hermes, flights to Lisbon?")
-        try await eventually { conductor.screen?.text == "From 89 € on Friday." }
-        #expect(brain.asked.isEmpty)
-    }
-
-    @Test func showsWhatHermesIsDoing() async throws {
-        let hermes = FakeHermes()
-        hermes.statuses = ["Checking your calendar"]
-        hermes.delay = .milliseconds(200)
-        let conductor = conductorWithHermes(hermes)
-        conductor.ask("Hermes, plan my week")
-        try await eventually { conductor.screen?.text == "Checking your calendar…" }
-        #expect(conductor.mode == .working)
-    }
-
-    @Test func aSlowHermesTimesOutWithTryAgain() async throws {
-        let hermes = FakeHermes()
-        hermes.delay = .seconds(5)
-        let conductor = conductorWithHermes(hermes)
-        conductor.ask("Hermes, plan my week")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Hermes is taking too long." }
-        #expect(conductor.screen?.rail?.current?.action == .askHermes("plan my week"))
-    }
-
-    @Test func anExplicitAskWithProgressKeepsWorking() async throws {
-        let hermes = FakeHermes()
-        hermes.delay = .milliseconds(500)
-        hermes.progressEvery = .milliseconds(50)
-        hermes.answers = ["plan my week": Answer(sentence: "Monday is wide open.")]
-        let conductor = conductorWithHermes(hermes)
-        conductor.ask("Hermes, plan my week")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Monday is wide open." }
-        #expect(brain.asked.isEmpty)
-    }
-
-    @Test func withoutHermesTheHandoffSaysSo() async throws {
-        let hermes = FakeHermes()
-        hermes.isConfigured = false
-        let conductor = conductorWithHermes(hermes)
-        brain.answers = ["News?": Answer(sentence: "Let me ask Hermes.", handoff: "News?")]
-        conductor.ask("News?")
-        try await eventually { conductor.screen?.text.contains("Hermes isn't set up yet") == true }
-        #expect(hermes.asked.isEmpty)
+    @Test func doubleTapWhileTheBackendThinksDropsTheQuestion() async throws {
+        let remote = FakeRemote()
+        remote.delay = .seconds(5)
+        let conductor = conductorWithRemote(remote)
+        conductor.ask("Plan my week")
+        try await eventually { remote.asked.count == 1 }
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(conductor.mode == .off)
+        try await eventually { remote.cancelled == 1 }
     }
 
     @Test func anActionRunsOnlyWhenTapped() async throws {
         let timer = FakeTool.timer()
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes, tools: [timer])
+        let remote = FakeRemote()
+        let conductor = conductorWithRemote(remote, tools: [timer])
         let action = try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a", tool: "set_timer", arguments: ["minutes": 10])))
-        hermes.answers = ["Pasta timer": Answer(sentence: "Ten minutes for the pasta?", actions: [action])]
+        remote.answers = ["Pasta timer": Answer(sentence: "Ten minutes for the pasta?", actions: [action])]
         conductor.ask("Pasta timer")
         try await eventually { conductor.screen?.text == "Ten minutes for the pasta?" }
         #expect(conductor.screen?.rail?.current?.title == "Timer 10 min")
@@ -343,14 +246,26 @@ struct ConductorTests {
     @Test func aFailedActionSaysWhy() async throws {
         let timer = FakeTool.timer()
         timer.error = ToolError("Alarms are off for Lotti.")
-        let hermes = FakeHermes()
-        let conductor = conductorWithHermes(hermes, tools: [timer])
+        let remote = FakeRemote()
+        let conductor = conductorWithRemote(remote, tools: [timer])
         let action = try #require(Toolbox([timer]).proposal(for: ToolCall(id: "a", tool: "set_timer", arguments: ["minutes": 1])))
-        hermes.answers = ["Timer": Answer(sentence: "One minute?", actions: [action])]
+        remote.answers = ["Timer": Answer(sentence: "One minute?", actions: [action])]
         conductor.ask("Timer")
         try await eventually { conductor.screen?.text == "One minute?" }
         conductor.handle(InputEvent(.tap, from: .ring))
         try await eventually { conductor.screen?.text == "That didn't work: Alarms are off for Lotti." }
+    }
+
+    @Test func anImmediateActionOffersUndoAsTheLastChoice() async throws {
+        let remote = FakeRemote()
+        let conductor = conductorWithRemote(remote)
+        remote.answers = ["Milch auf die Liste": Answer(sentence: "Milch ist auf der Liste.", followUps: ["Noch was?"],
+                                                        undo: UndoAction(id: "u1", label: "Remove Milch again"))]
+        conductor.ask("Milch auf die Liste")
+        try await eventually { conductor.screen?.text == "Milch ist auf der Liste." }
+        // The choice says Undo, not the backend's label for the inverse action.
+        #expect(conductor.screen?.rail?.items.map(\.title) == ["Noch was?", "Undo"])
+        #expect(conductor.screen?.rail?.items.last?.action == .undo(UndoAction(id: "u1", label: "Remove Milch again")))
     }
 
     // MARK: Voice
@@ -435,21 +350,22 @@ final class FakeBrain: Brain {
 }
 
 @MainActor
-final class FakeHermes: RemoteBrain {
-    var isConfigured = true
+final class FakeRemote: RemoteBrain {
+    var isReachable = true
     var answers: [String: Answer] = [:]
     var statuses: [String] = []
     var delay: Duration?
-    /// Emits one status line and one activity pulse this often while waiting, like Hermes's
-    /// progress events and stream traffic.
+    /// Emits one status line and one activity pulse this often while waiting, like the backend's
+    /// status messages and tool calls.
     var progressEvery: Duration?
-    /// Pulses activity alone this often while waiting, like answer tokens and keepalives
-    /// (nothing to show on the glasses, but Hermes is clearly alive).
+    /// Pulses activity alone this often while waiting (nothing to show on the glasses, but the
+    /// backend is clearly alive).
     var activityEvery: Duration?
     var error: Error?
     private(set) var asked: [String] = []
     private(set) var contexts: [String] = []
     private(set) var activities = 0
+    private(set) var cancelled = 0
 
     func answer(
         _ message: String, context: String,
@@ -458,24 +374,29 @@ final class FakeHermes: RemoteBrain {
     ) async throws -> Answer {
         asked.append(message)
         contexts.append(context)
-        for line in statuses { status(line); activity() }
-        if let progressEvery, let delay {
-            let end = ContinuousClock.now.advanced(by: delay)
-            while ContinuousClock.now < end {
-                try await Task.sleep(for: progressEvery)
-                status("Working…")
-                activities += 1
-                activity()
+        do {
+            for line in statuses { status(line); activity() }
+            if let progressEvery, let delay {
+                let end = ContinuousClock.now.advanced(by: delay)
+                while ContinuousClock.now < end {
+                    try await Task.sleep(for: progressEvery)
+                    status("Working…")
+                    activities += 1
+                    activity()
+                }
+            } else if let activityEvery, let delay {
+                let end = ContinuousClock.now.advanced(by: delay)
+                while ContinuousClock.now < end {
+                    try await Task.sleep(for: activityEvery)
+                    activities += 1
+                    activity()
+                }
+            } else if let delay {
+                try await Task.sleep(for: delay)
             }
-        } else if let activityEvery, let delay {
-            let end = ContinuousClock.now.advanced(by: delay)
-            while ContinuousClock.now < end {
-                try await Task.sleep(for: activityEvery)
-                activities += 1
-                activity()
-            }
-        } else if let delay {
-            try await Task.sleep(for: delay)
+        } catch {
+            cancelled += 1
+            throw error
         }
         if let error { throw error }
         activities += 1
@@ -527,9 +448,10 @@ struct FixedToday: TodayProvider {
 
 struct TimedOut: Error {}
 
-/// Polls `condition` until it holds, failing after `timeout` seconds.
+/// Polls `condition` until it holds, failing after `timeout` seconds. Generous: it returns as soon
+/// as the condition holds, and a loaded CI runner can stall every test for a second.
 @MainActor
-func eventually(timeout: Double = 1, _ condition: () -> Bool) async throws {
+func eventually(timeout: Double = 5, _ condition: () -> Bool) async throws {
     let deadline = Date().addingTimeInterval(timeout)
     while !condition() {
         if Date() > deadline { Issue.record("condition not met in \(timeout) s"); throw TimedOut() }

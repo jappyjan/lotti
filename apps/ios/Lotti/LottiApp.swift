@@ -3,21 +3,35 @@ import LottiKit
 import SwiftUI
 import UIKit
 
+/// What the settings screens need besides the models.
+@Observable
+final class AppServices {
+    let speech: AppleSpeechRecognizer
+    let brain: AppleBrain
+    let navigation: NavigationController
+
+    init(speech: AppleSpeechRecognizer, brain: AppleBrain, navigation: NavigationController) {
+        self.speech = speech
+        self.brain = brain
+        self.navigation = navigation
+    }
+}
+
 @main
 struct LottiApp: App {
     @State private var model: AppModel
-    private let speech: AppleSpeechRecognizer
-    private let brain: AppleBrain
-    private let hermes: HermesBrain
-    private let hermesClient: HermesClient
-    private let toolbox: Toolbox
-    private let navigation: NavigationController
+    @State private var chat: ChatModel
+    private let services: AppServices
+    #if LOTTI_APNS
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var pushDelegate
+    #endif
 
     init() {
         LogFile.start()
-        // Earlier builds kept the chat on the phone and had a reset setting; Hermes keeps it now.
-        UserDefaults.standard.removeObject(forKey: "hermesConversation")
-        UserDefaults.standard.removeObject(forKey: "hermesConversationMinutes")
+        // Earlier builds talked to Hermes; the app is Lotti Brain only now.
+        for key in ["hermesConversation", "hermesConversationMinutes", "hermesSession", "hermesAddress", "hermesHiddenReads"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         let link = G2Link()
         if ProcessInfo.processInfo.arguments.contains("--imu-log") { link.imuLogInterval = 0.25 }
         link.headUpSettings = Settings.headUp
@@ -29,23 +43,30 @@ struct LottiApp: App {
             return try await navigation.start(destination: destination, mode: mode)
         })
         let toolbox = Toolbox(tools)
-        let brain = AppleBrain(tools: Toolbox(tools.filter { PhoneTools.onDevice.contains($0.spec.name) }))
-        let hermesClient = HermesClient { Settings.hermesConfig }
-        let hermes = HermesBrain(
-            transport: hermesClient, toolbox: toolbox,
-            allowedReads: { Set(toolbox.reads.map(\.name)).subtracting(Settings.hermesHiddenReads) },
-            isConfigured: { Settings.hermesConfig != nil },
-            store: UserDefaultsHermesSessionStore())
-        let conductor = Conductor(link: link, brain: brain, hermes: hermes, toolbox: toolbox, speech: speech,
-                                  phoneMicrophone: PhoneMicrophone(), today: today, wakeDetector: Self.wakeDetector())
+        // Offline: only timers, navigation, reminders and the local day (Apple's model when the phone has it).
+        let offlineTools = Toolbox(tools.filter { PhoneTools.onDevice.contains($0.spec.name) })
+        let apple = AppleBrain(tools: offlineTools)
+        let offline = OfflineChoice(primary: apple, primaryAvailable: { [apple] in apple.unavailableReason == nil },
+                                    fallback: OfflineBrain(tools: offlineTools))
+        // Lotti Brain: the backend calls `location` and `reminders` on this phone.
+        let backend = BackendClient(toolbox: toolbox)
+        backend.allowedTools = ["location", "reminders"]
+        let microphone = PhoneMicrophone()
+        let conductor = Conductor(link: link, brain: offline, remote: BackendBrain(client: backend, channel: .glasses), backend: backend,
+                                  toolbox: toolbox, speech: speech, phoneMicrophone: microphone, today: today,
+                                  wakeDetector: Self.wakeDetector())
         conductor.setDisplayStyle(Settings.displayStyle)
-        self.speech = speech
-        self.brain = brain
-        self.hermes = hermes
-        self.hermesClient = hermesClient
-        self.toolbox = toolbox
-        self.navigation = navigation
-        _model = State(initialValue: AppModel(link: link, conductor: conductor))
+        let model = AppModel(link: link, conductor: conductor, backend: backend, deviceName: UIDevice.current.name,
+                             appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1")
+        let chat = ChatModel(backend: backend, offline: offline, toolbox: toolbox, speech: speech, microphone: microphone)
+        chat.loadTurns = { [weak model] id in
+            guard let model else { return [] }
+            return try await model.call("conversations.get", ["id": .string(id)])["turns"]?.array?.compactMap(TurnInfo.init) ?? []
+        }
+        PushRegistration.onToken = { [weak model] token in model?.setAPNsToken(token) }
+        services = AppServices(speech: speech, brain: apple, navigation: navigation)
+        _model = State(initialValue: model)
+        _chat = State(initialValue: chat)
     }
 
     /// The "Hey Lotti" classifier from the bundled model, or nil if it isn't there.
@@ -60,13 +81,19 @@ struct LottiApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model, speech: speech, brain: brain, hermes: hermes, hermesClient: hermesClient,
-                        toolbox: toolbox, navigation: navigation)
+            ContentView(model: model, chat: chat, services: services)
                 .task { await PhoneTools.requestAccess() }
                 .task {
                     await model.conductor.setHeadTracking(Settings.headUpEnabled)
                     await model.launch()
                 }
+                .task {
+                    model.startBackend()
+                    model.didBecomeActive()
+                    await model.observeBackend()
+                }
+                .task { await chat.run() }
+                .task { await PushRegistration.register() }
                 .task { await model.keepConnected() }
                 .task { model.conductor.setWakeWord(enabled: Settings.wakeWordEnabled) }
                 .task { await model.conductor.run() }

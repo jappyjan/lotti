@@ -1,0 +1,51 @@
+# Lotti Brain on Coolify, reachable only over Tailscale HTTPS (no published port, no public domain).
+# Coolify: Application (private GitHub repo) -> build pack "Docker Compose", base directory "/apps/brain",
+# compose file "/docker-compose.coolify.yml" (so ../.. is the repo root). Secret env vars to set in Coolify:
+#   MASTER_KEY   (openssl rand -hex 32; keep it: it decrypts the stored secrets)
+#   TS_AUTHKEY   (Tailscale auth key, reusable or one-off; the tailnet may need to approve the device)
+# Pairing code/QR: Coolify logs of `brain` on first start.
+services:
+  brain:
+    build:
+      context: ../..
+      dockerfile: apps/brain/Dockerfile
+    restart: unless-stopped
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
+      PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - lotti-data:/data
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    hostname: lotti-brain
+    depends_on:
+      - brain
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY}
+      TS_HOSTNAME: lotti-brain
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: 'true'
+      TS_AUTH_ONCE: 'true'
+      TS_SERVE_CONFIG: /tmp/serve.json
+    # HTTPS 443 -> brain:8787 (WebSockets included); the cert name comes from the tailnet.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        cat > /tmp/serve.json <<'JSON'
+        {"TCP":{"443":{"HTTPS":true}},"Web":{"$${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://brain:8787"}}}}}
+        JSON
+        exec /usr/local/bin/containerboot
+    volumes:
+      - lotti-tailscale-state:/var/lib/tailscale
+    healthcheck:
+      test: ['CMD-SHELL', 'tailscale status --peers=false >/dev/null 2>&1 || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+volumes:
+  lotti-data:
+  lotti-tailscale-state:

@@ -4,7 +4,8 @@
 
 - A spike happens only when a feature can't be built without the answer, and it stays a quick yes/no check. No exhaustive measuring up front.
 - Hand-written code before frameworks: no shared schema, simulator or generic renderer until the hand-coded version hurts.
-- Out of scope always: setting up, configuring or adding tools to Hermes. Lotti only connects to an existing Hermes.
+- Hermes is gone: Lotti has its own backend, Lotti Brain (D13).
+- Product rule: a thing does not exist until the app can configure and manage it.
 
 Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigation`, `messaging`, `voice`, `brain`.
 
@@ -25,9 +26,10 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
   - **`Documents/lotti.log`** on the phone, readable with `devicectl`, for checking runs afterwards.
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 
-- **Wake word "Hey Lotti"** (2026-11-03): say it with the glasses on and the phone in your pocket, no gesture. Energy gate, Create ML sound classifier and Apple speech confirm on the shared glasses mic; ends on 1.5 s of quiet. Setting on the status screen (default on), Debug section with score and recorder. See [architecture.md](architecture.md#wake-word).
+- **Wake word "Hey Lotti"** (2026-11-03): say it with the glasses on and the phone in your pocket, no gesture. Energy gate, Create ML sound classifier and Apple speech confirm on the shared glasses mic; ends on 1.5 s of quiet. Setting in Settings → Glasses → Voice (default on), Debug section with score and recorder. See [architecture.md](architecture.md#wake-word).
   - Checked on the phone and glasses (2026-11-03): 8 of 10 "Hey Lotti, wie wird das Wetter?" woke Lotti and were answered; about 11 minutes of talk nearby gave one classifier hit (0.82) that the speech confirm rejected, so no false wake. The first, synthetic-only model scored real glasses audio near 0; it was retrained with 30 recorded phrases and ~1.5 min of background.
   - Known gaps: few real recordings (more clips from Debug → Record will help); the "phone locked" and background run were seen in the log but not measured over a day; battery is unmeasured (item 8); rejection targets (98%) are just missed on held-out clips (96.9% near misses, 96.8% other speech).
+- **Lotti Brain and the AI-first app** (2026-11-03): own backend (`apps/brain`: agent loop, DeepSeek/OpenAI/Anthropic/Codex/Claude providers, MCP client and admin MCP server, dynamic weather, location as a visible tool, calendar, mail, Bring!, shell, conversations, memory and dreaming, jobs, inbox, catch-up, APNs off by default); chat-first phone app with Settings for everything; wear detection and EvenHub image containers; attention and location indicators; Hermes removed. Needs real-device checks: wear event bytes, image containers, indicator placement, background WebSocket behaviour.
 
 ---
 
@@ -44,7 +46,7 @@ In this order:
 5. **Keeps running** `ios`: stays connected with the phone locked (Bluetooth background mode) and reconnects on its own.
 6. **Basics** `ios`: a status screen on the phone. Nothing more.
 
-Not in the MVP: notifications and messaging, navigation (keep using the Even app for it), wake word, Hermes, memory and learning, the web simulator, the shared UI schema, CI.
+Not in the MVP: notifications and messaging, navigation (keep using the Even app for it), wake word, a backend, memory and learning, the web simulator, the shared UI schema, CI.
 
 _Done when:_ you wear Lotti for a normal day and use the today view and chat from the glasses.
 
@@ -57,18 +59,19 @@ _Done when:_ you wear Lotti for a normal day and use the today view and chat fro
 Rough order, to be re-sorted by what real use shows:
 
 1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the default. Wider rail still switchable in Debug. **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
-2. **Put it on** `ios` `design` `brain`: wear detection. When the glasses are picked up, Lotti greets and says what happened and what's coming, instead of waiting for a look-up. See [design.md](design.md#key-flows).
+2. **Put it on** `ios` `design` `brain`: **built as the catch-up brief** (wear on/off decoded from sid `0x0D` plus away/slept heuristics; not verified on real glasses yet). When Jan comes back after ≥ 2 h or sleep, one short catch-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".
 5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app. **Built: arrow + text** (START, heartbeat, BASIC_INFO cards, rerouting, arrival, walk↔bike switch, exit handling; `NavigationSession` + `StepTracker` in LottiKit, `start_navigation` action in the app) **and map streaming to the Even app's format** (4 bpp BMP road network, LZ4/raw, fragmented `mini_map_msg`/`max_map_msg`; `NavMapBmp` + `NavMapRenderer`). Still open: confirming the maps live on the glasses, drawing the road network (needs a road source — the route alone renders for now), launching from the glasses' menu, the share-sheet entry point.
-6. **Memory** `brain`: who matters, what you ignore, your writing style per person; "why did you show me this?"
+6. **Memory** `brain`: built in Lotti Brain (auto memory, dreaming). Still open: per-person writing style, "why did you show me this?"
 7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
 8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 
 - Full Telegram (TDLib) and Matrix API integrations: history, hands-free sending
-- Relay server so Hermes can push to the glasses unprompted (decision D8)
+- Messenger read/write (WhatsApp, Matrix, Signal, Telegram, iMessage) through Lotti Brain (inbox kinds and accounts screen leave room)
+- APNs on a real device (built, off until a paid developer account; opt-in build setting)
 - Road network on the navigation map (OSM vector tiles or similar); offline routing (Valhalla)
 - Live captions and translation
 - Media controls from the ring. iOS has no public way for an app to control other apps' playback (iOS 27's `NowPlaying` covers only the app's own media; no EU accessory feature for media; the G2 firmware has no media service). Possible: Apple Music (`MPMusicPlayerController.systemMusicPlayer`), Spotify (App Remote SDK), and play/pause for any app by briefly taking the audio session. Shortcuts can't be run from the background. See design.md, Media
