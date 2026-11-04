@@ -240,9 +240,17 @@ export const coreOps = [
       "Change a safety setting (shell, web fetch, location, step limit, which ops the agent may use). Needs the user's confirmation when the agent asks.",
     inputSchema: z.object({ key: z.string(), value: z.unknown() }),
     risk: 'tap',
-    proposalTitle: (i) =>
-      `Set ${i.key} = ${JSON.stringify(i.value)}` +
-      (providerEndpoint(i.key) ? ' (removes the saved API key of that provider)' : ''),
+    proposalTitle(i, app) {
+      const provider = providerEndpoint(i.key);
+      // The consequence goes first: titles are clipped (one short line on the glasses).
+      if (
+        provider &&
+        app.settings.get(i.key) !== i.value &&
+        app.secrets.has(`provider.${provider}.api_key`)
+      )
+        return `Remove the saved ${provider} API key and set ${i.key} = ${JSON.stringify(i.value)}`;
+      return `Set ${i.key} = ${JSON.stringify(i.value)}`;
+    },
     handler(i, { app }) {
       if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
       if (!app.settings.isSafety(i.key))

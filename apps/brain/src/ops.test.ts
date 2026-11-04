@@ -197,26 +197,36 @@ test('settings.set rejects out-of-range numbers and badly formatted strings', as
   const t = makeApp();
   const set = async (key: string, value: unknown) =>
     (await t.app.ops.invoke('settings.set', { key, value }, 'app')) as any;
-  assert.match((await set('agent.silence_timeout_sec', -5)).error, /must be a number from/);
-  assert.match((await set('catchup.away_hours', 0)).error, /must be a number from/);
-  assert.match((await set('conversation.keep_recent_turns', -3)).error, /must be a number from/);
+  assert.match((await set('agent.silence_timeout_sec', -5)).error, /must be a (whole )?number from/);
+  assert.match((await set('catchup.away_hours', 0)).error, /must be a (whole )?number from/);
+  assert.match((await set('conversation.keep_recent_turns', -3)).error, /must be a (whole )?number from/);
   assert.match((await set('catchup.night_start', 'banana')).error, /wrong format/);
   assert.match((await set('catchup.night_start', '25:00')).error, /wrong format/);
   assert.match((await set('user.name', '')).error, /wrong format/);
   assert.equal((await set('catchup.night_start', '21:30')).ok, true);
   assert.equal((await set('agent.silence_timeout_sec', 90)).ok, true);
+  assert.match((await set('user.name', ' x')).error, /1 to 40 characters/);
+  assert.match((await set('catchup.night_end', '24:00')).error, /HH:MM/);
+  assert.match((await set('conversation.keep_recent_turns', 2.5)).error, /whole number/);
+  // the edges themselves are allowed; fractions only where the setting is fractional
+  assert.equal((await set('conversation.keep_recent_turns', 0)).ok, true);
+  assert.equal((await set('inbox.default_expiry_hours', 0)).ok, true);
+  assert.equal((await set('catchup.away_hours', 0.5)).ok, true);
+  const half = (await t.app.ops.invoke('settings.set_safety', { key: 'agent.max_rounds', value: 1.5 }, 'app')) as any;
+  assert.match(half.error, /whole number/);
   const safety = (await t.app.ops.invoke('settings.set_safety', { key: 'agent.max_rounds', value: 9999 }, 'app')) as any;
-  assert.match(safety.error, /must be a number from/);
+  assert.match(safety.error, /must be a (whole )?number from/);
 });
 
 test('changing a provider endpoint drops that provider key; the confirm title says so', async () => {
   const t = makeApp();
   t.app.secrets.set('provider.deepseek.api_key', 'sk-test');
+  t.app.secrets.set('provider.openai.api_key', 'sk-other');
   const op = t.app.ops.get('settings.set_safety') as any;
-  assert.match(
-    op.proposalTitle({ key: 'provider.deepseek.base_url', value: 'https://evil.example' }),
-    /removes the saved API key/,
-  );
+  const title = (value: string) => op.proposalTitle({ key: 'provider.deepseek.base_url', value }, t.app);
+  // the consequence comes first, so a clipped title still shows it
+  assert.match(title('https://evil.example'), /^Remove the saved deepseek API key/);
+  assert.doesNotMatch(title(''), /Remove/);
   // same value again: nothing to protect, the key stays
   await t.app.ops.invoke('settings.set_safety', { key: 'provider.deepseek.base_url', value: '' }, 'app');
   assert.equal(t.app.secrets.has('provider.deepseek.api_key'), true);
@@ -227,6 +237,20 @@ test('changing a provider endpoint drops that provider key; the confirm title sa
   )) as any;
   assert.equal(r.ok, true);
   assert.equal(t.app.secrets.has('provider.deepseek.api_key'), false);
+  assert.equal(t.app.secrets.has('provider.openai.api_key'), true);
+  assert.doesNotMatch(title(''), /Remove/); // no key left to remove
+});
+
+test('catchup.set_settings saves nothing when one value is invalid', async () => {
+  const t = makeApp();
+  const r = (await t.app.ops.invoke(
+    'catchup.set_settings',
+    { enabled: false, away_hours: 3, night_start: '25:00' },
+    'agent',
+  )) as any;
+  assert.equal(r.ok, false);
+  assert.equal(t.app.settings.get('catchup.enabled'), true);
+  assert.equal(t.app.settings.get('catchup.away_hours'), 2);
 });
 
 test('accounts.add only takes the account kinds the app offers', async () => {
