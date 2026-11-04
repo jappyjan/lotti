@@ -13,7 +13,7 @@ docker compose -f apps/brain/docker-compose.yml logs brain   # pairing code + UR
 # Coolify + Tailscale (no published port, no public domain): see apps/brain/docker-compose.coolify.yml
 #   Application from the private repo, build pack "Docker Compose", base directory "/apps/brain",
 #   compose file "/docker-compose.coolify.yml"; secret env vars MASTER_KEY and TS_AUTHKEY, plus PUBLIC_URL
-#   (https://<TS_HOSTNAME>.<tailnet>.ts.net). The pairing code is in the `brain` container log.
+#   (https://lotti-brain.<tailnet>.ts.net). The pairing code is in the `brain` container log.
 #   The phone reaches it over HTTPS only (iOS blocks plain http:// to a tailnet name).
 
 # Local

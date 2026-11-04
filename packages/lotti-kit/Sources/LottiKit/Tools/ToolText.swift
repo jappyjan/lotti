@@ -51,12 +51,16 @@ public struct ToolText: Sendable {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
         // ISO-8601 with a zone ("2026-11-05T09:00:00+01:00", "…Z"), as models and the backend write it:
         // that is an exact instant, so the zone is honoured instead of read as digits.
+        // Never falls back to reading digits: that would drop the zone and save a wrong time.
         if trimmed.contains("T"), trimmed.hasSuffix("Z") || trimmed.range(of: #"[+-]\d{2}:?\d{2}$"#, options: .regularExpression) != nil {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: trimmed) { return date }
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: trimmed) { return date }
+            // the formatter needs seconds: "…T09:00+01:00" → "…T09:00:00+01:00"
+            let withSeconds = trimmed.replacingOccurrences(
+                of: #"T(\d{2}:\d{2})(?=Z$|[+-]\d{2}:?\d{2}$)"#, with: "T$1:00", options: .regularExpression)
+            let ymd = trimmed.prefix(10).split(separator: "-").compactMap { Int($0) }
+            guard ymd.count == 3,
+                  DateComponents(year: ymd[0], month: ymd[1], day: ymd[2]).isValidDate(in: calendar)  // rejects 2026-02-31
+            else { return nil }
+            return BackendDates.parse(withSeconds)
         }
         let parts = trimmed
             .split(whereSeparator: { "-T :".contains($0) }).map { Int($0) }

@@ -116,12 +116,22 @@ final class AppModel {
         } catch BackendError.http(429, _) {
             throw BackendError.server("Too many wrong codes. Try again in a few minutes.")
         }
+        let previousURL = store.url
+        let previousToken = store.token
         store.url = url
         store.token = token
         // The code is used up and the server lists this phone now: never claim success without the token.
         guard store.token == token else {
-            store.clear()
-            throw BackendError.server("Lotti couldn't save the device token in the Keychain. Remove this device in Lotti Brain's paired devices, then pair again.")
+            // An earlier pairing whose token is still stored keeps working; otherwise nothing is left.
+            if let previousToken, previousURL != nil, store.token == previousToken {
+                store.url = previousURL
+            } else {
+                backend.stop()
+                store.clear()
+                ops = [:]
+            }
+            applyConfiguration()
+            throw BackendError.server("Lotti couldn't save the device token in the Keychain, so this pairing didn't stick. Lotti Brain already lists this phone: remove it there from another paired phone, or restart Lotti Brain once with LOTTI_RESET_PAIRING=1, then pair again.")
         }
         applyConfiguration()
         backend.start()
