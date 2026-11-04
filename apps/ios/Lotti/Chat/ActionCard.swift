@@ -17,21 +17,32 @@ struct ActionCard: View {
             ForEach(details, id: \.self) { line in
                 Text(line).font(.subheadline).foregroundStyle(.secondary)
             }
-            HStack(spacing: 10) {
-                Button(role: destructive ? .destructive : nil, action: confirm) {
-                    Text(confirmTitle).frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(destructive ? .red : .green)
-                Button(lang("Nicht jetzt", "Not now"), action: dismiss)
-                    .buttonStyle(.bordered)
-                    .tint(.primary)
+            // Side by side while they fit; stacked at large text sizes so the labels don't break mid-word.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { confirmButton; dismissButton }
+                VStack(spacing: 10) { confirmButton; dismissButton }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator))
+    }
+
+    private var confirmButton: some View {
+        Button(role: destructive ? .destructive : nil, action: confirm) {
+            Text(confirmTitle).lineLimit(1).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(destructive ? .red : .green)
+    }
+
+    private var dismissButton: some View {
+        Button(action: dismiss) {
+            Text(lang("Nicht jetzt", "Not now")).lineLimit(1).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(.primary)
     }
 
     private var destructive: Bool { action.tool == "delete_calendar_event" }
