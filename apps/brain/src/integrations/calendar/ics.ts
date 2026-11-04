@@ -94,6 +94,7 @@ export function parseEvents(ics: string, calendar?: string): CalendarEvent[] {
             ? { location: unescapeText(cur.LOCATION.v) }
             : {}),
           ...(s.allDay ? { allDay: true } : {}),
+          ...(rid || cur.RRULE ? { recurring: true } : {}),
           ...(calendar ? { calendar } : {}),
         });
       }

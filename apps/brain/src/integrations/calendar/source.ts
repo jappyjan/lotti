@@ -35,6 +35,8 @@ export interface CalBackend {
   /** `ids` empty/undefined = the account default (google: primary, caldav: all). */
   events(ids: string[], from: number, to: number): Promise<CalendarEvent[]>;
   create(calendarId: string | undefined, e: NewEvent): Promise<string>;
+  /** Deletes one event; a repeating one only as far as the service allows (see each backend). */
+  delete(calendarId: string, eventId: string): Promise<void>;
 }
 
 const G = 'https://www.googleapis.com/calendar/v3';
@@ -83,6 +85,8 @@ export function googleBackend(app: App, acc: AccountRow): CalBackend {
             ...(e.location ? { location: String(e.location) } : {}),
             ...(allDay ? { allDay: true } : {}),
             calendar: id === 'primary' ? acc.label || 'primary' : id,
+            calendarId: id,
+            ...(e.recurringEventId ? { recurring: true } : {}),
           });
         }
       }
@@ -108,6 +112,15 @@ export function googleBackend(app: App, acc: AccountRow): CalBackend {
         },
       );
       return String(j.id ?? '');
+    },
+    // singleEvents=true lists occurrences with their own ids: this removes that one occurrence only.
+    async delete(calendarId, eventId) {
+      await googleFetch(
+        app,
+        acc.id,
+        `${G}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+        { method: 'DELETE' },
+      );
     },
   };
 }
@@ -159,8 +172,22 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
     async events(ids, from, to) {
       const out: CalendarEvent[] = [];
       for (const c of await pick(ids))
-        out.push(...(await dav().events(c, from, to)));
+        out.push(
+          ...(await dav().events(c, from, to)).map((e) => ({
+            ...e,
+            calendarId: c.id,
+          })),
+        );
       return out;
+    },
+    async delete(calendarId, eventId) {
+      if (eventId.includes('#'))
+        throw new Error(
+          'This event repeats. Deleting it would remove the whole series, so Lotti does not do that over CalDAV: delete it in your calendar app.',
+        );
+      const cal = (await pick([calendarId]))[0];
+      if (!cal) throw new Error('Calendar not found.');
+      await dav().delete(cal, eventId);
     },
     async create(calendarId, e) {
       const cal = (await pick(calendarId ? [calendarId] : []))[0];
@@ -173,6 +200,20 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
 export type BackendFactory = (app: App, acc: AccountRow) => CalBackend;
 export const defaultBackend: BackendFactory = (app, acc) =>
   acc.kind === 'google' ? googleBackend(app, acc) : caldavBackend(app, acc);
+
+/** `account|calendar|event`, each part URI-encoded: what the agent hands back to delete an event. */
+export const eventRef = (account: string, calendar: string, event: string) =>
+  [account, calendar, event].map(encodeURIComponent).join('|');
+const parseRef = (ref: string) => {
+  const p = ref.split('|');
+  return p.length === 3 && p.every(Boolean)
+    ? ([p[0]!, p[1]!, p[2]!].map((x) => decodeURIComponent(x)) as [
+        string,
+        string,
+        string,
+      ])
+    : undefined;
+};
 
 /** All calendar accounts merged. One failing account does not hide the others. */
 export class MergedCalendar implements CalendarSource {
@@ -188,12 +229,17 @@ export class MergedCalendar implements CalendarSource {
     let okCount = 0;
     for (const acc of accounts) {
       try {
+        const evs = await this.backend(this.app, acc).events(
+          strList(acc.config.calendars),
+          from,
+          to,
+        );
         out.push(
-          ...(await this.backend(this.app, acc).events(
-            strList(acc.config.calendars),
-            from,
-            to,
-          )),
+          ...evs.map((e) =>
+            e.calendarId
+              ? { ...e, ref: eventRef(acc.id, e.calendarId, e.id) }
+              : e,
+          ),
         );
         touchSync(this.app, acc.id);
         okCount++;
@@ -259,6 +305,25 @@ export class MergedCalendar implements CalendarSource {
       };
     } catch (e) {
       return { ok: false, text: `Could not add the event: ${errText(e)}` };
+    }
+  }
+
+  async deleteEvent(args: Record<string, unknown>): Promise<ActionOutcome> {
+    const parts = parseRef(String(args.eventRef ?? ''));
+    if (!parts)
+      return { ok: false, text: 'That event reference is not valid.' };
+    const [accountId, calendarId, eventId] = parts;
+    const acc = accountsFor(this.app, 'calendar').find(
+      (a) => a.id === accountId,
+    );
+    if (!acc) return { ok: false, text: 'That calendar account is gone.' };
+    const title = String(args.title ?? 'The event');
+    try {
+      await this.backend(this.app, acc).delete(calendarId, eventId);
+      touchSync(this.app, acc.id);
+      return { ok: true, text: `"${title}" deleted from ${acc.label}.` };
+    } catch (e) {
+      return { ok: false, text: `Could not delete the event: ${errText(e)}` };
     }
   }
 }

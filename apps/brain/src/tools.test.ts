@@ -227,9 +227,20 @@ test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirec
     '[::1]',
   ])
     assert.equal(isPrivateAddress(ip), true, ip);
-  for (const ip of ['::ffff:0:127.0.0.1', '64:ff9b:1::1', 'fec0::1', '2001:0:4136:e378::1'])
+  for (const ip of [
+    '::ffff:0:127.0.0.1',
+    '64:ff9b:1::1',
+    'fec0::1',
+    '2001:0:4136:e378::1',
+  ])
     assert.equal(isPrivateAddress(ip), true, ip);
-  for (const ip of ['8.8.8.8', '100.128.0.1', '172.32.0.1', '2606:4700::1111', '::ffff:8.8.8.8'])
+  for (const ip of [
+    '8.8.8.8',
+    '100.128.0.1',
+    '172.32.0.1',
+    '2606:4700::1111',
+    '::ffff:8.8.8.8',
+  ])
     assert.equal(isPrivateAddress(ip), false, ip);
 
   const hits: string[] = [];
@@ -248,7 +259,10 @@ test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirec
           headers: { location: '/final' },
         });
       if (url.pathname === '/loop')
-        return new Response('', { status: 302, headers: { location: '/loop' } });
+        return new Response('', {
+          status: 302,
+          headers: { location: '/loop' },
+        });
       return new Response('x'.repeat(100_000), {
         headers: { 'content-type': 'text/plain' },
       });
@@ -261,17 +275,29 @@ test('web_fetch SSRF: mapped IPv6, CGNAT, literal forms, DNS answers and redirec
   await blocked('http://2130706433/'); // decimal 127.0.0.1
   await blocked('http://0x7f.1/');
   await blocked('http://100.64.1.1/'); // CGNAT
-  t.setLookup(async (h) => (h === 'evil.example' ? ['8.8.8.8', '10.0.0.5'] : ['93.184.215.14']));
+  t.setLookup(async (h) =>
+    h === 'evil.example' ? ['8.8.8.8', '10.0.0.5'] : ['93.184.215.14'],
+  );
   await blocked('https://evil.example/'); // ANY private answer blocks
   assert.equal(hits.length, 0, 'nothing was fetched');
 
   await blocked('https://example.com/to-local');
-  assert.deepEqual(hits, ['https://example.com/to-local'], 'redirect target not fetched');
+  assert.deepEqual(
+    hits,
+    ['https://example.com/to-local'],
+    'redirect target not fetched',
+  );
   hits.length = 0;
-  const ok = await run(t, 'web_fetch', { url: 'https://example.com/hop', maxChars: 500 });
+  const ok = await run(t, 'web_fetch', {
+    url: 'https://example.com/hop',
+    maxChars: 500,
+  });
   assert.match(ok.text, /^HTTP 200/);
   assert.match(ok.text, /truncated at 500/);
-  assert.deepEqual(hits, ['https://example.com/hop', 'https://example.com/final']);
+  assert.deepEqual(hits, [
+    'https://example.com/hop',
+    'https://example.com/final',
+  ]);
   assert.match(
     (await run(t, 'web_fetch', { url: 'https://example.com/loop' })).text,
     /Too many redirects/,
@@ -293,7 +319,10 @@ test('web_fetch caps the download (4 MB) and the returned text (maxChars)', asyn
         { headers: { 'content-type': 'text/plain' } },
       ),
   });
-  const r = await run(t, 'web_fetch', { url: 'https://example.com/big', maxChars: 1000 });
+  const r = await run(t, 'web_fetch', {
+    url: 'https://example.com/big',
+    maxChars: 1000,
+  });
   assert.match(r.text, /truncated at 1000/);
   assert.ok(pulled <= 4_100_000, `pulled ${pulled} bytes`);
 });
@@ -301,19 +330,29 @@ test('web_fetch caps the download (4 MB) and the returned text (maxChars)', asyn
 test('phone action proposals use exactly the phone tool schemas (apps/ios/Lotti/PhoneTools.swift)', async () => {
   const t = makeApp();
   const params = (name: string) => {
-    const spec = t.app.tools.specs([t.app.tools.get(name)!])[0]!.parameters as any;
+    const spec = t.app.tools.specs([t.app.tools.get(name)!])[0]!
+      .parameters as any;
     return {
       props: Object.fromEntries(
         Object.entries(spec.properties).map(([k, v]: [string, any]) => [
           k,
-          { type: v.type, ...(v.enum ? { enum: v.enum } : {}), ...(v.minimum !== undefined ? { min: v.minimum, max: v.maximum } : {}) },
+          {
+            type: v.type,
+            ...(v.enum ? { enum: v.enum } : {}),
+            ...(v.minimum !== undefined
+              ? { min: v.minimum, max: v.maximum }
+              : {}),
+          },
         ]),
       ),
       required: spec.required ?? [],
     };
   };
   assert.deepEqual(params('set_timer'), {
-    props: { minutes: { type: 'integer', min: 1, max: 720 }, label: { type: 'string' } },
+    props: {
+      minutes: { type: 'integer', min: 1, max: 720 },
+      label: { type: 'string' },
+    },
     required: ['minutes'],
   });
   assert.deepEqual(params('create_reminder'), {
@@ -321,32 +360,73 @@ test('phone action proposals use exactly the phone tool schemas (apps/ios/Lotti/
     required: ['text'],
   });
   assert.match(
-    (t.app.tools.specs([t.app.tools.get('create_reminder')!])[0]!.parameters as any).properties.due.description,
+    (
+      t.app.tools.specs([t.app.tools.get('create_reminder')!])[0]!
+        .parameters as any
+    ).properties.due.description,
     /tomorrow 09:00/,
   );
   assert.deepEqual(params('start_navigation'), {
-    props: { destination: { type: 'string' }, mode: { type: 'string', enum: ['walk', 'bike'] } },
+    props: {
+      destination: { type: 'string' },
+      mode: { type: 'string', enum: ['walk', 'bike'] },
+    },
     required: ['destination'],
   });
-  assert.match((await run(t, 'set_timer', { minutes: 0.5 })).text, /Invalid arguments/);
-  assert.match((await run(t, 'set_timer', { minutes: 721 })).text, /Invalid arguments/);
-  assert.match((await run(t, 'start_navigation', { destination: 'x', mode: 'driving' })).text, /Invalid arguments/);
+  assert.match(
+    (await run(t, 'set_timer', { minutes: 0.5 })).text,
+    /Invalid arguments/,
+  );
+  assert.match(
+    (await run(t, 'set_timer', { minutes: 721 })).text,
+    /Invalid arguments/,
+  );
+  assert.match(
+    (await run(t, 'start_navigation', { destination: 'x', mode: 'driving' }))
+      .text,
+    /Invalid arguments/,
+  );
 });
 
 test('confirmation titles name what runs: mail recipient + body, calendar time + attendees', async () => {
   const t = makeApp();
-  await run(t, 'send_mail_reply', { mailId: 'm1', to: 'boss@example.com', body: 'Ja,   passt mir.\nBis morgen' });
-  await run(t, 'create_calendar_event', {
-    title: 'Zahnarzt',
-    start: '2026-11-04T10:00:00+01:00',
-    end: '2026-11-04T11:00:00+01:00',
-    attendees: ['a@example.com'],
+  await run(t, 'send_mail_reply', {
+    mailId: 'm1',
+    to: 'boss@example.com',
+    body: 'Ja,   passt mir.\nBis morgen',
   });
-  const titles = t.app.db.all<{ title: string }>('SELECT title FROM actions ORDER BY rowid').map((r) => r.title);
-  assert.equal(titles[0], 'Send reply to boss@example.com: "Ja, passt mir. Bis morgen"');
-  assert.equal(titles[1], 'Add "Zahnarzt" 2026-11-04T10:00:00+01:00–2026-11-04T11:00:00+01:00 with a@example.com to calendar');
+  await t.app.tools.call(
+    'create_calendar_event',
+    {
+      title: 'Zahnarzt',
+      start: '2026-11-04T10:00:00+01:00',
+      end: '2026-11-04T11:00:00+01:00',
+      attendees: ['a@example.com'],
+    },
+    { app: t.app, run: newRun({ utcOffsetMin: 60 }) },
+  );
+  await t.app.tools.call(
+    'delete_calendar_event',
+    { eventRef: 'a|b|c', title: 'Standup', start: '2026-11-04T10:00:00+01:00' },
+    { app: t.app, run: newRun({ utcOffsetMin: 60, locale: 'de' }) },
+  );
+  const titles = t.app.db
+    .all<{ title: string }>('SELECT title FROM actions ORDER BY rowid')
+    .map((r) => r.title);
+  assert.equal(
+    titles[0],
+    'Send reply to boss@example.com: "Ja, passt mir. Bis morgen"',
+  );
+  assert.equal(
+    titles[1],
+    'Add "Zahnarzt" · Wed 4 Nov 10:00–11:00 with a@example.com',
+  );
+  assert.ok(!/\d{4}-\d\d-\d\dT/.test(titles[1]!), 'no raw ISO timestamps');
+  assert.match(titles[2]!, /^Delete "Standup" · .*10:00$/);
   await run(t, 'send_mail_reply', { mailId: 'm1', body: 'x'.repeat(500) });
-  const long = t.app.db.all<{ title: string }>('SELECT title FROM actions ORDER BY rowid DESC LIMIT 1')[0]!.title;
+  const long = t.app.db.all<{ title: string }>(
+    'SELECT title FROM actions ORDER BY rowid DESC LIMIT 1',
+  )[0]!.title;
   assert.ok(long.length <= 140, long);
 });
 

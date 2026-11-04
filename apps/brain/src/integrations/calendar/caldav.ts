@@ -147,6 +147,33 @@ export class CalDav {
     return out.filter((e) => e.end > from && e.start < to);
   }
 
+  /**
+   * Deletes one event by UID. A repeating event (RRULE / RECURRENCE-ID / several VEVENTs) is refused:
+   * the resource is the whole series, and deleting it would wipe all of it.
+   */
+  async delete(cal: DavCalendar, uid: string): Promise<void> {
+    const body =
+      `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+      `<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:prop-filter name="UID">` +
+      `<c:text-match collation="i;octet">${uid.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</c:text-match>` +
+      `</c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`;
+    const xml = (await this.dav('REPORT', cal.id, body, { depth: '1' })).text;
+    const hits = elements(xml, 'response').filter((r) => first(r, 'href'));
+    if (hits.length !== 1)
+      throw new Error(
+        hits.length ? 'More than one event matches.' : 'Event not found.',
+      );
+    const data = decode(first(hits[0]!, 'calendar-data') ?? '');
+    if (
+      /^(RRULE|RDATE|RECURRENCE-ID)[:;]/im.test(data) ||
+      (data.match(/^BEGIN:VEVENT/gim) ?? []).length > 1
+    )
+      throw new Error(
+        'This event repeats. Deleting it would remove the whole series, so Lotti does not do that over CalDAV: delete it in your calendar app.',
+      );
+    await this.dav('DELETE', this.abs(first(hits[0]!, 'href')!, cal.id), '');
+  }
+
   async create(
     cal: DavCalendar,
     now: number,

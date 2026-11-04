@@ -233,6 +233,128 @@ test('caldav: create_calendar_event runs PUT only after perform', async () => {
   assert.equal((await t.app.actions.perform(run.actions[0]!.id)).ok, false); // once
 });
 
+test('caldav: delete_calendar_event removes a single event by UID, only after perform', async () => {
+  const deleted: string[] = [];
+  const event = (extra = '') =>
+    ics(
+      `BEGIN:VEVENT\r\nUID:e1\r\nDTSTART:20261103T070500Z\r\nDTEND:20261103T080500Z\r\nSUMMARY:Zahnarzt\r\n${extra}END:VEVENT`,
+    );
+  let stored = event();
+  const m = mockFetch([
+    {
+      m: 'REPORT',
+      u: '/home/123/work/',
+      res: () =>
+        multistatus(
+          `<d:response><d:href>/home/123/work/x.ics</d:href><d:propstat><d:prop><c:calendar-data><![CDATA[${stored}]]></c:calendar-data></d:prop></d:propstat></d:response>`,
+        ),
+    },
+    ...davRoutes(stored),
+    {
+      m: 'DELETE',
+      u: '/home/123/work/x.ics',
+      res: (r) => (deleted.push(r.url), new Response(null, { status: 204 })),
+    },
+  ]);
+  const t = makeApp({ fetch: m.fetch });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'accounts.add',
+      {
+        kind: 'caldav',
+        label: 'N',
+        config: { url: 'https://caldav.example/', username: 'jan' },
+      },
+      'app',
+    )) as any
+  ).result.id;
+  await t.app.ops.invoke(
+    'accounts.set_credential',
+    { id, key: 'password', value: 'secret' },
+    'app',
+  );
+  const cal = t.app.integrations.calendar!;
+  const [ev] = await cal.events(t.clock.now(), t.clock.now() + 3_600_000 * 24);
+  assert.ok(ev!.ref, 'events carry a reference');
+  const listing = await t.app.tools.call(
+    'calendar_events',
+    {},
+    { app: t.app, run: newRun() },
+  );
+  assert.ok(listing.text.includes(`{id: ${ev!.ref}}`), listing.text);
+
+  const run = newRun();
+  await t.app.tools.call(
+    'delete_calendar_event',
+    { eventRef: ev!.ref, title: 'Zahnarzt' },
+    { app: t.app, run },
+  );
+  assert.deepEqual(deleted, [], 'nothing deleted before the tap');
+  const out = await t.app.actions.perform(run.actions[0]!.id);
+  assert.ok(out.ok, out.text);
+  assert.deepEqual(deleted, ['https://caldav.example/home/123/work/x.ics']);
+
+  // a repeating series is refused and nothing is deleted
+  stored = event('RRULE:FREQ=WEEKLY\r\n');
+  deleted.length = 0;
+  const run2 = newRun();
+  await t.app.tools.call(
+    'delete_calendar_event',
+    { eventRef: ev!.ref, title: 'Zahnarzt' },
+    { app: t.app, run: run2 },
+  );
+  const refused = await t.app.actions.perform(run2.actions[0]!.id);
+  assert.equal(refused.ok, false);
+  assert.match(refused.text, /repeats/);
+  assert.deepEqual(deleted, []);
+  assert.equal(
+    (await cal.deleteEvent!({ eventRef: 'garbage', title: 'x' })).ok,
+    false,
+  );
+});
+
+test('google calendar: delete removes the single occurrence by event id', async () => {
+  const { t, m } = googleApp([
+    {
+      m: 'GET',
+      u: '/calendars/primary/events',
+      res: () => ({
+        items: [
+          {
+            id: 'wk_20261103T080500Z',
+            recurringEventId: 'wk',
+            summary: 'Standup',
+            start: { dateTime: new Date(2026, 10, 3, 8, 5).toISOString() },
+            end: { dateTime: new Date(2026, 10, 3, 8, 35).toISOString() },
+          },
+        ],
+      }),
+    },
+    {
+      m: 'DELETE',
+      u: '/calendars/primary/events/wk_20261103T080500Z',
+      res: () => new Response(null, { status: 204 }),
+    },
+  ]);
+  await connectGoogle(t);
+  const [ev] = await t.app.integrations.calendar!.events(
+    t.clock.now(),
+    t.clock.now() + 86_400_000,
+  );
+  assert.equal(ev!.recurring, true);
+  const run = newRun();
+  await t.app.tools.call(
+    'delete_calendar_event',
+    { eventRef: ev!.ref, title: 'Standup' },
+    { app: t.app, run },
+  );
+  assert.ok(!m.seen.some((s) => s.method === 'DELETE'));
+  const out = await t.app.actions.perform(run.actions[0]!.id);
+  assert.ok(out.ok, out.text);
+  assert.equal(m.seen.filter((s) => s.method === 'DELETE').length, 1);
+});
+
 test('google calendar: events with selected calendars, insert on perform, merged + deduped', async () => {
   const { t, m } = googleApp([
     {
