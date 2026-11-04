@@ -18,9 +18,9 @@ public struct WakeCandidate: Sendable {
 /// while the energy gate says there is sound. Feed it every chunk, in order.
 @MainActor
 public final class WakeWordDetector {
-    public static let sampleRate = 16_000
+    nonisolated public static let sampleRate = 16_000
     /// Classifier confidence for a candidate, unless Debug sets another.
-    public static let defaultThreshold = 0.8
+    nonisolated public static let defaultThreshold = 0.8
 
     private let classifier: any SoundClassifier
     private var ring: AudioRingBuffer
