@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses. The UI schema, simulator and messengers are plans.
+Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses (the old device log held 43 state messages, none a wear event; Debug → Wear capture and `[state]`/`[MARK]` log lines collect the real bytes). The UI schema, simulator and messengers are plans.
 
 ## Big picture
 

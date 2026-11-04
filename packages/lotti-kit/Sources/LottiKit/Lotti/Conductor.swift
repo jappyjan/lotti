@@ -105,6 +105,9 @@ public final class Conductor {
     @ObservationIgnored private var syncingHeadUp = false
     /// A catch-up brief that came while the glasses were off your face, shown when you put them on.
     @ObservationIgnored private var heldCatchup: (catchup: Catchup, received: Date)?
+    /// The latest brief, kept so the today view can offer it as "Catch-up" for `catchupChoiceMaxAge`.
+    @ObservationIgnored private var lastCatchup: (catchup: Catchup, received: Date)?
+    static let catchupChoiceMaxAge: TimeInterval = 12 * 3600
     /// A held brief older than this is dropped instead of shown.
     static let heldCatchupMaxAge: TimeInterval = 2 * 3600
     /// When the backend last showed a sign of life, so the wait is for silence, not a fixed total time.
@@ -355,6 +358,11 @@ public final class Conductor {
     /// Lotti's sentence, and a choice for the list of all items (first while something is pending).
     private func todayScreen(_ info: TodayInfo) -> Screen {
         var screen = composer.screen(for: info)
+        if let brief = lastCatchup, now().timeIntervalSince(brief.received) <= Self.catchupChoiceMaxAge {
+            var items = screen.rail?.items ?? []
+            items.insert(RailItem("Catch-up", .show(Screen(.says, brief.catchup.text))), at: 0)
+            screen.rail = Rail(items, limit: renderer.style.maxRailItems)
+        }
         let active = inbox.active(at: now())
         guard !active.isEmpty else { return screen }
         let pending = active.filter { $0.status == .pending }
@@ -465,6 +473,7 @@ public final class Conductor {
     /// known to be off your face, it waits for the next "worn" (at most `heldCatchupMaxAge`). An
     /// unknown wear state (not reported yet) shows it right away.
     private func showCatchup(_ catchup: Catchup) {
+        lastCatchup = (catchup, now())
         if link.status.isConnected, link.wearState == .removed {
             heldCatchup = (catchup, now())
             log("catch-up held until the glasses are worn")

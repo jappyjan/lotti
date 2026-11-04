@@ -216,6 +216,28 @@ struct ConductorBackendTests {
         try await eventually { conductor.screen?.text == "Hallo zurück." }
     }
 
+    @Test func theTodayViewOffersTheCatchupForTwelveHours() async throws {
+        let clock = ManualClock(Date())
+        let conductor = Conductor(link: link, brain: brain, backend: client, speech: FakeSpeech(),
+                                  today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: true),
+                                  now: { clock.now })
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
+        conductor.handle(InputEvent(.doubleTap, from: .ring))  // back: off
+        backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails, nichts Dringendes.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup?.id == "k1" }
+        try await Task.sleep(for: .milliseconds(30))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        clock.now += 3600
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        let choice = try #require(conductor.screen?.rail?.items.first { $0.title == "Catch-up" })
+        #expect(choice.action == .show(Screen(.says, "Zwei Mails, nichts Dringendes.")))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        clock.now += 12 * 3600
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
+    }
+
     @Test func mirroredMessagesNeverReachTheGlasses() async throws {
         // The backend also sends the asking socket its own `message` frames (role user and assistant).
         backend.script = { frame in
