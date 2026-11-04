@@ -48,14 +48,17 @@ public struct ToolText: Sendable {
     /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]` (also with a zone
     /// offset), or a bare `YYYY-MM-DD` (then 09:00).
     public func moment(_ text: String) -> Date? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-        // ISO-8601 with a zone ("2026-11-05T09:00:00+01:00", "…Z"), as models and the backend write it:
-        // that is an exact instant, so the zone is honoured instead of read as digits.
-        // Never falls back to reading digits: that would drop the zone and save a wrong time.
-        if trimmed.contains("T"), trimmed.hasSuffix("Z") || trimmed.range(of: #"[+-]\d{2}:?\d{2}$"#, options: .regularExpression) != nil {
-            // the formatter needs seconds: "…T09:00+01:00" → "…T09:00:00+01:00"
-            let withSeconds = trimmed.replacingOccurrences(
-                of: #"T(\d{2}:\d{2})(?=Z$|[+-]\d{2}:?\d{2}$)"#, with: "T$1:00", options: .regularExpression)
+        // upper case: `day(_:now:)` passes lowered text ("…t09:00z")
+        let trimmed = text.trimmingCharacters(in: .whitespaces).uppercased()
+        // ISO-8601 with a zone ("2026-11-05T09:00:00+01:00", "…Z", a space for the T only with seconds:
+        // "… 09:00-10:00" reads as a range), as models and the backend write it: that is an exact instant,
+        // so the zone is honoured. Never falls back to reading digits: that would drop the zone.
+        if trimmed.range(of: #"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}|[T ]\d{2}:\d{2}:\d{2}).*(Z|[+-]\d{2}:?\d{2})$"#, options: .regularExpression) != nil {
+            // the formatter needs a T and seconds: "… 09:00+01:00" → "…T09:00:00+01:00"
+            let withSeconds = trimmed
+                .replacingOccurrences(of: #"^(\d{4}-\d{2}-\d{2}) "#, with: "$1T", options: .regularExpression)
+                .replacingOccurrences(
+                    of: #"T(\d{2}:\d{2})(?=Z$|[+-]\d{2}:?\d{2}$)"#, with: "T$1:00", options: .regularExpression)
             let ymd = trimmed.prefix(10).split(separator: "-").compactMap { Int($0) }
             guard ymd.count == 3,
                   DateComponents(year: ymd[0], month: ymd[1], day: ymd[2]).isValidDate(in: calendar)  // rejects 2026-02-31

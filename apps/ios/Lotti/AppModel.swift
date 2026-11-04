@@ -123,7 +123,8 @@ final class AppModel {
         // The code is used up and the server lists this phone now: never claim success without the token.
         guard store.token == token else {
             // An earlier pairing whose token is still stored keeps working; otherwise nothing is left.
-            if let previousToken, previousURL != nil, store.token == previousToken {
+            let kept = previousToken != nil && previousURL != nil && store.token == previousToken
+            if kept {
                 store.url = previousURL
             } else {
                 backend.stop()
@@ -131,7 +132,9 @@ final class AppModel {
                 ops = [:]
             }
             applyConfiguration()
-            throw BackendError.server("Lotti couldn't save the device token in the Keychain, so this pairing didn't stick. Lotti Brain already lists this phone: remove it there from another paired phone, or restart Lotti Brain once with LOTTI_RESET_PAIRING=1, then pair again.")
+            throw BackendError.server(kept
+                ? "Lotti couldn't save the new device token in the Keychain, so it keeps the pairing it had. The new pairing is listed as an extra device in Lotti Brain's paired devices: remove it there."
+                : "Lotti couldn't save the device token in the Keychain, so this pairing didn't stick. Lotti Brain already lists this phone: remove it there from another paired phone, or restart Lotti Brain once with LOTTI_RESET_PAIRING=1, then pair again.")
         }
         applyConfiguration()
         backend.start()

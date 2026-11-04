@@ -163,6 +163,9 @@ struct ToolTextTests {
         #expect(text.moment("2026-11-02T07:15:00.250+01:00") == ISO8601DateFormatter().date(from: "2026-11-02T07:15:00+01:00")!.addingTimeInterval(0.25))
         #expect(text.moment("2026-02-31T09:00:00Z") == nil)
         #expect(text.moment("2026-11-02T07:1+01:00") == nil)
+        #expect(text.moment("2026-11-02 01:15:00-05:00") == ISO8601DateFormatter().date(from: "2026-11-02T07:15:00+01:00"))
+        // day() lowers the text first; a zoned ISO day still counts
+        #expect(text.day("2026-11-02T00:30:00+01:00", now: now) == text.moment("2026-11-02 00:00"))
     }
 
     @Test func describesEventsPerDay() {
