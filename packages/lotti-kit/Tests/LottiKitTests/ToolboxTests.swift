@@ -153,6 +153,9 @@ struct ToolTextTests {
         #expect(text.dayAndTime(text.moment("2026-11-02 18:30")!) == "Mon 2 Nov 18:30")
         #expect(text.dayAndTime(text.moment("2026-11-02T07:15:00")!) == "Mon 2 Nov 07:15")
         #expect(text.dayAndTime(text.moment("2026-11-02")!) == "Mon 2 Nov 09:00")
+        // ISO with a zone is an exact instant (the zone is honoured, not read as digits)
+        #expect(text.moment("2026-11-02T07:15:00+01:00") == ISO8601DateFormatter().date(from: "2026-11-02T07:15:00+01:00"))
+        #expect(text.moment("2026-11-02T06:15:00Z") == ISO8601DateFormatter().date(from: "2026-11-02T07:15:00+01:00"))
     }
 
     @Test func describesEventsPerDay() {

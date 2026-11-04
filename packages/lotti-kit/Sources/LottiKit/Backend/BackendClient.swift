@@ -123,6 +123,7 @@ public final class BackendClient {
         connection?.close()
         connection = nil
         setDisconnected()
+        lastError = nil  // an old "didn't accept this phone" must not outlive the pairing it was about
     }
 
     /// Connect right now instead of after the backoff. When a socket looks open, ping it: a dead

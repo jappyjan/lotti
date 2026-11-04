@@ -45,10 +45,20 @@ public struct ToolText: Sendable {
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
     }
 
-    /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]`, or a bare
-    /// `YYYY-MM-DD` (then 09:00).
+    /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]` (also with a zone
+    /// offset), or a bare `YYYY-MM-DD` (then 09:00).
     public func moment(_ text: String) -> Date? {
-        let parts = text.trimmingCharacters(in: .whitespaces)
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        // ISO-8601 with a zone ("2026-11-05T09:00:00+01:00", "…Z"), as models and the backend write it:
+        // that is an exact instant, so the zone is honoured instead of read as digits.
+        if trimmed.contains("T"), trimmed.hasSuffix("Z") || trimmed.range(of: #"[+-]\d{2}:?\d{2}$"#, options: .regularExpression) != nil {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            if let date = formatter.date(from: trimmed) { return date }
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: trimmed) { return date }
+        }
+        let parts = trimmed
             .split(whereSeparator: { "-T :".contains($0) }).map { Int($0) }
         guard parts.count >= 3, parts.allSatisfy({ $0 != nil }) else { return nil }
         let n = parts.map { $0! }
