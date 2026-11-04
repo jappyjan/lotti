@@ -14,7 +14,7 @@ test('google oauth: auth url has PKCE + custom scheme redirect; exchange stores 
   assert.match(noClient.error, /client id/);
   await t.app.ops.invoke(
     'accounts.set_google_client',
-    { clientId: 'cid', clientSecret: 'csec' },
+    { clientId: 'cid', clientSecret: 'csec', redirectUri: 'lotti://oauth' },
     'app',
   );
   const u = (await t.app.ops.invoke(
@@ -75,7 +75,7 @@ test('google oauth: bad code and agent access', async () => {
   const { t } = googleApp();
   await t.app.ops.invoke(
     'accounts.set_google_client',
-    { clientId: 'cid' },
+    { clientId: 'cid', redirectUri: 'lotti://oauth' },
     'app',
   );
   const u = (await t.app.ops.invoke(

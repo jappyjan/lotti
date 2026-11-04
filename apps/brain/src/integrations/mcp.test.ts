@@ -52,7 +52,12 @@ const settle = (t: ReturnType<typeof makeApp>) =>
 test('mcp stdio: test connection lists tools; mcp.tools shows confirmation flags', async () => {
   const { t, id } = await stdioApp();
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
-  assert.deepEqual(r.result, { ok: true, tools: ['echo', 'fail'] });
+  assert.deepEqual(r.result, {
+    ok: true,
+    tools: ['echo', 'fail'],
+    authRequired: false,
+    signedIn: false,
+  });
   const tools = (await t.app.ops.invoke('mcp.tools', { id }, 'app')) as any;
   assert.deepEqual(
     tools.result.map((x: any) => [x.name, x.needsConfirmation]),
@@ -253,7 +258,12 @@ test('mcp http: JSON and SSE replies, bearer token, session id', async () => {
   await settle(t);
   m.seen.length = 0;
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
-  assert.deepEqual(r.result, { ok: true, tools: ['now'] });
+  assert.deepEqual(r.result, {
+    ok: true,
+    tools: ['now'],
+    authRequired: false,
+    signedIn: false,
+  });
   assert.equal(m.seen[0]!.headers.authorization, 'Bearer tok');
   assert.match(m.seen[1]!.headers['mcp-session-id']!, /^S\d+$/);
   const out = await t.app.integrations.mcp.callTool(

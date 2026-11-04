@@ -253,7 +253,7 @@ export const integrationOps: Operation[] = [
         ((i.url !== undefined && i.url !== cur.url) ||
           stdioTargetChanged(cur, i)) &&
         app.secrets.list(`mcp.${cur.id}.`).length
-          ? ' (its saved credential and sign-in are removed)'
+          ? ' (its saved credential is removed)'
           : '';
       return `Change MCP server "${cur?.name ?? i.id}": ${ch.join(', ') || 'no change'}${secrets}`;
     },
