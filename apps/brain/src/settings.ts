@@ -226,6 +226,13 @@ export class SettingsService {
     if (this.kvGet('phone.utc_offset_min') !== String(offsetMin))
       this.kvSet('phone.utc_offset_min', String(offsetMin));
   }
+  /** The language of the phone's last ask; actions confirmed from the inbox have no ask of their own. */
+  noteLocale(locale: 'de' | 'en'): void {
+    if (this.kvGet('phone.locale') !== locale) this.kvSet('phone.locale', locale);
+  }
+  lastLocale(): 'de' | 'en' {
+    return this.kvGet('phone.locale') === 'de' ? 'de' : 'en';
+  }
   /**
    * Offset to render times in for background work (jobs, catch-up, meeting items): the phone's last one,
    * unless the server has its own TZ configured. null = server local time.

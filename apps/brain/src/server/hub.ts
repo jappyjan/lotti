@@ -8,6 +8,9 @@ export interface Conn {
   deviceName: string;
   /** true after `hello` */
   ready: boolean;
+  /** Channel and language of this socket's last ask (how a confirmed action is reported back). */
+  channel?: 'glasses' | 'phone';
+  locale?: 'de' | 'en';
   send(msg: Record<string, unknown>): void;
   close(): void;
 }
