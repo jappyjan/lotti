@@ -43,6 +43,7 @@ test('cron: next run for common expressions (local time)', () => {
 });
 
 test('friendly schedules (en/de) become cron', () => {
+  assert.equal(friendlyToCron('every minute'), '* * * * *'); // what Meeting soon shows; the app sends it back on Save
   assert.equal(friendlyToCron('every 10 minutes'), '*/10 * * * *');
   assert.equal(friendlyToCron('hourly'), '0 * * * *');
   assert.equal(friendlyToCron('daily at 08:00'), '0 8 * * *');

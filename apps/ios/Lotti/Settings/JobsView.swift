@@ -131,7 +131,7 @@ struct JobDetailView: View {
             if job == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             ToolbarItem(placement: .confirmationAction) {
                 Button(job == nil ? "Create" : "Save") { save() }
-                    .disabled(name.isEmpty || !schedule.isValid || (job?.isBuiltin != true && prompt.isEmpty))
+                    .disabled(name.isEmpty || !schedule.isValid || (job?.isBuiltin != true && prompt.isEmpty) || !settingIsValid)
             }
         }
         .errorAlert($error)
@@ -198,6 +198,11 @@ struct JobDetailView: View {
         case "error": .red
         default: .secondary
         }
+    }
+
+    /// A job's own setting (the lead time) needs a whole number above 0, otherwise Save would quietly skip it.
+    private var settingIsValid: Bool {
+        job?.settingKey == nil || (Int(settingValue) ?? 0) > 0
     }
 
     private func save() {
