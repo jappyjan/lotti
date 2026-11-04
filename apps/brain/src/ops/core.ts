@@ -142,7 +142,13 @@ export const coreOps = [
         try {
           return {
             source: 'live',
-            models: await p.listModels(AbortSignal.timeout(8000)),
+            // Suggestions stay in the list: a provider's own list may lag behind new models.
+            models: [
+              ...new Set([
+                ...p.knownModels,
+                ...(await p.listModels(AbortSignal.timeout(8000))),
+              ]),
+            ],
           };
         } catch (e) {
           return {

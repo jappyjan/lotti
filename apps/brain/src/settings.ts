@@ -18,7 +18,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     description: 'Fallback provider id (used on error/timeout), empty = none',
   },
   'provider.deepseek.model': {
-    default: 'deepseek-chat',
+    default: 'deepseek-v4-flash',
     description: 'DeepSeek model id',
   },
   'provider.deepseek.base_url': {
