@@ -343,6 +343,20 @@ test('job_runs are pruned per job; retention sweep drops old logs; catch-up read
   assert.ok(t.app.inbox.get(keep.id));
 });
 
+test('jobs.list tells what each job does and whether it spends AI tokens', () => {
+  const t = makeApp();
+  const by = (k: string) => t.app.scheduler.list().find((j) => j.builtinKey === k)!;
+  assert.equal(by('meeting_soon').ai, 'none');
+  assert.equal(by('meeting_soon').setting?.key, 'jobs.meeting_soon.lead_min');
+  assert.equal(by('important_mail').ai, 'conditional');
+  assert.equal(by('dreaming').ai, 'always');
+  for (const k of ['meeting_soon', 'important_mail', 'dreaming'])
+    assert.ok(by(k).description, k);
+  const mine = t.app.scheduler.create({ name: 'x', prompt: 'p', schedule: 'daily at 08:00' });
+  assert.equal(mine.ai, 'always');
+  assert.equal(mine.description, null);
+});
+
 test('meeting soon lead time is a setting (jobs.meeting_soon.lead_min)', async () => {
   const windows: number[] = [];
   const t = makeApp({
