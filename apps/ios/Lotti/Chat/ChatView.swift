@@ -99,7 +99,8 @@ private struct ConnectionBanner: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
             .padding(.vertical, 8)
-            .background(.orange.opacity(0.15))
+            // Opaque base: the chat scrolls under this inset, and a bare tint lets the messages show through.
+            .background { Color(.systemBackground).overlay(Color.orange.opacity(0.15)) }
     }
 }
 

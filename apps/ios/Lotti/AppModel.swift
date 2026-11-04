@@ -108,9 +108,21 @@ final class AppModel {
     func pair(url: URL, code: String) async throws {
         isPairing = true
         defer { isPairing = false }
-        let token = try await BackendManagementClient(baseURL: url, http: http).pair(code: code, deviceName: deviceName)
+        let token: String
+        do {
+            token = try await BackendManagementClient(baseURL: url, http: http).pair(code: code, deviceName: deviceName)
+        } catch BackendError.http(401, _) {
+            throw BackendError.server("That pairing code is wrong, already used or expired.")
+        } catch BackendError.http(429, _) {
+            throw BackendError.server("Too many wrong codes. Try again in a few minutes.")
+        }
         store.url = url
         store.token = token
+        // The code is used up and the server lists this phone now: never claim success without the token.
+        guard store.token == token else {
+            store.clear()
+            throw BackendError.server("Lotti couldn't save the device token in the Keychain. Remove this device in Lotti Brain's paired devices, then pair again.")
+        }
         applyConfiguration()
         backend.start()
     }
