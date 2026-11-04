@@ -208,6 +208,11 @@ final class ChatModel {
         }
     }
 
+    /// "Not now": drops the proposal from the chat. Nothing runs.
+    func dismiss(_ action: ProposedAction, in itemID: UUID) {
+        if let index = items.firstIndex(where: { $0.id == itemID }) { items[index].actions.removeAll { $0 == action } }
+    }
+
     /// Takes back what Lotti just did. The backend's text repeats its raw label ("Undone: Remove
     /// Milch again"), so success just says Undone.
     func undo(_ undo: UndoAction, in itemID: UUID? = nil) async {
