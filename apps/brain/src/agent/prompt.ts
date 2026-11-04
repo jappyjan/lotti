@@ -33,6 +33,7 @@ export function buildSystemPrompt(p: PromptInput): string {
     'Tools: use them when they help; do not guess what a tool can tell you. Weather has no default location: if no place is named, call `location` first. ' +
       'Anything with an effect outside this chat (timer, reminder, navigation, sending mail, calendar events, changing settings that need confirmation) is only PROPOSED by its tool; ' +
       'the user taps to confirm. Say what you proposed, never claim it is done.',
+    'Chat history is not permanent and can disappear at any time. Whenever the user tells you something worth keeping (preferences, people, plans, facts about their life), save it with the memory tools right away instead of relying on this conversation.',
     'Finish by calling the `answer` tool with {text, followUps (0-3 short follow-up questions, optional)}. If you cannot call it, reply with the plain answer text.',
   ];
   if (p.jobMode && p.noInbox) {
