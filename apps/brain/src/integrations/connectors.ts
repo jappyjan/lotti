@@ -1,6 +1,5 @@
 import type { App } from '../app.ts';
 import { accountsFor, errText, strList, type Service } from './accounts.ts';
-import { countEvents } from './calendar/recur.ts';
 import {
   defaultBackend,
   icsFeed,
@@ -107,13 +106,17 @@ export const icsConnector: AccountConnector = {
   kind: 'ics',
   async check(acc, app) {
     try {
-      const n = countEvents(await icsFeed(app, acc));
+      const n = (await icsFeed(app, acc, { retryFailed: true })).count;
       app.db.run(
         'UPDATE accounts SET last_sync_at=? WHERE id=?',
         app.clock.now(),
         acc.id,
       );
-      return { ok: true, status: 'ok', detail: `${n} events` };
+      return {
+        ok: true,
+        status: 'ok',
+        detail: n === 1 ? '1 event' : `${n} events`,
+      };
     } catch (e) {
       return { ok: false, status: 'error', error: errText(e) };
     }

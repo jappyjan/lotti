@@ -1,45 +1,29 @@
 import type { CalendarEvent } from '../index.ts';
-import { zonedToEpoch } from './ics.ts';
+import {
+  normalizeTz,
+  parseDuration,
+  type Props,
+  readEvents,
+  tzidParam,
+  unescapeText,
+  zonedToEpoch,
+} from './ics.ts';
 
 /**
  * Reads a whole iCalendar feed (an ICS subscription) and expands recurring events for a time window.
  * Supports RRULE FREQ=DAILY|WEEKLY|MONTHLY|YEARLY with INTERVAL, COUNT, UNTIL, WKST, BYDAY (with ordinals),
- * BYMONTHDAY, BYMONTH; EXDATE; RECURRENCE-ID overrides; TZID (IANA and the common Windows names);
+ * BYMONTHDAY, BYMONTH; EXDATE; RECURRENCE-ID overrides; TZID (IANA, Windows and Outlook display names);
  * floating, UTC and all-day values. Not supported: RDATE, BYSETPOS, BYWEEKNO/BYYEARDAY, sub-daily rules.
  */
 
 const DAY = 86_400_000;
-const MAX_OCCURRENCES = 20_000;
+/** Instances near the window one series may produce. */
+const MAX_NEAR = 20_000;
+/** Instances before the window one series may step through (only COUNT series do, to count). */
+const MAX_SKIPPED = 200_000;
 const MAX_PERIODS = 60_000;
 /** A feed cannot make one expansion return more than this many events. */
 const MAX_EVENTS = 5_000;
-
-const WINDOWS_ZONES: Record<string, string> = {
-  'W. Europe Standard Time': 'Europe/Berlin',
-  'Central Europe Standard Time': 'Europe/Budapest',
-  'Central European Standard Time': 'Europe/Warsaw',
-  'Romance Standard Time': 'Europe/Paris',
-  'GMT Standard Time': 'Europe/London',
-  'GTB Standard Time': 'Europe/Bucharest',
-  'E. Europe Standard Time': 'Europe/Chisinau',
-  'FLE Standard Time': 'Europe/Helsinki',
-  'Russian Standard Time': 'Europe/Moscow',
-  'Turkey Standard Time': 'Europe/Istanbul',
-  'Eastern Standard Time': 'America/New_York',
-  'Central Standard Time': 'America/Chicago',
-  'Mountain Standard Time': 'America/Denver',
-  'Pacific Standard Time': 'America/Los_Angeles',
-  'US Eastern Standard Time': 'America/Indianapolis',
-  'Alaskan Standard Time': 'America/Anchorage',
-  'India Standard Time': 'Asia/Kolkata',
-  'China Standard Time': 'Asia/Shanghai',
-  'Tokyo Standard Time': 'Asia/Tokyo',
-  'Singapore Standard Time': 'Asia/Singapore',
-  'AUS Eastern Standard Time': 'Australia/Sydney',
-  'New Zealand Standard Time': 'Pacific/Auckland',
-  'South Africa Standard Time': 'Africa/Johannesburg',
-  UTC: 'UTC',
-};
 
 /** Wall-clock fields plus the zone they are in. tz: IANA name, 'UTC', or undefined (floating = server local). */
 interface Dt {
@@ -71,8 +55,8 @@ function parseDt(
   if (!m) return undefined;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
   if (m[4] === undefined) return { y, mo, d, h: 0, mi: 0, s: 0, allDay: true };
-  const raw = /TZID=([^;:]+)/i.exec(params)?.[1]?.replace(/"/g, '');
-  const tz = m[7] ? 'UTC' : raw ? (WINDOWS_ZONES[raw] ?? raw) : fallbackTz;
+  const raw = tzidParam(params);
+  const tz = m[7] ? 'UTC' : raw ? normalizeTz(raw) : fallbackTz;
   return {
     y,
     mo,
@@ -85,35 +69,6 @@ function parseDt(
   };
 }
 
-const unescapeText = (s: string) =>
-  s.replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1');
-
-type Props = Record<string, { v: string; p: string }[]>;
-
-/** Every VEVENT of the feed as property lists (a property may repeat, e.g. EXDATE). */
-function readEvents(ics: string): Props[] {
-  const out: Props[] = [];
-  let cur: Props | undefined;
-  for (const line of ics.replace(/\r?\n[ \t]/g, '').split(/\r?\n/)) {
-    if (line === 'BEGIN:VEVENT') cur = {};
-    else if (line === 'END:VEVENT') {
-      if (cur) out.push(cur);
-      cur = undefined;
-    } else if (cur) {
-      const i = line.indexOf(':');
-      if (i < 0) continue;
-      const [name = '', ...params] = line.slice(0, i).split(';');
-      (cur[name.toUpperCase()] ??= []).push({
-        v: line.slice(i + 1),
-        p: params.join(';'),
-      });
-    }
-  }
-  return out;
-}
-
-export const countEvents = (ics: string): number => readEvents(ics).length;
-
 // ---- RRULE -----------------------------------------------------------------------------------------------
 
 const WD = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
@@ -122,7 +77,7 @@ interface Rule {
   freq: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
   interval: number;
   count?: number;
-  until?: Dt;
+  until?: string;
   byDay: { n: number; wd: number }[];
   byMonthDay: number[];
   byMonth: number[];
@@ -140,22 +95,26 @@ function parseRule(v: string): Rule | undefined {
     return undefined;
   // Parts we cannot evaluate: ignoring them would invent events, so the series is not expanded.
   if (kv.BYSETPOS || kv.BYWEEKNO || kv.BYYEARDAY) return undefined;
-  const nums = (s?: string) =>
-    (s ? s.split(',') : []).map(Number).filter((n) => Number.isInteger(n));
+  const nums = (s: string | undefined, ok: (n: number) => boolean) => [
+    ...new Set(
+      (s ? s.split(',') : [])
+        .map(Number)
+        .filter((n) => Number.isInteger(n) && ok(n)),
+    ),
+  ];
   const byDay = (kv.BYDAY ? kv.BYDAY.split(',') : []).flatMap((x) => {
     const m = /^([+-]?\d+)?(SU|MO|TU|WE|TH|FR|SA)$/.exec(x.trim());
     return m ? [{ n: m[1] ? Number(m[1]) : 0, wd: WD.indexOf(m[2]!) }] : [];
   });
-  const until = kv.UNTIL ? parseDt(kv.UNTIL, '') : undefined;
   const wkst = WD.indexOf(kv.WKST ?? 'MO');
   return {
     freq: kv.FREQ as Rule['freq'],
     interval: Math.max(1, Number(kv.INTERVAL ?? 1) || 1),
     ...(kv.COUNT ? { count: Number(kv.COUNT) } : {}),
-    ...(until ? { until } : {}),
+    ...(kv.UNTIL ? { until: kv.UNTIL } : {}),
     byDay,
-    byMonthDay: nums(kv.BYMONTHDAY),
-    byMonth: nums(kv.BYMONTH),
+    byMonthDay: nums(kv.BYMONTHDAY, (n) => n !== 0 && Math.abs(n) <= 31),
+    byMonth: nums(kv.BYMONTH, (n) => n >= 1 && n <= 12).sort((a, b) => a - b),
     wkst: wkst < 0 ? 1 : wkst,
   };
 }
@@ -170,106 +129,141 @@ const weekday = (n: number) => (((n + 4) % 7) + 7) % 7; // 1970-01-01 was a Thur
 const daysInMonth = (y: number, mo: number) =>
   new Date(Date.UTC(y, mo, 0)).getUTCDate();
 
-/** Days (day numbers) of one month selected by BYDAY (with ordinals) and BYMONTHDAY; `base` = the DTSTART day of month when neither is given. */
+/** Days `first`..`last` (day numbers) that fall on weekday `wd`: all of them (n = 0), the nth, or the nth from the end. */
+function weekdaysIn(
+  first: number,
+  last: number,
+  n: number,
+  wd: number,
+): number[] {
+  const a = first + ((wd - weekday(first) + 7) % 7);
+  if (n === 0) {
+    const all: number[] = [];
+    for (let d = a; d <= last; d += 7) all.push(d);
+    return all;
+  }
+  const d =
+    n > 0 ? a + 7 * (n - 1) : a + 7 * Math.floor((last - a) / 7) + 7 * (n + 1);
+  return d >= first && d <= last ? [d] : [];
+}
+
+/** Days (day numbers) of one month selected by BYDAY (with ordinals) and BYMONTHDAY; `baseDay` = the DTSTART day of month when neither is given. */
 function monthDays(y: number, mo: number, r: Rule, baseDay: number): number[] {
   const dim = daysInMonth(y, mo);
+  const d1 = dayNum(y, mo, 1);
   let days: number[] | undefined;
   if (r.byMonthDay.length)
     days = r.byMonthDay
       .map((d) => (d < 0 ? dim + d + 1 : d))
-      .filter((d) => d >= 1 && d <= dim);
+      .filter((d) => d >= 1 && d <= dim)
+      .map((d) => d1 + d - 1);
   if (r.byDay.length) {
     const sel = new Set<number>();
-    for (const { n, wd } of r.byDay) {
-      const all: number[] = [];
-      for (let d = 1; d <= dim; d++)
-        if (weekday(dayNum(y, mo, d)) === wd) all.push(d);
-      if (n === 0) all.forEach((d) => sel.add(d));
-      else {
-        const pick = n > 0 ? all[n - 1] : all[all.length + n];
-        if (pick !== undefined) sel.add(pick);
-      }
-    }
+    for (const { n, wd } of r.byDay)
+      for (const d of weekdaysIn(d1, d1 + dim - 1, n, wd)) sel.add(d);
     days = days ? days.filter((d) => sel.has(d)) : [...sel];
   }
-  if (!days) days = baseDay <= dim ? [baseDay] : [];
-  return days.sort((a, b) => a - b).map((d) => dayNum(y, mo, d));
+  if (!days) days = baseDay <= dim ? [d1 + baseDay - 1] : [];
+  return [...new Set(days)].sort((a, b) => a - b);
 }
 
-/** Start dates (wall clock) of a rule, lazily and in order. */
-function* ruleDays(start: Dt, r: Rule): Generator<number> {
+/**
+ * Start days (day numbers, wall clock) of a rule after DTSTART, lazily and in order. Starts at the period that
+ * holds `minDay` and stops once a period starts after `maxDay`.
+ */
+function* ruleDays(
+  start: Dt,
+  r: Rule,
+  minDay: number,
+  maxDay: number,
+): Generator<number> {
   const startDay = dayNum(start.y, start.mo, start.d);
   const monthOk = (n: number) =>
     !r.byMonth.length || r.byMonth.includes(fromDayNum(n).mo);
-  for (let k = 0; k < MAX_PERIODS; k++) {
+  const dayOk = (n: number) => {
+    if (!r.byMonthDay.length) return true;
+    const f = fromDayNum(n);
+    const dim = daysInMonth(f.y, f.mo);
+    return r.byMonthDay.some((d) => (d < 0 ? dim + d + 1 : d) === f.d);
+  };
+  const week0 = startDay - ((weekday(startDay) - r.wkst + 7) % 7);
+  const month0 = start.y * 12 + (start.mo - 1);
+  const skip = Math.max(0, minDay - startDay);
+  const min = fromDayNum(Math.max(minDay, startDay));
+  const k0 = !skip
+    ? 0
+    : r.freq === 'DAILY'
+      ? Math.floor(skip / r.interval)
+      : r.freq === 'WEEKLY'
+        ? Math.floor((minDay - week0) / (7 * r.interval))
+        : r.freq === 'MONTHLY'
+          ? Math.floor((min.y * 12 + min.mo - 1 - month0) / r.interval)
+          : Math.floor((min.y - start.y) / r.interval);
+  for (let k = Math.max(0, k0); k < k0 + MAX_PERIODS; k++) {
     let cands: number[] = [];
+    let periodStart: number;
     if (r.freq === 'DAILY') {
       const n = startDay + k * r.interval;
-      const f = fromDayNum(n);
-      const dim = daysInMonth(f.y, f.mo);
+      periodStart = n;
       if (
+        n <= maxDay &&
         monthOk(n) &&
-        (!r.byMonthDay.length ||
-          r.byMonthDay.some((d) => (d < 0 ? dim + d + 1 : d) === f.d)) &&
+        dayOk(n) &&
         (!r.byDay.length || r.byDay.some((b) => b.wd === weekday(n)))
       )
         cands = [n];
     } else if (r.freq === 'WEEKLY') {
-      const ws =
-        startDay - ((weekday(startDay) - r.wkst + 7) % 7) + k * 7 * r.interval;
+      const ws = week0 + k * 7 * r.interval;
+      periodStart = ws;
       const wds = r.byDay.length
         ? r.byDay.map((b) => b.wd)
         : [weekday(startDay)];
-      cands = [...Array(7).keys()]
-        .map((i) => ws + i)
-        .filter((n) => wds.includes(weekday(n)) && monthOk(n))
-        .filter((n) => {
-          if (!r.byMonthDay.length) return true;
-          const f = fromDayNum(n);
-          const dim = daysInMonth(f.y, f.mo);
-          return r.byMonthDay.some((d) => (d < 0 ? dim + d + 1 : d) === f.d);
-        });
+      for (let i = 0; i < 7; i++) {
+        const n = ws + i;
+        if (wds.includes(weekday(n)) && monthOk(n) && dayOk(n)) cands.push(n);
+      }
     } else if (r.freq === 'MONTHLY') {
-      const m0 = start.y * 12 + (start.mo - 1) + k * r.interval;
+      const m0 = month0 + k * r.interval;
       const y = Math.floor(m0 / 12);
       const mo = (m0 % 12) + 1;
-      if (!r.byMonth.length || r.byMonth.includes(mo))
+      periodStart = dayNum(y, mo, 1);
+      if (
+        Number.isFinite(periodStart) &&
+        (!r.byMonth.length || r.byMonth.includes(mo))
+      )
         cands = monthDays(y, mo, r, start.d);
     } else {
       const y = start.y + k * r.interval;
-      const months = r.byMonth.length
-        ? [...r.byMonth].sort((a, b) => a - b)
-        : [start.mo];
+      periodStart = dayNum(y, 1, 1);
+      if (!Number.isFinite(periodStart)) return;
       if (
         r.byDay.some((b) => b.n !== 0) &&
         !r.byMonth.length &&
         !r.byMonthDay.length
       ) {
         // Ordinal weekday of the whole year, e.g. 20th Monday.
-        for (const { n, wd } of r.byDay) {
-          const all: number[] = [];
-          for (let d = dayNum(y, 1, 1); d <= dayNum(y, 12, 31); d++)
-            if (weekday(d) === wd) all.push(d);
-          const pick =
-            n === 0 ? all : [n > 0 ? all[n - 1] : all[all.length + n]];
-          cands.push(...pick.filter((x): x is number => x !== undefined));
-        }
-        cands.sort((a, b) => a - b);
-      } else
+        const sel = new Set<number>();
+        for (const { n, wd } of r.byDay)
+          for (const d of weekdaysIn(periodStart, dayNum(y, 12, 31), n, wd))
+            sel.add(d);
+        cands = [...sel].sort((a, b) => a - b);
+      } else {
+        // BYMONTHDAY or BYDAY without BYMONTH: every month of the year.
+        const months = r.byMonth.length
+          ? r.byMonth
+          : r.byMonthDay.length || r.byDay.length
+            ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            : [start.mo];
         for (const mo of months) cands.push(...monthDays(y, mo, r, start.d));
+      }
     }
-    for (const n of cands) if (n >= startDay) yield n;
-    // Stop condition for runaway rules is the caller's (window end / COUNT / UNTIL / MAX_OCCURRENCES).
+    // Past the window (or beyond the calendar's range, e.g. a huge INTERVAL): nothing more to find.
+    if (!Number.isFinite(periodStart) || periodStart > maxDay) return;
+    for (const n of cands) if (n > startDay) yield n;
   }
 }
 
-// ---- expansion -----------------------------------------------------------------------------------------
-
-interface Instance {
-  start: number;
-  end: number;
-  allDay: boolean;
-}
+// ---- parsed feed ---------------------------------------------------------------------------------------
 
 type Span = { days: number } | { ms: number };
 function span(start: Dt, end: Dt | undefined, dur: number | undefined): Span {
@@ -287,12 +281,10 @@ function span(start: Dt, end: Dt | undefined, dur: number | undefined): Span {
   return { ms: ms >= 0 ? ms : 0 };
 }
 
-function parseDuration(d: string): number | undefined {
-  const m =
-    /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(d);
-  if (!m) return undefined;
-  const n = (i: number) => Number(m[i] ?? 0);
-  return ((n(1) * 7 + n(2)) * 86400 + n(3) * 3600 + n(4) * 60 + n(5)) * 1000;
+interface Instance {
+  start: number;
+  end: number;
+  allDay: boolean;
 }
 
 function instanceAt(start: Dt, sp: Span): Instance {
@@ -306,78 +298,83 @@ function instanceAt(start: Dt, sp: Span): Instance {
   return { start: s, end: s + sp.ms, allDay: false };
 }
 
+interface Text {
+  title: string;
+  location?: string;
+}
+interface Single extends Text, Instance {
+  id: string;
+}
+interface Series extends Text {
+  uid: string;
+  start: Dt;
+  sp: Span;
+  rule: Rule;
+  exdates: Set<number>;
+  /** Date-only UNTIL: the last day (wall clock of the event) that may hold an instance. */
+  untilDay?: number;
+  /** Date-time UNTIL: the latest instance start. */
+  untilMs?: number;
+}
+/** A feed parsed once (zone conversions done), ready to expand for any window. */
+export interface Feed {
+  singles: Single[];
+  series: Series[];
+  /** `uid|original start` of instances an override replaces or cancels. */
+  overrides: Set<string>;
+  /** VEVENTs in the feed. */
+  count: number;
+}
+
 const first = (p: Props, k: string) => p[k]?.[0];
 
-/** Events of an ICS feed that overlap [from, to), recurrences expanded, sorted by start. */
-export function expandEvents(
-  ics: string,
-  from: number,
-  to: number,
-  calendar?: string,
-): CalendarEvent[] {
+export function parseFeed(ics: string): Feed {
   const events = readEvents(ics);
-  const out: CalendarEvent[] = [];
-  const overrides = new Map<string, Props>();
-  const overrideList: Props[] = [];
+  const feed: Feed = {
+    singles: [],
+    series: [],
+    overrides: new Set(),
+    count: events.length,
+  };
   const tzOf = (p: Props) =>
     parseDt(first(p, 'DTSTART')?.v ?? '', first(p, 'DTSTART')?.p ?? '')?.tz;
-  for (const p of events) if (first(p, 'RECURRENCE-ID')) overrideList.push(p);
-  // Overrides first, so overrideList can skip the instance they replace.
   const masterTz = new Map<string, string | undefined>();
   for (const p of events)
     if (!first(p, 'RECURRENCE-ID') && first(p, 'UID'))
       masterTz.set(first(p, 'UID')!.v, tzOf(p));
-  for (const p of overrideList) {
-    const rid = first(p, 'RECURRENCE-ID')!;
-    const uid = first(p, 'UID')?.v ?? '';
-    const dt = parseDt(rid.v, rid.p, masterTz.get(uid));
-    if (dt) overrides.set(`${uid}|${toEpoch(dt)}`, p);
-  }
-
-  const emit = (p: Props, inst: Instance, id: string) => {
-    if (!Number.isFinite(inst.start) || !Number.isFinite(inst.end)) return;
-    if (out.length >= MAX_EVENTS) return;
-    if (inst.end <= from || inst.start >= to) return;
-    const loc = first(p, 'LOCATION')?.v;
-    out.push({
-      id,
-      title: unescapeText(first(p, 'SUMMARY')?.v ?? '(no title)'),
-      start: inst.start,
-      end: inst.end,
-      ...(loc ? { location: unescapeText(loc) } : {}),
-      ...(inst.allDay ? { allDay: true } : {}),
-      ...(calendar ? { calendar } : {}),
-    });
-  };
 
   for (const p of events) {
-    if (out.length >= MAX_EVENTS) break;
     const ds = first(p, 'DTSTART');
     const start = ds && parseDt(ds.v, ds.p);
     if (!ds || !start) continue;
     const uid = first(p, 'UID')?.v ?? `${toEpoch(start)}`;
     const de = first(p, 'DTEND') ?? first(p, 'DUE');
     const end = de ? parseDt(de.v, de.p, start.tz) : undefined;
-    const dur = first(p, 'DURATION')
-      ? parseDuration(first(p, 'DURATION')!.v)
-      : undefined;
-    const sp = span(start, end, dur);
+    const du = first(p, 'DURATION');
+    const sp = span(start, end, du ? parseDuration(du.v) : undefined);
+    const loc = first(p, 'LOCATION')?.v;
+    const text: Text = {
+      title: unescapeText(first(p, 'SUMMARY')?.v ?? '(no title)'),
+      ...(loc ? { location: unescapeText(loc) } : {}),
+    };
     const cancelled = first(p, 'STATUS')?.v.toUpperCase() === 'CANCELLED';
     const rid = first(p, 'RECURRENCE-ID');
     if (rid) {
+      const orig = toEpoch(parseDt(rid.v, rid.p, masterTz.get(uid)) ?? start);
+      feed.overrides.add(`${uid}|${orig}`);
       if (!cancelled)
-        emit(
-          p,
-          instanceAt(start, sp),
-          `${uid}#${toEpoch(parseDt(rid.v, rid.p, masterTz.get(uid)) ?? start)}`,
-        );
+        feed.singles.push({
+          ...text,
+          ...instanceAt(start, sp),
+          id: `${uid}#${orig}`,
+        });
       continue;
     }
     if (cancelled) continue;
     const rr = first(p, 'RRULE');
     const rule = rr && parseRule(rr.v);
     if (!rule) {
-      emit(p, instanceAt(start, sp), uid);
+      feed.singles.push({ ...text, ...instanceAt(start, sp), id: uid });
       continue;
     }
     const exdates = new Set<number>();
@@ -386,26 +383,99 @@ export function expandEvents(
         const dt = parseDt(v, x.p, start.tz);
         if (dt) exdates.add(toEpoch(dt));
       }
-    const until = rule.until
-      ? rule.until.allDay
-        ? toEpoch(rule.until) + DAY
-        : toEpoch(rule.until) + 1
-      : Infinity;
+    // A date-only UNTIL covers that whole day in the event's own zone (never the server's).
+    const until = rule.until ? parseDt(rule.until, '', start.tz) : undefined;
+    feed.series.push({
+      ...text,
+      uid,
+      start,
+      sp,
+      rule,
+      exdates,
+      ...(until?.allDay
+        ? { untilDay: dayNum(until.y, until.mo, until.d) }
+        : until
+          ? { untilMs: toEpoch(until) }
+          : {}),
+    });
+  }
+  return feed;
+}
+
+// ---- expansion -----------------------------------------------------------------------------------------
+
+/** Events of a parsed feed that overlap [from, to), recurrences expanded, sorted by start. */
+export function expandFeed(
+  feed: Feed,
+  from: number,
+  to: number,
+  calendar?: string,
+): CalendarEvent[] {
+  const out: CalendarEvent[] = [];
+  const emit = (x: Text, inst: Instance, id: string) => {
+    if (!Number.isFinite(inst.start) || !Number.isFinite(inst.end)) return;
+    if (out.length >= MAX_EVENTS) return;
+    if (inst.end <= from || inst.start >= to) return;
+    out.push({
+      id,
+      title: x.title,
+      start: inst.start,
+      end: inst.end,
+      ...(x.location ? { location: x.location } : {}),
+      ...(inst.allDay ? { allDay: true } : {}),
+      ...(calendar ? { calendar } : {}),
+    });
+  };
+  for (const s of feed.singles) emit(s, s, s.id);
+
+  // Wall-clock day numbers are within ±14 h of UTC days: compare days first, convert zones only near the window.
+  const fromDay = Math.floor(from / DAY);
+  const toDay = Math.floor(to / DAY) + 2;
+  for (const s of feed.series) {
+    if (out.length >= MAX_EVENTS) break;
+    const { rule, sp } = s;
+    const startDay = dayNum(s.start.y, s.start.mo, s.start.d);
+    const lowDay =
+      fromDay - ('days' in sp ? sp.days + 1 : Math.ceil(sp.ms / DAY)) - 2;
+    let maxDay = toDay;
+    if (s.untilDay !== undefined) maxDay = Math.min(maxDay, s.untilDay);
+    if (s.untilMs !== undefined)
+      maxDay = Math.min(maxDay, Math.floor(s.untilMs / DAY) + 2);
     let n = 0;
-    for (const day of ruleDays(start, rule)) {
-      const f = fromDayNum(day);
-      const occ: Dt = { ...start, ...f };
-      const inst = instanceAt(occ, sp);
-      // A date beyond the calendar's range (huge INTERVAL) ends the series.
-      if (!Number.isFinite(inst.start)) break;
-      if (inst.start >= until) break;
-      if (rule.count !== undefined && n >= rule.count) break;
-      if (++n > MAX_OCCURRENCES) break;
-      if (inst.start >= to) break;
-      if (exdates.has(inst.start) || overrides.has(`${uid}|${inst.start}`))
-        continue;
-      emit(p, inst, `${uid}#${inst.start}`);
-    }
+    let skipped = 0;
+    let near = 0;
+    /** One instance of the series; false = the series ends here. */
+    const visit = (day: number): boolean => {
+      if (rule.count !== undefined && n >= rule.count) return false;
+      if (day > maxDay) return false;
+      n++;
+      if (day < lowDay) return ++skipped <= MAX_SKIPPED;
+      if (++near > MAX_NEAR) return false;
+      const inst = instanceAt({ ...s.start, ...fromDayNum(day) }, sp);
+      if (!Number.isFinite(inst.start)) return false;
+      if (s.untilMs !== undefined && inst.start > s.untilMs) return false;
+      if (inst.start >= to) return false;
+      if (
+        !s.exdates.has(inst.start) &&
+        !feed.overrides.has(`${s.uid}|${inst.start}`)
+      )
+        emit(s, inst, `${s.uid}#${inst.start}`);
+      return true;
+    };
+    // DTSTART is always the first instance (and counts toward COUNT), even if the rule would not pick it.
+    if (!visit(startDay)) continue;
+    // Without COUNT nothing before the window matters: the rule starts at the window.
+    const minDay = rule.count === undefined ? lowDay : startDay;
+    for (const day of ruleDays(s.start, rule, minDay, maxDay))
+      if (!visit(day)) break;
   }
   return out.sort((a, b) => a.start - b.start);
 }
+
+/** Events of an ICS feed that overlap [from, to), recurrences expanded, sorted by start. */
+export const expandEvents = (
+  ics: string,
+  from: number,
+  to: number,
+  calendar?: string,
+): CalendarEvent[] => expandFeed(parseFeed(ics), from, to, calendar);

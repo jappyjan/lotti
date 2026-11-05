@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { makeApp } from '../testing/helpers.ts';
+import { parseEvents, zonedToEpoch } from './calendar/ics.ts';
 import { expandEvents } from './calendar/recur.ts';
+import { defaultBackend, MergedCalendar } from './calendar/source.ts';
 import { registerIntegrations } from './register.ts';
 import { mockFetch } from './testing.ts';
 
@@ -254,6 +256,7 @@ test('rrule: all-day events, multi-day spans and yearly', () => {
   );
   assert.equal(r.length, 3);
   assert.ok(r.every((e) => e.allDay === true));
+  assert.equal(r[0]!.start, new Date(2026, 11, 24).getTime()); // local midnight
   assert.equal(new Date(r[1]!.start).getFullYear(), 2027);
   assert.equal(new Date(r[0]!.end).getDate(), 27);
   const in26 = expandEvents(
@@ -280,14 +283,15 @@ test('plain events: window filter, cancelled ones are dropped', () => {
     ),
     ev('UID:3', 'DTSTART:20261104T090000Z', 'STATUS:CANCELLED', 'SUMMARY:Gone'),
   );
+  const r = expandEvents(
+    ics,
+    ...range('2026-11-01T00:00:00Z', '2026-11-30T00:00:00Z'),
+  );
   assert.deepEqual(
-    expandEvents(
-      ics,
-      ...range('2026-11-01T00:00:00Z', '2026-11-30T00:00:00Z'),
-    ).map((e) => e.title),
+    r.map((e) => e.title),
     ['In'],
   );
-  assert.deepEqual(starts([]), []);
+  assert.deepEqual(starts(r), [Date.UTC(2026, 10, 3, 9)]);
 });
 
 // ---- account kind ics ----------------------------------------------------------------------------------------
@@ -310,8 +314,12 @@ const FEED = cal(
   ),
 );
 
-async function icsApp(res?: () => Response | unknown) {
+async function icsApp(
+  res?: () => Response | unknown,
+  extra: Parameters<typeof mockFetch>[0] = [],
+) {
   const m = mockFetch([
+    ...extra,
     {
       m: 'GET',
       u: 'outlook.office365.com',
@@ -402,7 +410,10 @@ test('ics account: failing feed does not hide other calendars; errors never cont
     Date.parse('2026-11-03T00:00:00Z'),
     Date.parse('2026-11-06T00:00:00Z'),
   );
-  assert.ok(ev.length > 0);
+  assert.deepEqual(
+    ev.map((e) => e.title),
+    ['Standup', 'Standup', 'Lunch', 'Standup'],
+  );
   const rows = JSON.stringify((await bad.op('accounts.list', {})).result);
   assert.ok(!rows.includes('SECRET'));
   const failed = (await bad.op('accounts.list', {})).result.find(
@@ -548,4 +559,490 @@ test('ics account: events carry no delete ref and a hand-made one is refused', a
   assert.equal(r.ok, false);
   assert.match(r.text, /read-only/);
   assert.match((await cal.deletable(`${id}|ics|m2`)).text, /read-only/);
+});
+
+// ---- review fixes ---------------------------------------------------------------------------------------------
+
+const iso = (r: ReturnType<typeof expandEvents>) =>
+  r.map((e) => new Date(e.start).toISOString().slice(0, 16));
+
+test('rrule: a daily series started in 1970 still shows every day of a window in 2026', () => {
+  const [from, to] = range('2026-11-05T00:00:00Z', '2026-12-05T00:00:00Z');
+  const t0 = performance.now();
+  const r = expandEvents(
+    cal(
+      ev('UID:o', 'SUMMARY:T', 'DTSTART:19700101T090000Z', 'RRULE:FREQ=DAILY'),
+    ),
+    from,
+    to,
+  );
+  assert.equal(r.length, 30);
+  assert.equal(r[0]!.start, Date.UTC(2026, 10, 5, 9));
+  assert.ok(performance.now() - t0 < 200);
+});
+
+test('rrule: an impossible rule returns quickly with no events', () => {
+  const [from, to] = range('2026-11-05T00:00:00Z', '2026-12-05T00:00:00Z');
+  const t0 = performance.now();
+  const r = expandEvents(
+    cal(
+      ev(
+        'UID:x',
+        'SUMMARY:T',
+        'DTSTART:20200106T090000Z',
+        'RRULE:FREQ=YEARLY;BYDAY=60MO',
+      ),
+    ),
+    from,
+    to,
+  );
+  assert.deepEqual(r, []);
+  assert.ok(performance.now() - t0 < 150, `${performance.now() - t0} ms`);
+});
+
+test('rrule: a date-only UNTIL ends on that day in the event zone, whatever the server zone', () => {
+  // 22:00 New York is 03:00 UTC the next day: still on the UNTIL day for the event.
+  const r = expandEvents(
+    cal(
+      ev(
+        'UID:ny',
+        'SUMMARY:NY',
+        'DTSTART;TZID=America/New_York:20261101T220000',
+        'DTEND;TZID=America/New_York:20261101T230000',
+        'RRULE:FREQ=DAILY;UNTIL=20261103',
+      ),
+    ),
+    ...range('2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'),
+  );
+  assert.deepEqual(iso(r), [
+    '2026-11-02T03:00',
+    '2026-11-03T03:00',
+    '2026-11-04T03:00',
+  ]);
+});
+
+test('rrule: EXDATE and RECURRENCE-ID with TZID on a TZID series', () => {
+  const ics = cal(
+    ev(
+      'UID:b',
+      'DTSTART;TZID=Europe/Berlin:20261102T090000',
+      'DTEND;TZID=Europe/Berlin:20261102T100000',
+      'RRULE:FREQ=DAILY;COUNT=4',
+      'EXDATE;TZID=Europe/Berlin:20261103T090000',
+      'SUMMARY:Daily',
+    ),
+    ev(
+      'UID:b',
+      'RECURRENCE-ID;TZID=Europe/Berlin:20261104T090000',
+      'DTSTART;TZID=Europe/Berlin:20261104T150000',
+      'DTEND;TZID=Europe/Berlin:20261104T160000',
+      'SUMMARY:Daily (moved)',
+    ),
+  );
+  const r = expandEvents(
+    ics,
+    ...range('2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'),
+  );
+  assert.deepEqual(
+    r.map((e) => [new Date(e.start).toISOString().slice(0, 16), e.title]),
+    [
+      ['2026-11-02T08:00', 'Daily'],
+      ['2026-11-04T14:00', 'Daily (moved)'],
+      ['2026-11-05T08:00', 'Daily'],
+    ],
+  );
+});
+
+test('rrule: an occurrence moved into the window shows, one moved out of it does not', () => {
+  const ics = cal(
+    ev(
+      'UID:w',
+      'DTSTART:20261102T090000Z',
+      'DTEND:20261102T100000Z',
+      'RRULE:FREQ=WEEKLY',
+      'SUMMARY:Weekly',
+    ),
+    ev(
+      'UID:w',
+      'RECURRENCE-ID:20261109T090000Z',
+      'DTSTART:20261111T100000Z',
+      'DTEND:20261111T110000Z',
+      'SUMMARY:Moved in',
+    ),
+    ev(
+      'UID:w',
+      'RECURRENCE-ID:20261116T090000Z',
+      'DTSTART:20261120T100000Z',
+      'DTEND:20261120T110000Z',
+      'SUMMARY:Moved out',
+    ),
+  );
+  const r = expandEvents(
+    ics,
+    ...range('2026-11-10T00:00:00Z', '2026-11-17T00:00:00Z'),
+  );
+  assert.deepEqual(
+    r.map((e) => [new Date(e.start).toISOString().slice(0, 16), e.title]),
+    [['2026-11-11T10:00', 'Moved in']],
+  );
+});
+
+test('rrule: YEARLY with BYMONTH and an ordinal BYDAY', () => {
+  const r = expandEvents(
+    cal(
+      ev(
+        'UID:y',
+        'SUMMARY:Y',
+        'DTSTART:20261101T100000Z',
+        'RRULE:FREQ=YEARLY;BYMONTH=3,11;BYDAY=1SU',
+      ),
+    ),
+    ...range('2026-10-01T00:00:00Z', '2028-01-01T00:00:00Z'),
+  );
+  assert.deepEqual(iso(r), [
+    '2026-11-01T10:00',
+    '2027-03-07T10:00',
+    '2027-11-07T10:00',
+  ]);
+});
+
+test('rrule: YEARLY BYMONTHDAY / BYDAY without BYMONTH cover every month', () => {
+  const one = (start: string, rule: string, a: string, b: string) =>
+    iso(
+      expandEvents(
+        cal(ev('UID:y', 'SUMMARY:Y', `DTSTART:${start}`, rule)),
+        ...range(a, b),
+      ),
+    );
+  assert.equal(
+    one(
+      '20260101T090000Z',
+      'RRULE:FREQ=YEARLY;BYMONTHDAY=1',
+      '2026-01-01T00:00:00Z',
+      '2027-01-01T00:00:00Z',
+    ).length,
+    12,
+  );
+  const mondays = one(
+    '20261102T090000Z',
+    'RRULE:FREQ=YEARLY;BYDAY=MO',
+    '2026-11-01T00:00:00Z',
+    '2026-12-01T00:00:00Z',
+  );
+  assert.deepEqual(mondays, [
+    '2026-11-02T09:00',
+    '2026-11-09T09:00',
+    '2026-11-16T09:00',
+    '2026-11-23T09:00',
+    '2026-11-30T09:00',
+  ]);
+  // Ordinal without BYMONTH: the nth weekday of the year.
+  assert.deepEqual(
+    one(
+      '20270104T090000Z',
+      'RRULE:FREQ=YEARLY;BYDAY=1MO',
+      '2027-01-01T00:00:00Z',
+      '2029-01-01T00:00:00Z',
+    ),
+    ['2027-01-04T09:00', '2028-01-03T09:00'],
+  );
+});
+
+test('rrule: DTSTART is always the first instance and counts toward COUNT', () => {
+  const one = (start: string, rule: string) =>
+    iso(
+      expandEvents(
+        cal(ev('UID:d', 'SUMMARY:D', `DTSTART:${start}`, rule)),
+        ...range('2026-11-01T00:00:00Z', '2026-12-31T00:00:00Z'),
+      ),
+    );
+  // Tue 3 Nov does not match BYDAY=MO: still the first of the two.
+  assert.deepEqual(
+    one('20261103T090000Z', 'RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=2'),
+    ['2026-11-03T09:00', '2026-11-09T09:00'],
+  );
+  assert.deepEqual(
+    one('20261104T090000Z', 'RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=2'),
+    ['2026-11-04T09:00', '2026-11-09T09:00'],
+  );
+});
+
+test('rrule: a VALARM inside the event does not change its SUMMARY or UID', () => {
+  const ics = cal(
+    ev(
+      'BEGIN:VALARM',
+      'ACTION:DISPLAY',
+      'UID:alarm-uid',
+      'SUMMARY:Alarm',
+      'DESCRIPTION:Reminder',
+      'TRIGGER:-PT15M',
+      'END:VALARM',
+      'UID:real',
+      'SUMMARY:Real',
+      'DTSTART:20261105T100000Z',
+      'DTEND:20261105T110000Z',
+    ),
+  );
+  const r = expandEvents(
+    ics,
+    ...range('2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'),
+  );
+  assert.deepEqual(
+    r.map((e) => [e.id, e.title]),
+    [['real', 'Real']],
+  );
+});
+
+test('tz: Outlook quoted TZID with a colon, Windows names for CalDAV too', () => {
+  const outlook = cal(
+    ev(
+      'UID:o',
+      'SUMMARY:Outlook',
+      'DTSTART;TZID="(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna":20261105T100000',
+      'DTEND;TZID="(UTC+01:00) Amsterdam, Berlin, Bern, Rome, Stockholm, Vienna":20261105T110000',
+    ),
+  );
+  const r = expandEvents(
+    outlook,
+    ...range('2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'),
+  );
+  assert.deepEqual(iso(r), ['2026-11-05T09:00']);
+  assert.equal(r[0]!.end - r[0]!.start, 3_600_000);
+  assert.equal(parseEvents(outlook)[0]!.start, Date.UTC(2026, 10, 5, 9));
+  // CalDAV (parseEvents) with a Windows zone name.
+  const win = parseEvents(
+    cal(
+      ev(
+        'UID:w',
+        'SUMMARY:Win',
+        'DTSTART;TZID=W. Europe Standard Time:20261105T100000',
+      ),
+    ),
+  );
+  assert.equal(win[0]!.start, Date.UTC(2026, 10, 5, 9));
+});
+
+test('tz: wall-clock times on DST-change days', () => {
+  // Berlin switches at 02:00 on 28 Mar 2027: 01:30 is still CET (UTC+1).
+  assert.equal(
+    zonedToEpoch(2027, 3, 28, 1, 30, 0, 'Europe/Berlin'),
+    Date.UTC(2027, 2, 28, 0, 30),
+  );
+  // New York switches at 02:00 on 14 Mar 2027: 03:30 is EDT (UTC-4).
+  assert.equal(
+    zonedToEpoch(2027, 3, 14, 3, 30, 0, 'America/New_York'),
+    Date.UTC(2027, 2, 14, 7, 30),
+  );
+  const weekly = (tz: string, start: string) =>
+    iso(
+      expandEvents(
+        cal(
+          ev(
+            'UID:d',
+            'SUMMARY:D',
+            `DTSTART;TZID=${tz}:${start}`,
+            'RRULE:FREQ=WEEKLY;COUNT=2',
+          ),
+        ),
+        ...range('2027-03-01T00:00:00Z', '2027-04-01T00:00:00Z'),
+      ),
+    );
+  assert.deepEqual(weekly('Europe/Berlin', '20270321T013000'), [
+    '2027-03-21T00:30',
+    '2027-03-28T00:30',
+  ]);
+  assert.deepEqual(weekly('America/New_York', '20270307T033000'), [
+    '2027-03-07T08:30',
+    '2027-03-14T07:30',
+  ]);
+});
+
+test('ics account: plain http is refused (loopback allowed), so is a redirect to http', async () => {
+  const { op, id, m } = await icsApp(
+    () =>
+      new Response(null, {
+        status: 302,
+        headers: { location: 'http://evil.example/cal.ics?k=SECRET' },
+      }),
+    [
+      { u: 'localhost', res: () => new Response(FEED) },
+      { u: 'evil.example', res: () => new Response(FEED) },
+    ],
+  );
+  await op('accounts.set_credential', {
+    id,
+    key: 'url',
+    value: 'http://cal.example/x.ics?k=SECRET',
+  });
+  const plain = (await op('accounts.check', { id })).result;
+  assert.equal(plain.ok, false);
+  assert.match(plain.error, /https/);
+  assert.ok(!plain.error.includes('SECRET'), plain.error);
+  assert.equal(m.seen.length, 0);
+
+  await op('accounts.set_credential', {
+    id,
+    key: 'url',
+    value: 'http://localhost:8080/cal.ics',
+  });
+  const local = (await op('accounts.check', { id })).result;
+  assert.deepEqual([local.ok, local.detail], [true, '2 events']);
+
+  await op('accounts.set_credential', { id, key: 'url', value: SECRET });
+  const redir = (await op('accounts.check', { id })).result;
+  assert.equal(redir.ok, false);
+  assert.match(redir.error, /http/);
+  assert.ok(!/evil|SECRET/.test(redir.error), redir.error);
+  // The plain-http address is never requested, so the secret never travels unencrypted.
+  assert.ok(!m.seen.some((s) => s.url.includes('evil.example')));
+});
+
+test('ics account: an https redirect is followed', async () => {
+  const { op, id } = await icsApp(undefined, [
+    {
+      u: 'calendar.example/old',
+      res: () =>
+        new Response(null, {
+          status: 301,
+          headers: { location: 'https://outlook.office365.com/new.ics' },
+        }),
+    },
+  ]);
+  await op('accounts.set_credential', {
+    id,
+    key: 'url',
+    value: 'https://calendar.example/old.ics',
+  });
+  const r = (await op('accounts.check', { id })).result;
+  assert.equal(r.ok, true, r.error);
+});
+
+test('ics account: check says "1 event"', async () => {
+  const { op, id } = await icsApp(
+    () =>
+      new Response(cal(ev('UID:1', 'SUMMARY:One', 'DTSTART:20261105T100000Z'))),
+  );
+  await op('accounts.set_credential', { id, key: 'url', value: SECRET });
+  assert.equal((await op('accounts.check', { id })).result.detail, '1 event');
+});
+
+test('ics account: concurrent queries share one fetch; a failure is cached for 2 minutes', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const ok = await icsApp(async () => {
+    await gate;
+    return new Response(FEED);
+  });
+  await ok.op('accounts.set_credential', {
+    id: ok.id,
+    key: 'url',
+    value: SECRET,
+  });
+  const from = Date.parse('2026-11-03T00:00:00Z');
+  const c = ok.t.app.integrations.calendar!;
+  const a = c.events(from, from + 86_400_000);
+  const b = c.events(from, from + 86_400_000);
+  await new Promise((r) => setImmediate(r));
+  release();
+  const [ra, rb] = await Promise.all([a, b]);
+  assert.equal(ok.m.seen.length, 1);
+  assert.equal(ra.length, 1);
+  assert.deepEqual(ra, rb);
+
+  const bad = await icsApp(() => new Response('x', { status: 500 }));
+  await bad.op('accounts.set_credential', {
+    id: bad.id,
+    key: 'url',
+    value: SECRET,
+  });
+  const bc = bad.t.app.integrations.calendar!;
+  await assert.rejects(bc.events(from, from + 86_400_000), /HTTP 500/);
+  await assert.rejects(bc.events(from, from + 86_400_000), /HTTP 500/);
+  assert.equal(bad.m.seen.length, 1);
+  bad.t.clock.advance(3 * 60_000);
+  await assert.rejects(bc.events(from, from + 86_400_000), /HTTP 500/);
+  assert.equal(bad.m.seen.length, 2);
+  // An explicit check tries again at once.
+  await bad.op('accounts.check', { id: bad.id });
+  assert.equal(bad.m.seen.length, 3);
+});
+
+test('calendar: one slow account does not delay the others (queried in parallel, order kept)', async () => {
+  const t = makeApp();
+  registerIntegrations(t.app);
+  const op = async (n: string, i: unknown) =>
+    (await t.app.ops.invoke(n, i, 'app')) as any;
+  const a = (await op('accounts.add', { kind: 'ics', label: 'A' })).result.id;
+  const b = (await op('accounts.add', { kind: 'ics', label: 'B' })).result.id;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  const started: string[] = [];
+  const merged = new MergedCalendar(t.app, (_app, acc) => ({
+    ...defaultBackend(t.app, acc),
+    async events() {
+      started.push(acc.label);
+      if (acc.id === a) await gate;
+      return [
+        {
+          id: acc.id,
+          title: 'Same',
+          start: Date.UTC(2026, 10, 5, 9),
+          end: Date.UTC(2026, 10, 5, 10),
+        },
+      ];
+    },
+  }));
+  const p = merged.events(Date.UTC(2026, 10, 5), Date.UTC(2026, 10, 6));
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(started, ['A', 'B']);
+  release();
+  // Same title + start in both: dedupe keeps the first account's.
+  assert.deepEqual(
+    (await p).map((e) => e.id),
+    [a],
+  );
+  void b;
+});
+
+test('calendar: writeDefault on an ics account is ignored; create goes to the real calendar', async () => {
+  const t = makeApp();
+  registerIntegrations(t.app);
+  const op = async (n: string, i: unknown) =>
+    (await t.app.ops.invoke(n, i, 'app')) as any;
+  // The ics account comes first and claims writeDefault.
+  const ics = (
+    await op('accounts.add', {
+      kind: 'ics',
+      label: 'Work',
+      config: { writeDefault: true },
+    })
+  ).result.id;
+  const dav = (
+    await op('accounts.add', {
+      kind: 'caldav',
+      label: 'Nextcloud',
+      config: { url: 'https://caldav.example/', username: 'jan' },
+    })
+  ).result.id;
+  const created: string[] = [];
+  const merged = new MergedCalendar(t.app, (app, acc) =>
+    acc.kind === 'ics'
+      ? defaultBackend(app, acc)
+      : {
+          ...defaultBackend(app, acc),
+          async create() {
+            created.push(acc.id);
+            return 'new';
+          },
+        },
+  );
+  const r = await merged.createEvent({
+    title: 'x',
+    start: '2026-11-05T10:00:00Z',
+    end: '2026-11-05T11:00:00Z',
+  });
+  assert.equal(r.ok, true, r.text);
+  assert.deepEqual(created, [dav]);
+  assert.match(r.text, /Nextcloud/);
+  void ics;
 });
