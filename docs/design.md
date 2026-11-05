@@ -15,10 +15,10 @@ Status: agreed direction after four prototype rounds. This describes the experie
 The glasses show a 576×288 green, see-through display. Black is invisible; only lit pixels are seen.
 
 - **Light means attention.** The display stays dark unless something is worth seeing.
-- **Two text sizes.** Regular for everything; big only for numbers read at a glance (time, distance).
+- **Two text sizes.** Regular for everything; big only for numbers read at a glance (time, distance). The firmware font has one size, so big numbers are drawn as pictures (the clock on the look-up view).
 - **Brightness sets importance.** Bright = new or highlighted; dim = context.
 - **Three things max:** what Lotti says (one or two sentences), optional context, and your choices.
-- **Text first.** Pictures only where they beat words: Lotti's raccoon mask and maps.
+- **Text first, pictures where they beat words:** Lotti's raccoon mask, maps, and small line icons that are read faster than a word — weather, a timer dial that empties as time runs out, the calendar, a bell for a ringing timer, a check for "done", a labelled bar for each day's low to high. One weight (2 px lines), 32 px, drawn as 1-bit images (`LensArt`).
 - **Calm.** Screens change in place. Nothing slides, blinks or bounces.
 - **Hints fade away.** Gesture hints show while you're learning, then disappear.
 
@@ -45,7 +45,7 @@ The glasses show a 576×288 green, see-through display. Black is invisible; only
 
 In use the choices on the right were too small and too short: the rail got 176 of 576 px, about 13 characters a line, so a real suggestion ("Running late, order me a margherita") arrived as two clipped words.
 
-**Decided 2026-11-01 by wearing all three built variants: choices below the sentence** — the sentence gets the full 576 px, the choices sit in one block underneath, one per line, highlighted as today. Costs 3–4 of the 10 lines, so it only works with short sentences. A wider rail (240 px, three choices) is still switchable on the phone (Debug → Display layout) and might return once popups exist.
+**Decided 2026-11-01 by wearing all three built variants: choices below the sentence** — the sentence gets the full 576 px, the choices sit in one block underneath, one per line, highlighted as today. Costs 3–4 of the 10 lines, so it only works with short sentences. The side rail and the wider rail are removed: choices below is the only layout.
 
 **Preferred long-term: choices in a popup on the second display layer** — the sentence alone on the content layer; the choices appear on the layer above on a scroll or tap and vanish when you pick one. This is how the Even app does it: two layers, content below, popups above. The menu widget's content command is mapped (`g2.menu` `APP_SEND_MENU_INFO`, selectable items, picks back over EvenHub Cmd 0x15), but the menu is opened by the firmware, not the app — there is no known app-side "open popup" command. A live BLE capture with the Even app is the next step to find one (see [apk-recon](spikes/apk-recon.md), [D12](architecture.md#decisions)). "Two steps" (best guess + "More" → full list on the popup layer) rides along.
 
@@ -55,7 +55,7 @@ The same on the R1 ring and both temple touchpads.
 
 | Gesture           | Meaning everywhere                                                                                                                                                                            |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Scroll / swipe    | Move the highlight in the rail; in a list, move between items                                                                                                                                 |
+| Scroll / swipe    | Move the highlight in the choices; in a list, move between items                                                                                                                              |
 | Tap               | Do the highlighted thing. On its own (display off) it does nothing                                                                                                                            |
 | Double tap        | Back or dismiss. With the display off: the today view                                                                                                                                         |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
@@ -74,7 +74,7 @@ Often you can't speak: in a meeting, on a full train, somewhere loud. Voice is a
 Not planned yet (see roadmap, Later): iOS only allows full control of Apple Music and Spotify, and play/pause for other apps.
 
 - **Now playing** is a quiet line in the look-up view while something plays.
-- Actions → **Media** opens a Card: title and artist, with Play/Pause, Next, Previous and Volume in the rail. On Volume, scroll changes the volume.
+- Actions → **Media** opens a Card: title and artist, with Play/Pause, Next, Previous and Volume as its choices. On Volume, scroll changes the volume.
 - Voice works too ("pause", "next song"), but it's never needed.
 
 ## How loud a screen is
@@ -93,11 +93,11 @@ Lotti composes every screen from these. Layout always comes from the design lang
 
 | Block          | What it shows                                                                                     |
 | -------------- | ------------------------------------------------------------------------------------------------- |
-| **Lotti says** | Her sentence, optionally with choices in the rail. Summaries, answers, suggestions                |
-| **Proposal**   | Exactly what Lotti wants to do ("I'll tell Mara: …"), with **Send / Change / Cancel** in the rail |
+| **Lotti says** | Her sentence, optionally with choices below it. Summaries, answers, suggestions                   |
+| **Proposal**   | Exactly what Lotti wants to do ("I'll tell Mara: …"), with **Send / Change / Cancel** as choices  |
 | **Original**   | The source word for word: a message, a mail, a notification                                       |
 | **List**       | Pick one of many: places, people, the rest of today. One line each                                |
-| **Reading**    | A longer answer, page by page ("Read on" in the rail)                                             |
+| **Reading**    | A longer answer, page by page ("Read on" as a choice)                                             |
 | **Working**    | Lotti is on it, and says what she's doing ("Sniffing around… checking the BVG"). Double tap stops |
 | **Listening**  | Your words appearing as you speak, while you hold                                                 |
 | **Card**       | A few facts at a glance (label + value), optionally one big number                                |
@@ -111,13 +111,13 @@ Every screen also has: how loud it is, how long it stays, and which choice is Lo
 
 1. The glasses tell us they're being worn. The IMU is already read for head-up, so the signal exists.
 2. Lotti greets with one sentence: what happened while they were off, and what's next ("Two things: Mara asked about 8, and the dentist is in 40 min. Rain later.").
-3. Choices only when they help: the first thing, or Navigate. Otherwise no rail.
+3. Choices only when they help: the first thing, or Navigate. Otherwise no choices.
 4. Nothing happened and nothing is due: no greeting, the display stays dark.
 
 **A message comes in**
 
 1. Lotti decides: quiet, normal or urgent. Most things stay quiet.
-2. If shown: one sentence in Lotti's voice, choices in the rail (likely replies + "Original").
+2. If shown: one sentence in Lotti's voice, choices below it (likely replies + "Original").
 3. Several things at once become one summary, with the one that needs you first ("3 new: … Mara first?").
 
 **You reply**
@@ -132,6 +132,27 @@ Always as a question with choices ("Ben moved your 15:00 to 15:30. Push your 15:
 ## Look-up view
 
 What you see when you look up: **one thing**. Lotti picks the single most useful sentence right now.
+
+```
+┌───────────────────────────────────────────────┐
+│ Thu 5 Nov                               14:05 │ header: date, clock
+│ Dentist in 25 min.                            │ the one thing
+│                                               │
+│ +2 more today                                 │
+│ Pasta                 9° cloudy               │ cards: running timers,
+│ 4 min left            6° / 11°                │ weather, what's later
+│ Rings 14:09           Rain from 18:00         │
+│ > Agenda                                      │ choices, as many lines
+│   Weather                                     │ as there are
+└───────────────────────────────────────────────┘
+```
+
+- **Header:** date on the left, time on the right.
+- **Cards** under the sentence, two side by side: running timers first, then the weather, then what's later today if there's room. They update when the minute changes.
+- **Choices** at the bottom, one line each; on this view the block is only as tall as its choices, so the cards get the room.
+- **Weather** opens the forecast: today's weather in a sentence, then a column per day for five days: the icon, a bar for the day's range on the scale of the whole week with the low at its left end and the high at its right, and the chance of rain from 20 %. Temperatures always read low to high ("6° / 11°").
+- **A ringing timer** takes over the display ("Time's up: Pasta", choice: Stop). Tap or double tap stops it on the phone too, then you're back where you were. It waits while you talk or Lotti thinks.
+- Each block is its own text container, each picture its own image container (at most 8 text and 12 containers in all per page; image containers are unconfirmed on hardware, like the indicators).
 
 - **Something matters:** "Leave in 8 min for pizza at Mara's. Rain at 21:00, take the umbrella." Time and "2 more" in dim text below.
 - **Nothing matters:** "All quiet. Nothing needs you." Time, date, temperature below.

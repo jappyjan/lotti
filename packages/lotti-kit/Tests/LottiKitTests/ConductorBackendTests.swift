@@ -77,7 +77,10 @@ struct ConductorBackendTests {
         try await fill(Self.mail1)
         try await eventually { attention != nil }
         press(.doubleTap)
-        try await eventually { link.frames.last?.images.isEmpty == true && link.frames.last?.isDark == false }
+        // The today view has its own pictures (the clock, card icons), but no attention mark.
+        try await eventually {
+            link.frames.last?.images.contains { $0.id == G2ImageBox.attentionID } == false && link.frames.last?.isDark == false
+        }
         press(.doubleTap)
         try await eventually { attention != nil && link.frames.last?.isDark == true }
     }

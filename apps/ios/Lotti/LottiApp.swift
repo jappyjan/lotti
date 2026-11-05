@@ -52,8 +52,8 @@ struct LottiApp: App {
         backend.allowedTools = ["location", "reminders"]
         let microphone = PhoneMicrophone()
         let conductor = Conductor(link: link, brain: offline, remote: BackendBrain(client: backend, channel: .glasses), backend: backend,
-                                  toolbox: toolbox, speech: speech, phoneMicrophone: microphone, today: today)
-        conductor.setDisplayStyle(Settings.displayStyle)
+                                  toolbox: toolbox, timers: AlarmTimers(), speech: speech, phoneMicrophone: microphone,
+                                  today: today)
         let model = AppModel(link: link, conductor: conductor, backend: backend, deviceName: UIDevice.current.name,
                              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1")
         let chat = ChatModel(backend: backend, offline: offline, toolbox: toolbox, speech: speech, microphone: microphone)
@@ -123,15 +123,6 @@ enum Settings {
 
     static let speechLanguageKey = "speechLanguage"
     static let languages = [("de-DE", "Deutsch"), ("en-US", "English")]
-
-    static let displayStyleKey = "displayStyle"
-
-    /// The layout variant for the choices on the glasses (Debug → Display layout).
-    /// Defaults to the judged winner, choices below the sentence.
-    static var displayStyle: DisplayStyle {
-        get { UserDefaults.standard.string(forKey: displayStyleKey).flatMap(DisplayStyle.init(rawValue:)) ?? .choicesBelow }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: displayStyleKey) }
-    }
 
     /// The language you speak to Lotti in. Defaults to the phone's language if it's German.
     static var speechLanguage: String {
