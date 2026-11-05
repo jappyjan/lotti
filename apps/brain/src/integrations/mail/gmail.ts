@@ -58,7 +58,7 @@ export function gmailBackend(app: App, acc: AccountRow): MailBackend {
   };
   return {
     unread: (since) =>
-      list(`is:unread in:inbox after:${Math.floor(since / 1000)}`, 25),
+      list(`is:unread in:inbox -from:me after:${Math.floor(since / 1000)}`, 25),
     search: (q, limit) => list(q || 'in:inbox', limit),
     async read(nativeId): Promise<MailFull> {
       const m = await googleFetch(

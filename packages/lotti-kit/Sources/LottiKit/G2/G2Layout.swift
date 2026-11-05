@@ -21,6 +21,9 @@ public enum G2Layout {
     /// What a blank container gets. MentraOS blanks text in place with "\n" (keeps the page and
     /// the event pipeline alive); an empty Cmd 5 isn't confirmed to work.
     static let blank = "\n"
+    /// What the input box holds: one space. "\n" is two lines, more than its one-line box holds,
+    /// so the firmware showed a box there all the time (gone with the space, seen 2026-11-05).
+    static let inputText = " "
 }
 
 /// One text container on the page. Ids are the routing key for Cmd 5 updates (even-g2-protocol
@@ -61,7 +64,8 @@ public struct G2TextBox: Equatable, Sendable {
     /// The input box takes the events. The firmware scrolls (and bounces) the container that
     /// takes them, so it is one with nothing in it: the sentence and the choices stay put while
     /// you scroll, and Lotti moves the highlight itself. Seen 2026-11-05: with the sentence or
-    /// the choices taking the events, a scroll bounced that text.
+    /// the choices taking the events, a scroll bounced that text. A page where no box takes the
+    /// events gets no scrolls and no taps at all (tried on the glasses the same day).
     static func boxes(for frame: GlassesFrame) -> [G2TextBox] {
         var next = firstExtraID
         return frame.boxes.prefix(G2Layout.maxTextBoxes - 1).enumerated().map { index, box in
@@ -83,7 +87,7 @@ public struct G2TextBox: Equatable, Sendable {
     /// The blank box that takes the events, in the top-right corner (left of it is the date;
     /// the attention mark only shows with the display off).
     static let input = G2TextBox(id: inputID, name: "input", x: G2Layout.width - 48, y: 0, width: 48,
-                                 height: G2Layout.lineHeight, capturesEvents: true, text: G2Layout.blank)
+                                 height: G2Layout.lineHeight, capturesEvents: true, text: G2Layout.inputText)
 
     /// The same container without its text: what decides between an update and a rebuild.
     var geometry: G2TextBox {
