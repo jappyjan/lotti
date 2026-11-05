@@ -226,17 +226,6 @@ export const coreOps = [
         throw new Error(
           `${i.key} is a safety setting: use settings.set_safety (needs confirmation).`,
         );
-      if (
-        def.int &&
-        !(
-          Number.isInteger(i.value) &&
-          (i.value as number) >= def.int.min &&
-          (i.value as number) <= def.int.max
-        )
-      )
-        throw new Error(
-          `${i.key} must be a whole number from ${def.int.min} to ${def.int.max}.`,
-        );
       const prev = app.settings.get(i.key);
       app.settings.set(i.key, i.value);
       return out(
