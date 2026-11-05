@@ -30,7 +30,7 @@ The glasses show a 576×288 green, see-through display. Black is invisible; only
 │        coming at 8. They're       │
 │        ordering pizza.            │
 │                                   │
-│ [On my way]                       │ ← selected (the list's border) = best guess
+│ > On my way                       │ ← highlighted = best guess
 │   Running late                    │
 │   Original                        │
 └───────────────────────────────────┘
@@ -152,7 +152,7 @@ What you see when you look up: **one thing**. Lotti picks the single most useful
 - **Choices** at the bottom, one line each; on this view the block is only as tall as its choices, so the cards get the room.
 - **Weather** opens the forecast: today's weather in a sentence, then a column per day for four days: the icon, a bar for the day's range on the scale of the whole week with the low at its left end and the high at its right, and the chance of rain from 20 %. Temperatures always read low to high ("6° / 11°").
 - **A ringing timer** takes over the display ("Time's up: Pasta", choice: Stop). Tap or double tap stops it on the phone too, then you're back where you were. It waits while you talk or Lotti thinks.
-- Each block is its own text container, each picture its own image container (at most 8 text, 4 image and 12 containers in all per page: the glasses reject a page with a fifth picture). Pictures are 4-bit gray at full brightness, like the text. The choices are the firmware's own list container: the glasses draw the selection border, move it when you scroll (nothing is redrawn, nothing bounces) and say which item you picked. Text containers never take the events while choices are shown (the firmware scrolls the one that does).
+- Each block is its own text container, each picture its own image container (at most 8 text, 4 image and 12 containers in all per page: the glasses reject a page with a fifth picture). Pictures use brightness 15 of 15, like the text. A small blank text box in the top-right corner takes the touch events: the firmware scrolls and bounces whichever container takes them, so the sentence and choices stay still and Lotti moves the highlight. The firmware's own list container was tried (2026-11-05) and dropped: its selection border looked out of place next to the text.
 
 - **Something matters:** "Leave in 8 min for pizza at Mara's. Rain at 21:00, take the umbrella." Time and "2 more" in dim text below.
 - **Nothing matters:** "All quiet. Nothing needs you." Time, date, temperature below.

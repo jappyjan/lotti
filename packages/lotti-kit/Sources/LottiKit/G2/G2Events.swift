@@ -76,8 +76,7 @@ public enum G2Events {
     private static func deviceEvent(_ event: [UInt8]) -> G2Event? {
         if let list = ProtoReader.message(event, 1) {
             let f = ProtoReader.varintFields(list)
-            // Zero values are left out: no index means the first item.
-            return gesture(f[5] ?? 0, source: .unknown, container: ProtoReader.string(list, 2), item: Int(f[4] ?? 0))
+            return gesture(f[5] ?? 0, source: .unknown, container: ProtoReader.string(list, 2))
         }
         if let text = ProtoReader.message(event, 2) {
             let f = ProtoReader.varintFields(text)
@@ -102,7 +101,7 @@ public enum G2Events {
     }
 
     private static func gesture(
-        _ type: UInt64, source: InputEvent.Source, container: String?, exitReason: UInt64? = nil, item: Int? = nil
+        _ type: UInt64, source: InputEvent.Source, container: String?, exitReason: UInt64? = nil
     ) -> G2Event {
         let g: InputEvent.Gesture? = switch type {
         case 0: .tap
@@ -113,7 +112,7 @@ public enum G2Events {
         case 10: .longPressEnd
         default: nil
         }
-        if let g { return .input(InputEvent(g, from: source, item: item)) }
+        if let g { return .input(InputEvent(g, from: source)) }
         let name = switch type {
         case 4: "foreground enter"
         case 5: "foreground exit"

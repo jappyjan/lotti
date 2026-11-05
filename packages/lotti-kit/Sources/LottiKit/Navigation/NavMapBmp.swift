@@ -43,9 +43,10 @@ public enum NavMapBmp {
         return Self.compressed(bmp)
     }
 
-    /// A 1-bit picture for an image container: a 16-step gray palette (index = brightness) with
-    /// lit pixels at 15, so they're as bright as text. The map palette's green came out dimmer
-    /// than the text next to it (seen 2026-11-05).
+    /// A 1-bit picture for an image container: lit pixels at index 15. The firmware ignores the
+    /// palette and reads the index as brightness (1 dimmest, 15 brightest; g2-kit
+    /// `ble/docs/images.md`); the map's index 1 came out darker than the text next to it. The
+    /// palette says the same (16 grays) for anything that does read it.
     public static func encode(_ bitmap: MonoBitmap) -> (data: [UInt8], mode: Compression)? {
         guard bitmap.width > 0, bitmap.height > 0 else { return nil }
         return compressed(grayFile(bitmap))

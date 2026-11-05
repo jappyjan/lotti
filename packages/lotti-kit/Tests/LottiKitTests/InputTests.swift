@@ -12,12 +12,7 @@ struct G2EventTests {
     }
 
     @Test func listEventWithZeroFieldsLeftOutIsATap() {
-        #expect(decode("080210016a070a05080412016d") == .input(InputEvent(.tap, from: .unknown, item: 0)))
-    }
-
-    @Test func aPickOnTheListSaysWhichItem() {
-        // List_ItemEvent {1 id 2, 2 "rail", 3 "No", 4 index 1}, a click (type 0 left out).
-        #expect(decode("08026a100a0e080212047261696c1a024e6f2001") == .input(InputEvent(.tap, from: .unknown, item: 1)))
+        #expect(decode("080210016a070a05080412016d") == .input(InputEvent(.tap, from: .unknown)))
     }
 
     // Captured from a G2 (firmware 2.2.9) with an R1 linked, 2026-11-01. Payloads of

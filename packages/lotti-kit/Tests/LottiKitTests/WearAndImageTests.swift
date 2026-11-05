@@ -115,7 +115,7 @@ struct ImageContainerTests {
         let expected = try #require(NavMapBmp.encode(bitmap))
         #expect(box.data == expected.data && box.compression == expected.mode)
         #expect(box.width == 24 && box.height == 24)
-        // Raw form: 16 gray palette entries, the last one white; lit pixels use it.
+        // Lit pixels use index 15 (the firmware reads the index as brightness), white in the palette.
         let bmp = NavMapBmp.grayFile(MonoBitmap(width: 2, height: 2, pixels: [true, true, true, true]))
         #expect(bmp[46] == 16)
         #expect(Array(bmp[(54 + 15 * 4)..<(54 + 15 * 4 + 3)]) == [255, 255, 255])
@@ -128,7 +128,7 @@ struct ImageContainerTests {
         var planner = G2PagePlanner()
         let image = Self.box()
         let frame = GlassesFrame(main: "", images: [image])
-        #expect(planner.plan(frame) == [.create([.main("\n", shape: .fullWidth)], images: [image]), .uploadImage(image)])
+        #expect(planner.plan(frame) == [.create(G2TextBox.page([.main("\n", shape: .fullWidth)]), images: [image]), .uploadImage(image)])
         #expect(planner.plan(frame) == [])
     }
 
@@ -144,12 +144,12 @@ struct ImageContainerTests {
         _ = planner.plan(.dark)
         let image = Self.box()
         #expect(planner.plan(GlassesFrame(main: "", images: [image]))
-            == [.rebuild([.main("\n", shape: .fullWidth)], images: [image]), .uploadImage(image)])
+            == [.rebuild(G2TextBox.page([.main("\n", shape: .fullWidth)]), images: [image]), .uploadImage(image)])
         let moved = Self.box(x: 400)
         #expect(planner.plan(GlassesFrame(main: "", images: [moved]))
-            == [.rebuild([.main("\n", shape: .fullWidth)], images: [moved]), .uploadImage(moved)])
+            == [.rebuild(G2TextBox.page([.main("\n", shape: .fullWidth)]), images: [moved]), .uploadImage(moved)])
         // It goes away again.
-        #expect(planner.plan(.dark) == [.rebuild([.main("\n", shape: .fullWidth)])])
+        #expect(planner.plan(.dark) == [.rebuild(G2TextBox.page([.main("\n", shape: .fullWidth)]))])
     }
 
     @Test func textChangesDoNotTouchTheImages() {
@@ -165,7 +165,7 @@ struct ImageContainerTests {
         _ = planner.plan(GlassesFrame(main: "Hi", images: [image]))
         planner.markUnknown()
         #expect(planner.plan(GlassesFrame(main: "Hi", images: [image]))
-            == [.rebuild([.main("Hi", shape: .fullWidth)], images: [image]), .uploadImage(image)])
+            == [.rebuild(G2TextBox.page([.main("Hi", shape: .fullWidth)]), images: [image]), .uploadImage(image)])
     }
 
     @Test func imageContainersFitTheDisplay() {

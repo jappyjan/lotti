@@ -22,18 +22,13 @@ public struct InputEvent: Equatable, Sendable, CustomStringConvertible {
 
     public var gesture: Gesture
     public var source: Source
-    /// For an event on the list of choices: the item the glasses had selected.
-    public var item: Int?
 
-    public init(_ gesture: Gesture, from source: Source, item: Int? = nil) {
+    public init(_ gesture: Gesture, from source: Source) {
         self.gesture = gesture
         self.source = source
-        self.item = item
     }
 
-    public var description: String {
-        "\(gesture.rawValue) (\(source.rawValue))" + (item.map { " on item \($0)" } ?? "")
-    }
+    public var description: String { "\(gesture.rawValue) (\(source.rawValue))" }
 }
 
 /// Drops repeats of the same gesture that arrive within `window` seconds. Other clients report

@@ -8,10 +8,9 @@ struct G2LayoutTests {
     // The old side rail: only the golden bytes still use its geometry (the encoding is the same).
     private let mainWithRail = G2TextBox.main("Hi", shape: .withRail)
     private let rail = G2TextBox.sideRail("> Yes\nNo")
-    // What `GlassesFrame(main:choices:)` lays out: the choices, a list, under the sentence.
+    // What `GlassesFrame(main:rail:)` lays out: the choices under the sentence.
     private let mainAbove = G2TextBox.main("Hi", shape: .choicesBelow)
-    private let choices = G2ListBox(name: "rail", x: 0, y: G2Layout.choicesY(count: 2), width: G2Layout.width,
-                                    height: 2 * G2Layout.choiceHeight, items: ["Yes", "No"])
+    private let choices = G2TextBox.choices("> Yes\nNo")
 
     @Test func createPageWithRail() {
         let payload = G2Payload.createPage(magic: 110, boxes: [mainWithRail, rail])
@@ -35,22 +34,6 @@ struct G2LayoutTests {
         #expect(hex(payload) == "080510724a16080212047261696c180020082a084e6f0a3e20596573")
     }
 
-    @Test func theChoicesAreANativeList() throws {
-        // ListContainerProperty in page field 2, before the text, and counted in field 1.
-        let payload = G2Payload.rebuildPage(magic: 9, boxes: [mainAbove], list: choices)
-        let page = try #require(ProtoReader.message(payload, 7))
-        #expect(ProtoReader.varintFields(page)[1] == 2)
-        let list = try #require(ProtoReader.message(page, 2))
-        let f = ProtoReader.varintFields(list)
-        #expect(f[1] == 0 && f[2] == UInt64(G2Layout.choicesY(count: 2)) && f[3] == 576 && f[9] == 2 && f[12] == 1)
-        #expect(ProtoReader.string(list, 10) == "rail")
-        let items = try #require(ProtoReader.message(list, 11))
-        #expect(ProtoReader.varintFields(items)[1] == 2 && ProtoReader.varintFields(items)[3] == 1)
-        // Item names are repeated field 4: "Yes" then "No".
-        #expect(hex(items).contains("2203596573") && hex(items).contains("22024e6f"))
-        #expect(hex(page).firstRange(of: "12")!.lowerBound < hex(page).firstRange(of: "1a")!.lowerBound)
-    }
-
     @Test func rebuildAckResult() {
         // {1: 8, 2: magic, 8: {1: result}}
         #expect(G2Payload.rebuildResult(bytes("0808107042020806")) == 6)
@@ -65,13 +48,12 @@ struct G2LayoutTests {
         #expect(hex(G2Payload.imuControl(magic: 115, enable: true, pace: 500)) == "08131073a20105080110f403")
     }
 
-    @Test func choicesSitUnderTheSentence() throws {
-        let frame = GlassesFrame(main: "Hi", choices: ["Yes"])
-        let main = frame.boxes[0], choices = try #require(frame.list)
-        #expect(main.x == 0 && main.y == 0 && main.width == G2Layout.width && main.y + main.height < choices.y)
-        #expect(choices.x == 0 && choices.width == G2Layout.width && choices.height == G2Layout.choiceHeight)
-        // The list ends above the display's edge, so the selection border of its last row shows.
-        #expect(choices.y + choices.height == G2Layout.height - G2Layout.choicesMargin)
+    @Test func choicesSitUnderTheSentence() {
+        let frame = GlassesFrame(main: "Hi", rail: "> Yes")
+        let main = frame.boxes[0], choices = frame.boxes[1]
+        #expect(main.x == 0 && main.y == 0 && main.width == G2Layout.width && main.height == G2Layout.choicesY)
+        #expect(choices.x == 0 && choices.y == G2Layout.choicesY && choices.width == G2Layout.width)
+        #expect(choices.y + choices.height == G2Layout.height)
         #expect(GlassesFrame(main: "Hi").boxes[0].height == G2Layout.height)
     }
 
@@ -81,13 +63,14 @@ struct G2LayoutTests {
             FrameBox("main", x: 0, y: 29, width: 576, height: 87, text: "Hi"),
             FrameBox("date", x: 0, y: 0, width: 504, height: 29, text: "Thu 5 Nov"),
             FrameBox("card1", x: 0, y: 120, width: 284, height: 100, text: "Pasta"),
-        ], list: FrameList(x: 0, y: 230, width: 576, height: 58, items: ["Agenda"]))
-        guard case .create(let boxes, let list, _) = planner.plan(frame).first else { Issue.record("no create"); return }
-        #expect(boxes.map(\.id) == [G2TextBox.mainID, 10, 11])
-        #expect(list?.id == G2ListBox.id)
+            FrameBox("rail", x: 0, y: 230, width: 576, height: 58, text: "> Agenda"),
+        ])
+        guard case .create(let boxes, _) = planner.plan(frame).first else { Issue.record("no create"); return }
+        #expect(boxes.map(\.id) == [G2TextBox.mainID, 10, 11, G2TextBox.railID, G2TextBox.inputID])
         #expect(!boxes.map(\.id).contains(G2ImageBox.attentionID) && !boxes.map(\.id).contains(G2ImageBox.locationID))
-        // The list takes the events; no text box does (the firmware scrolls the one that does).
-        #expect(boxes.map(\.capturesEvents) == [false, false, false])
+        // Only the blank input box takes the events: the firmware bounces the container that gets a scroll.
+        #expect(boxes.map(\.capturesEvents) == [false, false, false, false, true])
+        #expect(boxes.last?.text == "\n")
         var later = frame
         later.boxes[1].text = "Fri 6 Nov"
         #expect(planner.plan(later) == [.update(id: 10, name: "date", text: "Fri 6 Nov")])
@@ -98,7 +81,7 @@ struct G2LayoutTests {
     @Test func atMostEightTextBoxes() {
         var planner = G2PagePlanner()
         let frame = GlassesFrame(boxes: (1...10).map { FrameBox("b\($0)", x: 0, y: 0, width: 10, height: 10, text: "x") })
-        guard case .create(let boxes, _, _) = planner.plan(frame).first else { Issue.record("no create"); return }
+        guard case .create(let boxes, _) = planner.plan(frame).first else { Issue.record("no create"); return }
         #expect(boxes.count == G2Layout.maxTextBoxes)
     }
 
@@ -107,28 +90,26 @@ struct G2LayoutTests {
     @Test func firstFrameCreatesThePage() {
         var planner = G2PagePlanner()
         #expect(!planner.hasPage)
-        let commands = planner.plan(GlassesFrame(main: "Hi", choices: ["Yes", "No"]))
-        #expect(commands == [.create([mainAbove], list: choices)])
-        #expect(planner.shape?.map(\.name) == ["main"])
+        let commands = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
+        #expect(commands == [.create(G2TextBox.page([mainAbove, choices]))])
+        #expect(planner.shape?.map(\.name) == ["main", "rail", "input"])
     }
 
     @Test func sameShapeOnlyUpdatesWhatChanged() {
         var planner = G2PagePlanner()
-        _ = planner.plan(GlassesFrame(main: "Hi", choices: ["Yes", "No"]))
-        #expect(planner.plan(GlassesFrame(main: "Hi", choices: ["Yes", "No"])) == [])
-        #expect(planner.plan(GlassesFrame(main: "Bye", choices: ["Yes", "No"])) == [.update(id: 1, name: "main", text: "Bye")])
-        // Other choices: the list is rebuilt with the page.
-        guard case .rebuild(_, let list, _) = planner.plan(GlassesFrame(main: "Bye", choices: ["A"])).first else {
-            Issue.record("no rebuild"); return
-        }
-        #expect(list?.items == ["A"])
+        _ = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
+        #expect(planner.plan(GlassesFrame(main: "Hi", rail: "Yes\n> No")) == [.update(id: 2, name: "rail", text: "Yes\n> No")])
+        #expect(planner.plan(GlassesFrame(main: "Hi", rail: "Yes\n> No")) == [])
+        #expect(planner.plan(GlassesFrame(main: "Bye", rail: "A")) == [
+            .update(id: 1, name: "main", text: "Bye"), .update(id: 2, name: "rail", text: "A"),
+        ])
     }
 
     @Test func shapeChangeRebuilds() {
         var planner = G2PagePlanner()
-        _ = planner.plan(GlassesFrame(main: "Hi", choices: ["Yes", "No"]))
-        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.rebuild([.main("Hi", shape: .fullWidth)])])
-        #expect(planner.plan(GlassesFrame(main: "Hi", choices: ["Yes", "No"])) == [.rebuild([mainAbove], list: choices)])
+        _ = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
+        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.rebuild(G2TextBox.page([.main("Hi", shape: .fullWidth)]))])
+        #expect(planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo")) == [.rebuild(G2TextBox.page([mainAbove, choices]))])
     }
 
     @Test func darkBlanksInPlace() {
@@ -140,7 +121,7 @@ struct G2LayoutTests {
 
     @Test func darkFirstFrameCreatesABlankPage() {
         var planner = G2PagePlanner()
-        #expect(planner.plan(.dark) == [.create([.main("\n", shape: .fullWidth)])])
+        #expect(planner.plan(.dark) == [.create(G2TextBox.page([.main("\n", shape: .fullWidth)]))])
     }
 
     @Test func afterAFailureTheNextFrameRebuilds() {
@@ -149,20 +130,20 @@ struct G2LayoutTests {
         _ = planner.plan(GlassesFrame(main: "Ho"))
         planner.markUnknown()
         #expect(planner.hasPage)
-        #expect(planner.plan(GlassesFrame(main: "Ho")) == [.rebuild([.main("Ho", shape: .fullWidth)])])
+        #expect(planner.plan(GlassesFrame(main: "Ho")) == [.rebuild(G2TextBox.page([.main("Ho", shape: .fullWidth)]))])
     }
 
     @Test func resetStartsOverWithACreate() {
         var planner = G2PagePlanner()
         _ = planner.plan(GlassesFrame(main: "Hi"))
         planner.reset()
-        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.create([.main("Hi", shape: .fullWidth)])])
+        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.create(G2TextBox.page([.main("Hi", shape: .fullWidth)]))])
     }
 
     @Test func markUnknownBeforeAnyPageStillCreates() {
         var planner = G2PagePlanner()
         planner.markUnknown()
-        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.create([.main("Hi", shape: .fullWidth)])])
+        #expect(planner.plan(GlassesFrame(main: "Hi")) == [.create(G2TextBox.page([.main("Hi", shape: .fullWidth)]))])
     }
 }
 
@@ -272,14 +253,23 @@ struct HeadUpSettingsTests {
 enum BoxShape { case fullWidth, withRail, choicesBelow }
 
 extension G2TextBox {
+    /// What the planner sends for these boxes: none takes the events, the blank input box does.
+    static func page(_ boxes: [G2TextBox]) -> [G2TextBox] {
+        boxes.map { var box = $0; box.capturesEvents = false; return box } + [input]
+    }
+
     static func main(_ text: String, shape: BoxShape) -> G2TextBox {
         G2TextBox(id: mainID, name: "main", x: 0, y: 0, width: shape == .withRail ? 384 : G2Layout.width,
-                  height: shape == .choicesBelow ? G2Layout.choicesY(count: 2) - G2Layout.choicesGap : G2Layout.height, capturesEvents: shape != .choicesBelow,
-                  text: text)
+                  height: shape == .choicesBelow ? G2Layout.choicesY : G2Layout.height, capturesEvents: true, text: text)
     }
 
     /// The retired 176 px rail on the right.
     static func sideRail(_ text: String) -> G2TextBox {
-        G2TextBox(id: 2, name: "rail", x: 400, y: 0, width: 176, height: G2Layout.height, capturesEvents: false, text: text)
+        G2TextBox(id: railID, name: "rail", x: 400, y: 0, width: 176, height: G2Layout.height, capturesEvents: false, text: text)
+    }
+
+    static func choices(_ text: String) -> G2TextBox {
+        G2TextBox(id: railID, name: "rail", x: 0, y: G2Layout.choicesY, width: G2Layout.width,
+                  height: G2Layout.height - G2Layout.choicesY, capturesEvents: false, text: text)
     }
 }

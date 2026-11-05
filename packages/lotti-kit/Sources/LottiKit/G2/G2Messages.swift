@@ -117,11 +117,9 @@ public enum G2Payload {
     ///
     /// With `images`, each image container goes in field 4 (`ImageContainerProperty`) and counts in
     /// field 1. **Unverified on hardware** (see `imageObject`).
-    public static func createPage(magic: UInt64, boxes: [G2TextBox], list: G2ListBox? = nil,
-                                  images: [G2ImageBox] = []) -> [UInt8] {
+    public static func createPage(magic: UInt64, boxes: [G2TextBox], images: [G2ImageBox] = []) -> [UInt8] {
         evenHub(command: 0, magic: magic, field: 3) {
-            $0.varint(1, boxes.count + (list == nil ? 0 : 1) + images.count)
-            if let list { $0.message(2) { listObject(list, into: &$0) } }
+            $0.varint(1, boxes.count + images.count)
             for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
             for image in images { $0.message(4) { imageObject(image, into: &$0) } }
             $0.varint(5, 10000)  // widget id, as used by every known client
@@ -132,11 +130,9 @@ public enum G2Payload {
     /// in envelope field 7 and without a widget id (field 5 is a MenuObject here). The glasses
     /// ack with Cmd 8 `{8: {1: 6 success / 7 failed}}`. Layout from even-g2-protocol
     /// `build_rebuild_page` and MentraOS `rebuildPageMessage`.
-    public static func rebuildPage(magic: UInt64, boxes: [G2TextBox], list: G2ListBox? = nil,
-                                   images: [G2ImageBox] = []) -> [UInt8] {
+    public static func rebuildPage(magic: UInt64, boxes: [G2TextBox], images: [G2ImageBox] = []) -> [UInt8] {
         evenHub(command: 7, magic: magic, field: 7) {
-            $0.varint(1, boxes.count + (list == nil ? 0 : 1) + images.count)
-            if let list { $0.message(2) { listObject(list, into: &$0) } }
+            $0.varint(1, boxes.count + images.count)
             for box in boxes { $0.message(3) { textObject(box, into: &$0) } }
             for image in images { $0.message(4) { imageObject(image, into: &$0) } }
         }
@@ -159,25 +155,6 @@ public enum G2Payload {
         w.string(10, box.name)
         if box.capturesEvents { w.varint(11, 1) }
         w.string(12, box.text)
-    }
-
-    /// ListContainerProperty `{1 x, 2 y, 3 w, 4 h, 9 id, 10 name, 11 items, 12 capture events}` with
-    /// List_ItemContainerProperty `{1 count, 2 item width, 3 selection border, 4 names}` (g2-kit
-    /// `EvenHub_pb.ts`). Border and padding (5–8) are left out, as for text. Item width 0 lets the
-    /// firmware size the items to the container.
-    private static func listObject(_ list: G2ListBox, into w: inout ProtoWriter) {
-        w.varint(1, list.x)
-        w.varint(2, list.y)
-        w.varint(3, list.width)
-        w.varint(4, list.height)
-        w.varint(9, list.id)
-        w.string(10, list.name)
-        w.message(11) { items in
-            items.varint(1, list.items.count)
-            items.varint(3, 1)
-            for name in list.items { items.string(4, name) }
-        }
-        w.varint(12, 1)
     }
 
     /// ImageContainerProperty `{1 x, 2 y, 3 w, 4 h, 5 id, 6 name}`: the image counterpart of

@@ -215,20 +215,20 @@ public final class G2Link: NSObject, GlassesLink {
             let m = nextMagic()
             do {
                 switch command {
-                case .create(let boxes, let list, let images):
+                case .create(let boxes, let images):
                     pageChanged = true
-                    _ = try await request(G2Payload.createPage(magic: m, boxes: boxes, list: list, images: images), sid: G2Service.evenHub,
+                    _ = try await request(G2Payload.createPage(magic: m, boxes: boxes, images: images), sid: G2Service.evenHub,
                                           flag: G2Flag.request, magic: m, to: right, step: "creating the page")
-                case .rebuild(let boxes, let list, let images):
+                case .rebuild(let boxes, let images):
                     pageChanged = true
                     // Untested live by the references, and an ack may not come: only an explicit
                     // failure counts.
-                    let reply = try? await request(G2Payload.rebuildPage(magic: m, boxes: boxes, list: list, images: images), sid: G2Service.evenHub,
+                    let reply = try? await request(G2Payload.rebuildPage(magic: m, boxes: boxes, images: images), sid: G2Service.evenHub,
                                                    flag: G2Flag.request, magic: m, to: right,
                                                    step: "rebuilding the page", seconds: 2)
                     let result = reply.flatMap { G2Payload.rebuildResult($0.payload) }
                     let outcome = result.map { $0 == 6 ? "ok" : "result \($0)" } ?? "no ack"
-                    print("[Glasses] rebuild \(boxes.map(\.name) + (list.map { [$0.name] } ?? [])): \(outcome)")
+                    print("[Glasses] rebuild \(boxes.map(\.name)): \(outcome)")
                     if result == 7 { throw PageError.gone }
                     if let result, result != 6 {
                         throw GlassesLinkError.timeout("rebuilding the page (result \(result))")

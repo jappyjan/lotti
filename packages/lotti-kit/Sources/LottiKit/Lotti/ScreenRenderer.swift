@@ -24,8 +24,8 @@ public struct TextLayout: Equatable, Sendable {
 /// Choices always sit below, one per line, across the full width (decided 2026-11-01, see
 /// design.md "The rail is too narrow").
 ///
-/// A plain screen is the sentence (then a blank line and as many details as fit) above the
-/// choices, which sit at the bottom (`G2Layout.choiceHeight` each); without choices the sentence gets the whole display. A
+/// A plain screen is the sentence (then a blank line and as many details as fit) in the top six
+/// lines and the choices block under it; without choices the sentence gets the whole display. A
 /// screen with a header or cards is stacked:
 ///
 /// ```
@@ -35,16 +35,18 @@ public struct TextLayout: Equatable, Sendable {
 /// Pasta          12° cloudy      Later               cards, side by side
 /// 4 min left     7° to 14°       16:00 Standup
 /// Rings 14:09    Rain from 18:00 20:00 Pizza
-/// [Agenda]                                           choices: the firmware's list, which
-///  Weather                                           draws and moves the selection itself
+/// > Agenda                                           choices, as many lines as there are
+///   Weather
 /// ```
 public struct ScreenRenderer: Sendable {
     public var layout: TextLayout
+    /// Marks the highlighted choice. The lens can't dim single lines inside a container, so the
+    /// highlight is a marker in front of the item.
+    public static let highlightMarker = "> "
+    public static let plainMarker = "  "
 
-    /// Lines left for a plain sentence above this many choices.
-    func linesAbove(choices count: Int) -> Int {
-        layout.lines(height: G2Layout.choicesY(count: count) - G2Layout.choicesGap)
-    }
+    /// Lines for a plain sentence above the choices (of the G2's 10).
+    public static let choicesBelowMainLines = 6
     static let clockWidth = 72
     static let gap = 4
     static let cardGap = 8
@@ -60,7 +62,7 @@ public struct ScreenRenderer: Sendable {
     /// The page holds 12 containers (text and images together).
     static let maxContainers = 12
     /// The glasses take at most 4 image containers on a page and reject the whole page beyond
-    /// that (seen 2026-11-05: a 5-day forecast rebuild got no ack).
+    /// that (seen 2026-11-05: a 5-day forecast rebuild got no ack; the Even Hub docs say 4).
     public static let maxImages = 4
 
     public init(layout: TextLayout = .g2) {
@@ -88,22 +90,22 @@ public struct ScreenRenderer: Sendable {
             details.insert([header.left, header.right].filter { !$0.isEmpty }.joined(separator: " · "), at: 0)
         }
         details += screen.cards.map { ([$0.title] + $0.lines).joined(separator: ", ") }
-        let maxLines = screen.rail.map { min(linesAbove(choices: $0.items.count), layout.lines) } ?? layout.lines
-        let choices = screen.rail.map(renderChoices) ?? []
+        let maxLines = screen.rail == nil ? layout.lines : Self.choicesBelowMainLines
+        let rail = screen.rail.map(renderChoices)
         guard let icon = screen.icon else {
             let lines = Self.mainLines(screen.kind, screen.text, details: details, columns: layout.fullWidthColumns,
                                        maxLines: maxLines)
-            return GlassesFrame(main: lines.joined(separator: "\n"), choices: choices)
+            return GlassesFrame(main: lines.joined(separator: "\n"), rail: rail)
         }
         let bitmap = LensArt.bitmap(icon)
         let x = bitmap.width + Self.artGap + 4
         let lines = Self.mainLines(screen.kind, screen.text, details: details,
                                    columns: layout.columns(width: G2Layout.width - x), maxLines: maxLines)
-        var frame = GlassesFrame(main: "", choices: choices)
+        var frame = GlassesFrame(main: "", rail: rail)
         frame.boxes[0].x = x
         frame.boxes[0].width = G2Layout.width - x
         frame.boxes[0].text = lines.joined(separator: "\n")
-        return finish(frame.boxes, list: frame.list, art: [Art(name: "icon", x: 4, y: 2, bitmap: bitmap)])
+        return finish(frame.boxes, art: [Art(name: "icon", x: 4, y: 2, bitmap: bitmap)])
     }
 
     /// Header, sentence, a row of cards, then exactly as many choice lines as there are choices.
@@ -131,16 +133,14 @@ public struct ScreenRenderer: Sendable {
                 top = line
             }
         }
-        let choiceCount = screen.rail?.items.count ?? 0
-        let choicesY = G2Layout.choicesY(count: choiceCount)
-        let bottom = choiceCount > 0 ? choicesY - G2Layout.choicesGap : G2Layout.height
+        let choicesHeight = (screen.rail?.items.count ?? 0) * line
+        let bottom = choicesHeight > 0 ? G2Layout.height - choicesHeight - Self.gap : G2Layout.height
         let space = bottom - top
 
         let cards = Array(screen.cards.prefix(Self.maxCards))
         var sentenceHeight = space
         if !cards.isEmpty {
-            // Up to three lines; with many choices one, so the cards keep at least two.
-            sentenceHeight = max(line, min(3 * line, space - 3 * line - Self.gap))
+            sentenceHeight = max(2 * line, min(3 * line, space - 3 * line - Self.gap))
             let cardHeight = space - sentenceHeight - Self.gap
             guard cardHeight >= 2 * line else { return nil }
             let y = top + sentenceHeight + Self.gap
@@ -190,23 +190,22 @@ public struct ScreenRenderer: Sendable {
                                       maxLines: layout.lines(height: sentenceHeight))
         boxes.insert(FrameBox("main", x: sentenceX, y: top, width: width - sentenceX, height: sentenceHeight,
                               text: sentence.joined(separator: "\n")), at: 0)
-        let list = screen.rail.map {
-            FrameList(x: 0, y: choicesY, width: width, height: G2Layout.choicesHeight(count: choiceCount),
-                      items: renderChoices($0))
+        if let rail = screen.rail {
+            boxes.append(FrameBox("rail", x: 0, y: G2Layout.height - choicesHeight, width: width, height: choicesHeight,
+                                  text: renderChoices(rail)))
         }
-        return finish(boxes, list: list, art: art)
+        return finish(boxes, art: art)
     }
 
-    /// At most 8 text boxes, 4 pictures and 12 containers in all. A lone sentence keeps one free for the
+    /// At most 7 text boxes (the link adds the input box), 4 pictures and 12 containers in all. A lone sentence keeps one free for the
     /// location pin (the Conductor shows it only there; the attention mark only with the display off).
-    private func finish(_ boxes: [FrameBox], list: FrameList?, art: [Art]) -> GlassesFrame {
-        let text = Array(boxes.prefix(G2Layout.maxTextBoxes))
-        let reserved = text.count == 1 && list == nil ? 1 : 0
-        let containers = text.count + (list == nil ? 0 : 1)
-        let images = art.prefix(min(max(Self.maxContainers - reserved - containers, 0), Self.maxImages - reserved)).enumerated().compactMap { index, art in
+    private func finish(_ boxes: [FrameBox], art: [Art]) -> GlassesFrame {
+        let text = Array(boxes.prefix(G2Layout.maxTextBoxes - 1))
+        let reserved = text.count == 1 ? 1 : 0
+        let images = art.prefix(min(max(Self.maxContainers - reserved - text.count - 1, 0), Self.maxImages - reserved)).enumerated().compactMap { index, art in
             G2ImageBox(id: Self.firstImageID + index, name: art.name, x: art.x, y: art.y, bitmap: art.bitmap)
         }
-        return GlassesFrame(boxes: text, list: list, images: images)
+        return GlassesFrame(boxes: text, images: images)
     }
 
     /// The text, cut to `maxLines`, then (after a blank line, if asked) as many details as still
@@ -230,9 +229,13 @@ public struct ScreenRenderer: Sendable {
         return lines
     }
 
-    /// The choices' titles, cut to fit a line (the firmware's selection border takes a little room).
-    func renderChoices(_ rail: Rail) -> [String] {
-        rail.items.map { Self.ellipsize($0.title, columns: layout.fullWidthColumns - 2) }
+    /// One choice per line, the highlighted one marked.
+    func renderChoices(_ rail: Rail) -> String {
+        let width = layout.fullWidthColumns - Self.highlightMarker.count
+        return rail.items.enumerated().map { index, item in
+            let marker = index == rail.highlighted ? Self.highlightMarker : Self.plainMarker
+            return marker + Self.ellipsize(item.title, columns: width)
+        }.joined(separator: "\n")
     }
 
     /// Greedy word wrap. Words longer than a line are cut. Existing line breaks are kept.

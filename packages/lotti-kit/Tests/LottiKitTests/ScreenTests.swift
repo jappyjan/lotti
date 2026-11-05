@@ -40,12 +40,10 @@ struct ScreenRendererTests {
         #expect(frame == GlassesFrame(main: "Mara asks if you are\nstill coming"))
     }
 
-    @Test func choicesAreTheListsItems() {
-        // The glasses draw the selection: no marker, and moving it changes nothing on the page.
+    @Test func choicesMarkTheHighlight() {
         let rail = Rail([RailItem("On my way to you now", .dismiss), RailItem("Late", .dismiss)], highlighted: 1)
         let frame = renderer.render(Screen(.says, "Hi", rail: rail))
-        #expect(frame.list?.items == ["On my way to you …", "Late"])
-        #expect(frame == renderer.render(Screen(.says, "Hi", rail: Rail(rail.items))))
+        #expect(frame.rail == "  On my way to you …\n> Late")
     }
 
     @Test func detailsGoBelowABlankLine() {
@@ -62,29 +60,27 @@ struct ScreenRendererTests {
     }
 
     @Test func anOpenedItemKeepsItsHeaderUnderALongBody() {
-        let body = Array(repeating: "word", count: 80).joined(separator: " ")
+        let body = Array(repeating: "word", count: 40).joined(separator: " ")
         let rail = Rail([RailItem("Dismiss", .dismiss)])
         let lines = ScreenRenderer().render(Screen(.original, body, details: ["Mail · Mara"], rail: rail)).main
             .components(separatedBy: "\n")
         #expect(lines.last == "Mail · Mara")
         #expect(lines[lines.count - 2] == "")
-        #expect(lines.count == ScreenRenderer().linesAbove(choices: 1))
+        #expect(lines.count == ScreenRenderer.choicesBelowMainLines)
     }
 
     @Test func choicesSitBelowAcrossTheFullWidth() {
         let rail = Rail([RailItem("On my way", .dismiss), RailItem("Running late", .dismiss)])
         let frame = ScreenRenderer().render(Screen(.says, "Mara asks if you are still coming", rail: rail))
-        #expect(frame == GlassesFrame(main: "Mara asks if you are still coming", choices: ["On my way", "Running late"]))
-        #expect(frame.list?.y == G2Layout.choicesY(count: 2) && frame.list?.width == G2Layout.width)
+        #expect(frame == GlassesFrame(main: "Mara asks if you are still coming", rail: "> On my way\n  Running late"))
+        #expect(frame.boxes[1].y == G2Layout.choicesY && frame.boxes[1].width == G2Layout.width)
     }
 
-    @Test func theSentenceGetsWhatTheChoicesLeave() {
-        let text = Array(repeating: "word", count: 90).joined(separator: " ")
+    @Test func theSentenceAboveChoicesGetsSixLines() {
+        let text = Array(repeating: "word", count: 60).joined(separator: " ")
         let frame = ScreenRenderer().render(Screen(.says, text, rail: Rail([RailItem("Yes", .dismiss)])))
-        #expect(frame.main.components(separatedBy: "\n").count == 8)
-        let four = Rail((1...4).map { RailItem("\($0)", .dismiss) })
-        #expect(ScreenRenderer().render(Screen(.says, text, rail: four)).main.components(separatedBy: "\n").count == 5)
-        #expect(frame.rail == "Yes")
+        #expect(frame.main.components(separatedBy: "\n").count == 6)
+        #expect(frame.rail == "> Yes")
     }
 
     // MARK: Header and cards
@@ -96,15 +92,15 @@ struct ScreenRendererTests {
 
     @Test func headerSentenceCardsAndChoicesStackUp() {
         let frame = ScreenRenderer().render(today)
-        #expect(frame.boxes.map(\.name) == ["main", "date", "card1", "card2"])
+        #expect(frame.boxes.map(\.name) == ["main", "date", "card1", "card2", "rail"])
         #expect(frame.main == "Dentist in 25 min.\n\n+2 more today")
         #expect(frame["card1"] == "Pasta\n4 min left\nRings 14:09")
-        #expect(frame.rail == "Agenda\nWeather")
-        let main = frame.boxes[0], date = frame.boxes[1], card1 = frame.boxes[2], card2 = frame.boxes[3], choices = frame.list!
+        #expect(frame.rail == "> Agenda\n  Weather")
+        let main = frame.boxes[0], date = frame.boxes[1], card1 = frame.boxes[2], card2 = frame.boxes[3], choices = frame.boxes[4]
         #expect(card1.y >= main.y + main.height)
         #expect(card2.x > card1.x + card1.width && card2.x + card2.width <= G2Layout.width)
-        // Two choices take two rows at the bottom, just above the display's edge.
-        #expect(choices.height == 2 * G2Layout.choiceHeight && choices.y + choices.height == G2Layout.height - G2Layout.choicesMargin)
+        // Two choices take two lines at the bottom, not the fixed four-line block.
+        #expect(choices.height == 2 * G2Layout.lineHeight && choices.y + choices.height == G2Layout.height)
         #expect(card1.y + card1.height <= choices.y)
 
         // The time is drawn big, the date next to it; each card's icon sits left of its text.
@@ -154,7 +150,7 @@ struct ScreenRendererTests {
         let frame = ScreenRenderer().render(Screen(.says, "Time's up: Pasta", icon: .bell, rail: Rail([RailItem("Stop", .dismiss)])))
         #expect(frame.images.map(\.name) == ["icon"])
         #expect(frame.boxes[0].x > frame.images[0].x + frame.images[0].width)
-        #expect(frame.rail == "Stop")
+        #expect(frame.rail == "> Stop")
     }
 
     @Test func cardLinesAreCutNotWrapped() {
@@ -187,7 +183,7 @@ struct ScreenRendererTests {
                           cards: (1...5).map { Card("\($0)", art: .icon(.sun)) }, rail: Rail([RailItem("A", .dismiss)]))
         let frame = ScreenRenderer().render(many)
         #expect(frame.images.count == ScreenRenderer.maxImages)
-        #expect(frame.boxes.count + frame.images.count <= 12)
+        #expect(frame.boxes.count + 1 + frame.images.count <= 12)  // + the input box
     }
 
     @Test func iconsAreDrawn() {
