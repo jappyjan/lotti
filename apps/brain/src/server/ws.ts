@@ -2,7 +2,7 @@ import type { IncomingMessage, Server } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import type { App } from '../app.ts';
-import { CancelledError } from '../agent/loop.ts';
+import { CancelledError, reportAction } from '../agent/loop.ts';
 import { PRESENCE_EVENTS } from '../catchup.ts';
 import { isoLocal, parseIso, parseOffsetMin } from '../util/clock.ts';
 import { newId } from '../util/crypto.ts';
@@ -173,6 +173,9 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
       const channel: 'glasses' | 'phone' =
         msg.channel === 'glasses' ? 'glasses' : 'phone';
       const locale: 'de' | 'en' = msg.locale === 'de' ? 'de' : 'en';
+      conn.channel = channel;
+      conn.locale = locale;
+      app.settings.noteLocale(locale);
       const now = parseIso(msg.now) ?? app.clock.now();
       const utcOffsetMin = parseOffsetMin(msg.now);
       if (utcOffsetMin !== null) app.settings.notePhoneOffset(utcOffsetMin);
@@ -254,12 +257,37 @@ export async function handle(app: App, conn: Conn, msg: any): Promise<void> {
       );
       return;
     case 'perform': {
-      const r = await app.actions.perform(String(msg.actionId ?? ''));
+      const actionId = String(msg.actionId ?? '');
+      const action = app.actions.get(actionId);
+      const r = await app.actions.perform(actionId);
+      let text = r.text;
+      // An action that really ran is reported by the model, not by the tool's own output.
+      if (action && action.status === 'proposed' && action.target === 'server') {
+        const channel = conn.channel ?? 'phone';
+        const locale = conn.locale ?? app.settings.lastLocale();
+        text = await reportAction(app, {
+          title: action.title,
+          ok: r.ok,
+          result: r.text,
+          channel,
+          locale,
+        });
+        const conv = app.conversations.current();
+        hub.broadcast({
+          type: 'message',
+          conversationId: conv.id,
+          role: 'assistant',
+          text,
+          channel,
+          at: isoLocal(app.clock.now()),
+        });
+      }
       conn.send({
         type: 'performed',
         id: String(msg.id ?? ''),
         ok: r.ok,
-        text: r.text,
+        text,
+        result: r.text,
         ...(r.undoHandle ? { undo: r.undoHandle } : {}),
       });
       return;

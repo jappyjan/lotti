@@ -6,6 +6,8 @@ import Security
 final class MemorySecrets: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: String] = [:]
+    /// Tests: behave like a Keychain that refuses to store anything (an unsigned build).
+    var rejectsWrites = false
 
     func get(_ key: String) -> String? { lock.withLock { values[key] } }
     func set(_ value: String?, for key: String) { lock.withLock { values[key] = value } }
@@ -30,6 +32,7 @@ struct Keychain: Sendable {
     @discardableResult
     func set(_ value: String, for account: String) -> Bool {
         if let memory {
+            if memory.rejectsWrites { return false }
             memory.set(value, for: account)
             return true
         }
