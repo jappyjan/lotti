@@ -10,8 +10,8 @@ struct G2LayoutTests {
     private let rail = G2TextBox.sideRail("> Yes\nNo")
     // What `GlassesFrame(main:choices:)` lays out: the choices, a list, under the sentence.
     private let mainAbove = G2TextBox.main("Hi", shape: .choicesBelow)
-    private let choices = G2ListBox(name: "rail", x: 0, y: G2Layout.choicesY, width: G2Layout.width,
-                                    height: G2Layout.height - G2Layout.choicesY, items: ["Yes", "No"])
+    private let choices = G2ListBox(name: "rail", x: 0, y: G2Layout.choicesY(count: 2), width: G2Layout.width,
+                                    height: 2 * G2Layout.choiceHeight, items: ["Yes", "No"])
 
     @Test func createPageWithRail() {
         let payload = G2Payload.createPage(magic: 110, boxes: [mainWithRail, rail])
@@ -42,7 +42,7 @@ struct G2LayoutTests {
         #expect(ProtoReader.varintFields(page)[1] == 2)
         let list = try #require(ProtoReader.message(page, 2))
         let f = ProtoReader.varintFields(list)
-        #expect(f[1] == 0 && f[2] == UInt64(G2Layout.choicesY) && f[3] == 576 && f[9] == 2 && f[12] == 1)
+        #expect(f[1] == 0 && f[2] == UInt64(G2Layout.choicesY(count: 2)) && f[3] == 576 && f[9] == 2 && f[12] == 1)
         #expect(ProtoReader.string(list, 10) == "rail")
         let items = try #require(ProtoReader.message(list, 11))
         #expect(ProtoReader.varintFields(items)[1] == 2 && ProtoReader.varintFields(items)[3] == 1)
@@ -68,9 +68,10 @@ struct G2LayoutTests {
     @Test func choicesSitUnderTheSentence() throws {
         let frame = GlassesFrame(main: "Hi", choices: ["Yes"])
         let main = frame.boxes[0], choices = try #require(frame.list)
-        #expect(main.x == 0 && main.y == 0 && main.width == G2Layout.width && main.height == G2Layout.choicesY)
-        #expect(choices.x == 0 && choices.y == G2Layout.choicesY && choices.width == G2Layout.width)
-        #expect(choices.y + choices.height == G2Layout.height)
+        #expect(main.x == 0 && main.y == 0 && main.width == G2Layout.width && main.y + main.height < choices.y)
+        #expect(choices.x == 0 && choices.width == G2Layout.width && choices.height == G2Layout.choiceHeight)
+        // The list ends above the display's edge, so the selection border of its last row shows.
+        #expect(choices.y + choices.height == G2Layout.height - G2Layout.choicesMargin)
         #expect(GlassesFrame(main: "Hi").boxes[0].height == G2Layout.height)
     }
 
@@ -273,7 +274,7 @@ enum BoxShape { case fullWidth, withRail, choicesBelow }
 extension G2TextBox {
     static func main(_ text: String, shape: BoxShape) -> G2TextBox {
         G2TextBox(id: mainID, name: "main", x: 0, y: 0, width: shape == .withRail ? 384 : G2Layout.width,
-                  height: shape == .choicesBelow ? G2Layout.choicesY : G2Layout.height, capturesEvents: shape != .choicesBelow,
+                  height: shape == .choicesBelow ? G2Layout.choicesY(count: 2) - G2Layout.choicesGap : G2Layout.height, capturesEvents: shape != .choicesBelow,
                   text: text)
     }
 

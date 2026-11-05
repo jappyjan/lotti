@@ -137,10 +137,11 @@ public struct GlassesFrame: Equatable, Sendable {
 
     /// Lotti's text across the display, with the choices underneath if there are any.
     public init(main: String, choices: [String] = [], images: [G2ImageBox] = []) {
+        let y = G2Layout.choicesY(count: choices.count)
         let boxes = [FrameBox("main", x: 0, y: 0, width: G2Layout.width,
-                              height: choices.isEmpty ? G2Layout.height : G2Layout.choicesY, text: main)]
-        let list = FrameList(x: 0, y: G2Layout.choicesY, width: G2Layout.width,
-                             height: G2Layout.height - G2Layout.choicesY, items: choices)
+                              height: choices.isEmpty ? G2Layout.height : y - G2Layout.choicesGap, text: main)]
+        let list = FrameList(x: 0, y: y, width: G2Layout.width, height: G2Layout.choicesHeight(count: choices.count),
+                             items: choices)
         self.init(boxes: boxes, list: list, images: images)
     }
 

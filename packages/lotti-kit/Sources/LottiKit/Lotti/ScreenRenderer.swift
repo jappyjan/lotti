@@ -24,8 +24,8 @@ public struct TextLayout: Equatable, Sendable {
 /// Choices always sit below, one per line, across the full width (decided 2026-11-01, see
 /// design.md "The rail is too narrow").
 ///
-/// A plain screen is the sentence (then a blank line and as many details as fit) in the top six
-/// lines and the choices block under it; without choices the sentence gets the whole display. A
+/// A plain screen is the sentence (then a blank line and as many details as fit) above the
+/// choices, which sit at the bottom (`G2Layout.choiceHeight` each); without choices the sentence gets the whole display. A
 /// screen with a header or cards is stacked:
 ///
 /// ```
@@ -41,8 +41,10 @@ public struct TextLayout: Equatable, Sendable {
 public struct ScreenRenderer: Sendable {
     public var layout: TextLayout
 
-    /// Lines for a plain sentence above the choices (of the G2's 10).
-    public static let choicesBelowMainLines = 6
+    /// Lines left for a plain sentence above this many choices.
+    func linesAbove(choices count: Int) -> Int {
+        layout.lines(height: G2Layout.choicesY(count: count) - G2Layout.choicesGap)
+    }
     static let clockWidth = 72
     static let gap = 4
     static let cardGap = 8
@@ -86,7 +88,7 @@ public struct ScreenRenderer: Sendable {
             details.insert([header.left, header.right].filter { !$0.isEmpty }.joined(separator: " · "), at: 0)
         }
         details += screen.cards.map { ([$0.title] + $0.lines).joined(separator: ", ") }
-        let maxLines = screen.rail == nil ? layout.lines : Self.choicesBelowMainLines
+        let maxLines = screen.rail.map { min(linesAbove(choices: $0.items.count), layout.lines) } ?? layout.lines
         let choices = screen.rail.map(renderChoices) ?? []
         guard let icon = screen.icon else {
             let lines = Self.mainLines(screen.kind, screen.text, details: details, columns: layout.fullWidthColumns,
@@ -129,14 +131,16 @@ public struct ScreenRenderer: Sendable {
                 top = line
             }
         }
-        let choicesHeight = (screen.rail?.items.count ?? 0) * line
-        let bottom = choicesHeight > 0 ? G2Layout.height - choicesHeight - Self.gap : G2Layout.height
+        let choiceCount = screen.rail?.items.count ?? 0
+        let choicesY = G2Layout.choicesY(count: choiceCount)
+        let bottom = choiceCount > 0 ? choicesY - G2Layout.choicesGap : G2Layout.height
         let space = bottom - top
 
         let cards = Array(screen.cards.prefix(Self.maxCards))
         var sentenceHeight = space
         if !cards.isEmpty {
-            sentenceHeight = max(2 * line, min(3 * line, space - 3 * line - Self.gap))
+            // Up to three lines; with many choices one, so the cards keep at least two.
+            sentenceHeight = max(line, min(3 * line, space - 3 * line - Self.gap))
             let cardHeight = space - sentenceHeight - Self.gap
             guard cardHeight >= 2 * line else { return nil }
             let y = top + sentenceHeight + Self.gap
@@ -187,7 +191,8 @@ public struct ScreenRenderer: Sendable {
         boxes.insert(FrameBox("main", x: sentenceX, y: top, width: width - sentenceX, height: sentenceHeight,
                               text: sentence.joined(separator: "\n")), at: 0)
         let list = screen.rail.map {
-            FrameList(x: 0, y: G2Layout.height - choicesHeight, width: width, height: choicesHeight, items: renderChoices($0))
+            FrameList(x: 0, y: choicesY, width: width, height: G2Layout.choicesHeight(count: choiceCount),
+                      items: renderChoices($0))
         }
         return finish(boxes, list: list, art: art)
     }

@@ -13,8 +13,18 @@ public enum G2Layout {
 
     /// One line of text is about this high (≈ 10 rows on the display; plan with 9).
     public static let lineHeight = 29
-    /// Where the choices block starts under a plain sentence: six lines above it, four choices in it.
-    public static let choicesY = 174
+    /// Height per choice in the list. The firmware splits the list's height evenly between its
+    /// items; a text line (29) left no room for the selection border, so rows were cut off.
+    public static let choiceHeight = 32
+    /// Space under the list, so its last row's border stays on the display.
+    public static let choicesMargin = 6
+    /// Space between the list and what's above it.
+    public static let choicesGap = 4
+
+    /// Height of the list for this many choices.
+    public static func choicesHeight(count: Int) -> Int { count * choiceHeight }
+    /// Where the list starts for this many choices (it sits at the bottom).
+    public static func choicesY(count: Int) -> Int { height - choicesMargin - choicesHeight(count: count) }
     /// The SDK allows at most 8 text containers on a page.
     public static let maxTextBoxes = 8
 
