@@ -9,7 +9,7 @@ import { proposeAction } from '../../tools/proposals.ts';
 import type { ToolDef } from '../../tools/registry.ts';
 import { clip } from '../../util/text.ts';
 import type { McpClient, McpServerConfig } from '../index.ts';
-import { publicUrl } from '../oauth/common.ts';
+import { publicUrl, reachWhy } from '../oauth/common.ts';
 import {
   AUTH_REFUSED,
   SIGN_IN_AGAIN,
@@ -148,12 +148,8 @@ class HttpSession implements Session {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch((e: unknown) => {
-      const why =
-        e instanceof Error
-          ? ((e.cause as Error | undefined)?.message ?? e.message)
-          : String(e);
       throw new Error(
-        `Cannot reach the MCP server at ${publicUrl(this.url)}: ${why}`,
+        `Cannot reach the MCP server at ${publicUrl(this.url)}: ${reachWhy(e)}`,
       );
     });
   }

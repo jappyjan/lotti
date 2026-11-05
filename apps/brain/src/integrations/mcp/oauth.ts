@@ -4,6 +4,7 @@ import {
   newPkce,
   newState,
   publicUrl,
+  reachWhy,
   savePending,
   takePending,
   tokenPost,
@@ -159,7 +160,7 @@ async function probe(app: App, url: string): Promise<string> {
     });
   } catch (e) {
     throw new Error(
-      `Cannot reach the MCP server at ${publicUrl(url)}: ${e instanceof Error ? e.message : e}`,
+      `Cannot reach the MCP server at ${publicUrl(url)}: ${reachWhy(e)}`,
     );
   }
   if (r.status === 401 || r.status === 403)

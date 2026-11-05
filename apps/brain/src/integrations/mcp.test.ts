@@ -369,6 +369,30 @@ test('mcp http: an unreachable server does not echo the URL query (it may hold a
   assert.ok(!JSON.stringify(r).includes('SECRETKEY'));
 });
 
+test('mcp http: a server that never answers says so in plain words, for the test and for the sign-in', async () => {
+  const t = makeApp({
+    fetch: async () => {
+      throw new DOMException(
+        'The operation was aborted due to timeout',
+        'TimeoutError',
+      );
+    },
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'slow', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(r.result.error, /did not answer in time/);
+  assert.doesNotMatch(r.result.error, /aborted/);
+  const s = (await t.app.ops.invoke('mcp.oauth_start', { id }, 'app')) as any;
+  assert.match(s.error, /did not answer in time/);
+});
+
 test('/mcp/tools: a proposal with no live ask is parked in the inbox, one with a live ask rides on it', async () => {
   const { t, id } = await stdioApp();
   await t.app.ops.invoke('mcp.test', { id }, 'app');

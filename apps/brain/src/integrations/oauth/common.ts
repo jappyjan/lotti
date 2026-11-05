@@ -107,3 +107,12 @@ export function publicUrl(url: string): string {
     return '[MCP server URL]';
   }
 }
+
+/** Why a request to a server failed, in one readable clause (a timeout is not "aborted"). */
+export function reachWhy(e: unknown): string {
+  if (e instanceof Error && e.name === 'TimeoutError')
+    return 'it did not answer in time';
+  return e instanceof Error
+    ? ((e.cause as Error | undefined)?.message ?? e.message)
+    : String(e);
+}
