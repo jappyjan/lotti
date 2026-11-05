@@ -256,11 +256,17 @@ struct McpDetailView: View {
         tools.sort()
     }
 
+    /// A login the server no longer accepts (refresh failed) is not "Signed in", even though a token is stored.
+    private var signInStatus: String {
+        if signedIn { return authRequired ? "Sign-in expired" : "Signed in" }
+        return authRequired ? "Needs sign-in" : "Not signed in"
+    }
+
     /// OAuth login for servers that ask for one. The backend discovers the login page and registers Lotti when the
     /// server allows it; only a server without that needs you to enter a client id.
     @ViewBuilder private var signInSection: some View {
         Section {
-            StatusRow(title: "Sign-in", value: signedIn ? "Signed in" : authRequired ? "Needs sign-in" : "Not signed in", good: signedIn ? true : nil)
+            StatusRow(title: "Sign-in", value: signInStatus, good: signedIn ? !authRequired : nil)
             Button { signIn() } label: { if signingIn { ProgressView() } else { Text(signedIn ? "Sign in again" : "Sign in") } }
                 .disabled(signingIn)
             if needsClient {
@@ -328,6 +334,7 @@ struct McpDetailView: View {
             await attempt($error) {
                 _ = try await model.call("mcp.clear_credential", ["id": .string(server.id)])
                 hasCredential = false
+                authRequired = authRequired || signedIn // a login that is gone is a login the server will ask for again
                 signedIn = false
                 needsClient = false
                 testNote = "Secrets removed."

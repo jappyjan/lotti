@@ -333,9 +333,11 @@ struct AccountDetailView: View {
                     .disabled(password.isEmpty)
                 }
             }
-            selectionSection("Calendars", items: $calendars, empty: "Check the connection to list the calendars.", note: "No selection means all of them.") {
-                config["calendars"] = .array($0.map { .string($0) })
-                return try await model.call("accounts.set_calendars", ["id": .string(account.id), "calendars": .array($0.map { .string($0) })])
+            if account.kind != "ics" { // a subscription is one calendar: nothing to pick
+                selectionSection("Calendars", items: $calendars, empty: "Check the connection to list the calendars.", note: "No selection means all of them.") {
+                    config["calendars"] = .array($0.map { .string($0) })
+                    return try await model.call("accounts.set_calendars", ["id": .string(account.id), "calendars": .array($0.map { .string($0) })])
+                }
             }
             if account.kind != "google" && account.kind != "ics" {
                 Section {
