@@ -238,6 +238,30 @@ struct ConductorBackendTests {
         #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
     }
 
+    @Test func theCatchupChoiceDoesNotPushAllItemsOffTheRail() async throws {
+        try await fill(#"{"id":"m1","kind":"mail","title":"Mara","summary":"Pizza um 8?","body":"x","createdAt":"2026-11-03T08:15:00+01:00","status":"seen"}"#)
+        backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup?.id == "k1" }
+        try await Task.sleep(for: .milliseconds(30))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        press(.doubleTap)
+        let titles = try #require(conductor.screen?.rail?.items.map(\.title))
+        #expect(titles.suffix(2) == ["Catch-up", "Alle ansehen"], "\(titles)")
+    }
+
+    @Test func aDeleteIsNotUnderTheHighlightAndNeverCutOff() async throws {
+        backend.script = { frame in
+            guard frame["type"]?.string == "ask" else { return MockBackend.defaultReply(frame) }
+            let actions = #"[{"id":"d1","title":"Delete \"Zahnarzt\"","target":"server","tool":"delete_calendar_event","args":{"eventRef":"a|b|c"}}]"#
+            return [#"{"type":"answer","id":"\#(frame["id"]!.string!)","text":"Soll ich ihn löschen?","followUps":["Nein","Später","Mehr","Noch mehr","Und mehr"],"actions":\#(actions)}"#]
+        }
+        conductor.ask("Lösch den Zahnarzt")
+        try await eventually { conductor.screen?.rail != nil }
+        let titles = try #require(conductor.screen?.rail?.items.map(\.title))
+        #expect(titles.first == "Nein" && titles.last == "Delete \"Zahnarzt\"", "\(titles)")
+        #expect(conductor.screen?.rail?.highlighted == 0)
+    }
+
     @Test func mirroredMessagesNeverReachTheGlasses() async throws {
         // The backend also sends the asking socket its own `message` frames (role user and assistant).
         backend.script = { frame in

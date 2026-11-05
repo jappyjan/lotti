@@ -358,22 +358,22 @@ public final class Conductor {
     /// Lotti's sentence, and a choice for the list of all items (first while something is pending).
     private func todayScreen(_ info: TodayInfo) -> Screen {
         var screen = composer.screen(for: info)
-        if let brief = lastCatchup, now().timeIntervalSince(brief.received) <= Self.catchupChoiceMaxAge {
-            var items = screen.rail?.items ?? []
-            items.insert(RailItem("Catch-up", .show(Screen(.says, brief.catchup.text))), at: 0)
-            screen.rail = Rail(items, limit: renderer.style.maxRailItems)
-        }
+        // Catch-up after the today choices; on a short rail Agenda/Weather make room, not it or "All items".
+        let catchup = lastCatchup.flatMap { brief in
+            now().timeIntervalSince(brief.received) <= Self.catchupChoiceMaxAge ? [RailItem("Catch-up", .show(Screen(.says, brief.catchup.text)))] : nil
+        } ?? []
         let active = inbox.active(at: now())
-        guard !active.isEmpty else { return screen }
         let pending = active.filter { $0.status == .pending }
-        let all = RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))
-        var items = screen.rail?.items ?? []
-        if pending.isEmpty { items.append(all) } else { items.insert(all, at: 0) }
+        let all = active.isEmpty ? [] : [RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))]
+        let (lead, tail) = pending.isEmpty ? ([RailItem](), catchup + all) : (all, catchup)
+        guard !lead.isEmpty || !tail.isEmpty else { return screen }
         if !pending.isEmpty {
             screen.text = summary.line(pending, now: now()) + ". " + screen.text
             reportShown(pending)
         }
-        screen.rail = Rail(items, limit: renderer.style.maxRailItems)
+        let limit = renderer.style.maxRailItems
+        let today = (screen.rail?.items ?? []).prefix(max(limit - lead.count - tail.count, 0))
+        screen.rail = Rail(lead + today + tail, limit: limit)
         return screen
     }
 
@@ -780,11 +780,16 @@ public final class Conductor {
     }
 
     /// Actions first (Lotti's best guess), then follow-ups, and Undo last when the backend already
-    /// did something: a stray tap on the best guess should not take it back.
+    /// did something: a stray tap on the best guess should not take it back. A delete can't be
+    /// undone, so it goes after the follow-ups too instead of under the highlight. A short rail
+    /// drops follow-ups, never an action.
     private func rail(for answer: Answer, question: String) -> Rail {
         let limit = renderer.style.maxRailItems
-        var items = answer.actions.map { RailItem($0.title, .perform($0)) }
-        items += answer.followUps.map { RailItem($0, .ask($0)) }
+        let (destructive, actions) = (answer.actions.filter(\.isDestructive), answer.actions.filter { !$0.isDestructive })
+        let room = max(limit - answer.actions.count - (answer.undo == nil ? 0 : 1), 0)
+        var items = actions.map { RailItem($0.title, .perform($0)) }
+        items += answer.followUps.prefix(room).map { RailItem($0, .ask($0)) }
+        items += destructive.map { RailItem($0.title, .perform($0)) }
         if let undo = answer.undo {
             items = Array(items.prefix(limit - 1)) + [undoItem(undo)]
         }

@@ -13,6 +13,7 @@ struct ActionCard: View {
             Label(heading, systemImage: icon)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(destructive ? .red : .green)
+                .accessibilityAddTraits(.isHeader)
             Text(headline).font(.headline)
             ForEach(details, id: \.self) { line in
                 Text(line).font(.subheadline).foregroundStyle(.secondary)
@@ -27,6 +28,7 @@ struct ActionCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.separator))
+        .accessibilityElement(children: .contain)
     }
 
     private var confirmButton: some View {
@@ -45,7 +47,7 @@ struct ActionCard: View {
         .tint(.primary)
     }
 
-    private var destructive: Bool { action.tool == "delete_calendar_event" }
+    private var destructive: Bool { action.isDestructive }
 
     private var heading: String {
         switch action.tool {
@@ -90,37 +92,67 @@ struct ActionCard: View {
         switch action.tool {
         case "create_calendar_event":
             var lines: [String] = []
-            if let when = ActionCard.when(args.string("start"), args.string("end")) { lines.append(when) }
+            if let when = ActionCard.when(args.string("start"), args.string("end")) {
+                lines.append(when)
+            } else if args.string("start") != nil {
+                // A time the phone can't read: the backend's title, which formats it on its own.
+                lines.append(action.title)
+            }
             if let place = args.string("location"), !place.isEmpty { lines.append(place) }
             if case .array(let people)? = args.values["attendees"], !people.isEmpty {
                 lines.append(people.compactMap(\.string).joined(separator: ", "))
             }
             return lines
         case "delete_calendar_event":
-            return [ActionCard.when(args.string("start"), nil)].compactMap { $0 } + [lang("Das lässt sich nicht rückgängig machen.", "This can't be undone.")]
+            let allDay = args.bool("allDay") == true
+            var lines = [allDay ? ActionCard.day(args.string("start")) : ActionCard.when(args.string("start"), args.string("end"))].compactMap { $0 }
+            if args.bool("occurrence") == true {
+                lines.append(lang("Nur dieser Termin, nicht die ganze Serie.", "Only this occurrence, not the whole series."))
+            }
+            return lines + [lang("Das lässt sich nicht rückgängig machen.", "This can't be undone.")]
         default:
             return []
         }
     }
 
-    /// "Tue 3 Nov, 14:30–15:30" in the phone's own time zone and 24-hour clock.
-    static func when(_ startISO: String?, _ endISO: String?) -> String? {
-        guard let start = date(startISO) else { return nil }
-        let day = start.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-        let time = Date.FormatStyle().hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).locale(Locale(identifier: "de_DE"))
-        guard let end = date(endISO) else { return "\(day), \(start.formatted(time))" }
-        if Calendar.current.isDate(start, inSameDayAs: end) {
-            return "\(day), \(start.formatted(time))–\(end.formatted(time))"
+    /// "Tue 3 Nov 14:30–15:30" (German: "Di., 3. Nov. 14:30–15:30"), 24-hour, in the phone's zone: the
+    /// same shape as the backend's confirmation titles.
+    static func when(_ startISO: String?, _ endISO: String?, timeZone: TimeZone = .current) -> String? {
+        guard let start = date(startISO, timeZone: timeZone), let day = day(start, timeZone: timeZone) else { return nil }
+        var time = Date.FormatStyle(timeZone: timeZone).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
+        time.locale = Locale(identifier: "de_DE")
+        guard let end = date(endISO, timeZone: timeZone) else { return "\(day) \(start.formatted(time))" }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        if calendar.isDate(start, inSameDayAs: end) {
+            return "\(day) \(start.formatted(time))–\(end.formatted(time))"
         }
-        let endDay = end.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
-        return "\(day), \(start.formatted(time)) – \(endDay), \(end.formatted(time))"
+        return "\(day) \(start.formatted(time)) – \(ActionCard.day(end, timeZone: timeZone) ?? "") \(end.formatted(time))"
     }
 
-    private static func date(_ iso: String?) -> Date? {
+    /// The date alone (all-day events): "Tue 3 Nov".
+    static func day(_ iso: String?, timeZone: TimeZone = .current) -> String? {
+        date(iso, timeZone: timeZone).flatMap { day($0, timeZone: timeZone) }
+    }
+
+    private static func day(_ date: Date, timeZone: TimeZone) -> String? {
+        var style = Date.FormatStyle(timeZone: timeZone).weekday(.abbreviated).day().month(.abbreviated)
+        style.locale = Locale(identifier: lang("de_DE", "en_GB"))
+        return date.formatted(style)
+    }
+
+    /// ISO 8601 as the backend sends it, and the shorter forms a model writes too: no seconds, or no
+    /// offset (then the phone's zone). A bare date (all-day events) is that day in the phone's zone.
+    static func date(_ iso: String?, timeZone: TimeZone = .current) -> Date? {
         guard let iso else { return nil }
-        let plain = ISO8601DateFormatter()
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return plain.date(from: iso) ?? fractional.date(from: iso)
+        if let date = BackendDates.parse(iso) { return date }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = timeZone
+        for format in ["yyyy-MM-dd'T'HH:mmXXXXX", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: iso) { return date }
+        }
+        return nil
     }
 }
