@@ -51,7 +51,7 @@ final class AlarmTimers: Timers {
     // MARK: - What AlarmKit doesn't hand back
 
     /// `SetTimerTool` notes each timer's name and end here: AlarmKit gives neither back.
-    private static let entriesKey = "timerEntries"
+    private nonisolated static let entriesKey = "timerEntries"
 
     private struct Entry: Codable {
         var label: String?
