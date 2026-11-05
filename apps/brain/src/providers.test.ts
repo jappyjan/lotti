@@ -65,7 +65,7 @@ test('DeepSeek: OpenAI-compatible request, default model, tool calls parsed', as
   assert.equal(seen!.url, 'https://api.deepseek.com/chat/completions');
   assert.equal(seen!.init.headers.authorization, 'Bearer sk-test');
   const body = JSON.parse(seen!.init.body);
-  assert.equal(body.model, 'deepseek-chat');
+  assert.equal(body.model, 'deepseek-v4-flash');
   assert.deepEqual(body.messages[2], {
     role: 'assistant',
     content: null,
@@ -251,6 +251,32 @@ test('providers.models falls back to suggestions', async () => {
   )) as any;
   assert.equal(r.result.source, 'suggested');
   assert.ok(r.result.models.includes('claude-sonnet-5-5'));
+});
+
+test('providers.models: live list always includes the V4 suggestions', async () => {
+  const t = makeApp({
+    fetch: async () =>
+      jsonResponse({ data: [{ id: 'deepseek-chat' }, { id: 'deepseek-x' }] }),
+  });
+  t.app.secrets.set('provider.deepseek.api_key', 'sk-test');
+  const r = (await t.app.ops.invoke(
+    'providers.models',
+    { provider: 'deepseek' },
+    'app',
+  )) as any;
+  assert.equal(r.result.source, 'live');
+  assert.deepEqual(
+    r.result.models.filter((m: string) => m.startsWith('deepseek-v4')),
+    ['deepseek-v4-flash', 'deepseek-v4-pro'],
+  );
+  assert.ok(r.result.models.includes('deepseek-x'));
+  assert.equal(new Set(r.result.models).size, r.result.models.length);
+});
+
+test('a saved DeepSeek model is kept when the default changes', () => {
+  const t = makeApp();
+  t.app.settings.set('provider.deepseek.model', 'deepseek-chat');
+  assert.equal(t.app.providers.modelFor('deepseek'), 'deepseek-chat');
 });
 
 const key = process.env.DEEPSEEK_API_KEY;

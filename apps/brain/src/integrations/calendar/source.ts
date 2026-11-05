@@ -1,5 +1,4 @@
 import type { App } from '../../app.ts';
-import { isoLocal } from '../../util/clock.ts';
 import {
   accountsFor,
   errText,
@@ -14,7 +13,7 @@ import type {
   CalendarEvent,
   CalendarSource,
 } from '../index.ts';
-import { CalDav, type DavCalendar } from './caldav.ts';
+import { CalDav, type DavCalendar, REPEATS_REFUSED } from './caldav.ts';
 
 export interface CalendarInfo {
   id: string;
@@ -35,11 +34,46 @@ export interface CalBackend {
   /** `ids` empty/undefined = the account default (google: primary, caldav: all). */
   events(ids: string[], from: number, to: number): Promise<CalendarEvent[]>;
   create(calendarId: string | undefined, e: NewEvent): Promise<string>;
+  /** The event as the service has it now; throws when Lotti will not delete it (a whole series). */
+  deletable(calendarId: string, eventId: string): Promise<CalendarEvent>;
+  /** Deletes one event; a repeating one only as far as the service allows (see each backend). */
+  delete(calendarId: string, eventId: string): Promise<void>;
 }
 
 const G = 'https://www.googleapis.com/calendar/v3';
 
 export function googleBackend(app: App, acc: AccountRow): CalBackend {
+  const toEvent = (e: any, id: string): CalendarEvent | undefined => {
+    if (e.status === 'cancelled') return undefined;
+    const allDay = !e.start?.dateTime;
+    const s = Date.parse(e.start?.dateTime ?? `${e.start?.date}T00:00:00`);
+    const en = Date.parse(e.end?.dateTime ?? `${e.end?.date}T00:00:00`);
+    if (Number.isNaN(s)) return undefined;
+    return {
+      id: String(e.id),
+      title: String(e.summary ?? '(no title)'),
+      start: s,
+      end: Number.isNaN(en) ? s + 3_600_000 : en,
+      ...(e.location ? { location: String(e.location) } : {}),
+      ...(allDay ? { allDay: true } : {}),
+      calendar: id === 'primary' ? acc.label || 'primary' : id,
+      calendarId: id,
+      ...(e.recurringEventId ? { recurring: true } : {}),
+    };
+  };
+  const eventUrl = (calendarId: string, eventId: string) =>
+    `${G}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
+  const deletable = async (calendarId: string, eventId: string) => {
+    const e = await googleFetch(app, acc.id, eventUrl(calendarId, eventId));
+    // A series itself (not one occurrence of it) has the repeat rule: deleting it would wipe every occurrence.
+    if (e.recurrence)
+      throw new Error(
+        'That is a whole repeating series, not one occurrence: list the events again and pick the occurrence.',
+      );
+    const ev = toEvent(e, calendarId);
+    if (!ev) throw new Error('Event not found.');
+    return ev;
+  };
   return {
     async calendars() {
       const j = await googleFetch(
@@ -68,22 +102,8 @@ export function googleBackend(app: App, acc: AccountRow): CalBackend {
           `${G}/calendars/${encodeURIComponent(id)}/events?${q}`,
         );
         for (const e of j.items ?? []) {
-          if (e.status === 'cancelled') continue;
-          const allDay = !e.start?.dateTime;
-          const s = Date.parse(
-            e.start?.dateTime ?? `${e.start?.date}T00:00:00`,
-          );
-          const en = Date.parse(e.end?.dateTime ?? `${e.end?.date}T00:00:00`);
-          if (Number.isNaN(s)) continue;
-          out.push({
-            id: String(e.id),
-            title: String(e.summary ?? '(no title)'),
-            start: s,
-            end: Number.isNaN(en) ? s + 3_600_000 : en,
-            ...(e.location ? { location: String(e.location) } : {}),
-            ...(allDay ? { allDay: true } : {}),
-            calendar: id === 'primary' ? acc.label || 'primary' : id,
-          });
+          const ev = toEvent(e, id);
+          if (ev) out.push(ev);
         }
       }
       return out;
@@ -108,6 +128,15 @@ export function googleBackend(app: App, acc: AccountRow): CalBackend {
         },
       );
       return String(j.id ?? '');
+    },
+    deletable,
+    // singleEvents=true lists occurrences with their own ids: this removes that one occurrence only,
+    // and `deletable` refuses a series id even when one is passed by hand.
+    async delete(calendarId, eventId) {
+      await deletable(calendarId, eventId);
+      await googleFetch(app, acc.id, eventUrl(calendarId, eventId), {
+        method: 'DELETE',
+      });
     },
   };
 }
@@ -154,13 +183,31 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
     const all = await discover();
     return ids.length ? all.filter((c) => ids.includes(c.id)) : all;
   };
+  const calendar = async (calendarId: string, eventId: string) => {
+    // `uid#recurrence-id`: one occurrence of a series (see parseEvents).
+    if (eventId.includes('#')) throw new Error(REPEATS_REFUSED);
+    const cal = (await pick([calendarId]))[0];
+    if (!cal) throw new Error('Calendar not found.');
+    return cal;
+  };
   return {
     calendars: () => dav().listCalendars(),
     async events(ids, from, to) {
       const out: CalendarEvent[] = [];
       for (const c of await pick(ids))
-        out.push(...(await dav().events(c, from, to)));
+        out.push(
+          ...(await dav().events(c, from, to)).map((e) => ({
+            ...e,
+            calendarId: c.id,
+          })),
+        );
       return out;
+    },
+    async deletable(calendarId, eventId) {
+      return dav().deletable(await calendar(calendarId, eventId), eventId);
+    },
+    async delete(calendarId, eventId) {
+      await dav().delete(await calendar(calendarId, eventId), eventId);
     },
     async create(calendarId, e) {
       const cal = (await pick(calendarId ? [calendarId] : []))[0];
@@ -173,6 +220,25 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
 export type BackendFactory = (app: App, acc: AccountRow) => CalBackend;
 export const defaultBackend: BackendFactory = (app, acc) =>
   acc.kind === 'google' ? googleBackend(app, acc) : caldavBackend(app, acc);
+
+/**
+ * `account|calendar|event`: what the agent hands back to delete an event. Only `%` and `|` are escaped, so a
+ * CalDAV calendar URL stays readable (fewer tokens, and nothing for the model to re-encode).
+ */
+export const eventRef = (account: string, calendar: string, event: string) =>
+  [account, calendar, event]
+    .map((x) => x.replace(/[%|]/g, encodeURIComponent))
+    .join('|');
+const parseRef = (ref: string) => {
+  const p = ref.split('|');
+  return p.length === 3 && p.every(Boolean)
+    ? ([p[0]!, p[1]!, p[2]!].map((x) => decodeURIComponent(x)) as [
+        string,
+        string,
+        string,
+      ])
+    : undefined;
+};
 
 /** All calendar accounts merged. One failing account does not hide the others. */
 export class MergedCalendar implements CalendarSource {
@@ -188,12 +254,17 @@ export class MergedCalendar implements CalendarSource {
     let okCount = 0;
     for (const acc of accounts) {
       try {
+        const evs = await this.backend(this.app, acc).events(
+          strList(acc.config.calendars),
+          from,
+          to,
+        );
         out.push(
-          ...(await this.backend(this.app, acc).events(
-            strList(acc.config.calendars),
-            from,
-            to,
-          )),
+          ...evs.map((e) =>
+            e.calendarId
+              ? { ...e, ref: eventRef(acc.id, e.calendarId, e.id) }
+              : e,
+          ),
         );
         touchSync(this.app, acc.id);
         okCount++;
@@ -255,10 +326,73 @@ export class MergedCalendar implements CalendarSource {
       touchSync(this.app, acc.id);
       return {
         ok: true,
-        text: `"${title}" added (${isoLocal(start)}) to ${acc.label}.`,
+        text: `"${title}" added to ${acc.label}.`,
       };
     } catch (e) {
       return { ok: false, text: `Could not add the event: ${errText(e)}` };
+    }
+  }
+
+  /**
+   * The account and event behind an `eventRef`, only in a calendar Lotti lists (the selected ones, or the
+   * account default when none are selected): a made-up ref cannot reach other calendars.
+   */
+  private resolve(
+    ref: unknown,
+  ):
+    | { acc: AccountRow; calendarId: string; eventId: string }
+    | { error: string } {
+    let parts: [string, string, string] | undefined;
+    try {
+      parts = parseRef(String(ref ?? ''));
+    } catch {
+      parts = undefined;
+    }
+    if (!parts) return { error: 'That event reference is not valid.' };
+    const [accountId, calendarId, eventId] = parts;
+    const acc = accountsFor(this.app, 'calendar').find(
+      (a) => a.id === accountId,
+    );
+    if (!acc) return { error: 'That calendar account is gone.' };
+    const selected = strList(acc.config.calendars);
+    if (
+      selected.length
+        ? !selected.includes(calendarId)
+        : acc.kind === 'google' && calendarId !== 'primary'
+    )
+      return { error: 'Lotti does not use that calendar.' };
+    return { acc, calendarId, eventId };
+  }
+
+  /** The event a delete would remove, read from the service now; or why Lotti will not delete it. */
+  async deletable(
+    ref: unknown,
+  ): Promise<{ ok: true; event: CalendarEvent } | { ok: false; text: string }> {
+    const r = this.resolve(ref);
+    if ('error' in r) return { ok: false, text: r.error };
+    try {
+      return {
+        ok: true,
+        event: await this.backend(this.app, r.acc).deletable(
+          r.calendarId,
+          r.eventId,
+        ),
+      };
+    } catch (e) {
+      return { ok: false, text: `Cannot delete that event: ${errText(e)}` };
+    }
+  }
+
+  async deleteEvent(args: Record<string, unknown>): Promise<ActionOutcome> {
+    const r = this.resolve(args.eventRef);
+    if ('error' in r) return { ok: false, text: r.error };
+    const title = String(args.title ?? 'The event');
+    try {
+      await this.backend(this.app, r.acc).delete(r.calendarId, r.eventId);
+      touchSync(this.app, r.acc.id);
+      return { ok: true, text: `"${title}" deleted from ${r.acc.label}.` };
+    } catch (e) {
+      return { ok: false, text: `Could not delete the event: ${errText(e)}` };
     }
   }
 }

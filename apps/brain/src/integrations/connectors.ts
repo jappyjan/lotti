@@ -39,9 +39,14 @@ export async function accountMailboxes(
 ) {
   if (acc.kind === 'google') return [];
   const sel = strList(acc.config.mailboxes);
+  const all = acc.config.allMailboxes === true;
   return (await imapMailboxes(app, acc, d.imap)).map((b) => ({
     ...b,
-    selected: sel.length ? sel.includes(b.id) : b.id.toUpperCase() === 'INBOX',
+    selected: all
+      ? !b.excluded
+      : sel.length
+        ? sel.includes(b.id)
+        : b.id.toUpperCase() === 'INBOX',
   }));
 }
 

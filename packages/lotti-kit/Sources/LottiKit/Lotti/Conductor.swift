@@ -120,6 +120,9 @@ public final class Conductor {
     @ObservationIgnored private var syncingHeadUp = false
     /// A catch-up brief that came while the glasses were off your face, shown when you put them on.
     @ObservationIgnored private var heldCatchup: (catchup: Catchup, received: Date)?
+    /// The latest brief, kept so the today view can offer it as "Catch-up" for `catchupChoiceMaxAge`.
+    @ObservationIgnored private var lastCatchup: (catchup: Catchup, received: Date)?
+    static let catchupChoiceMaxAge: TimeInterval = 12 * 3600
     /// A held brief older than this is dropped instead of shown.
     static let heldCatchupMaxAge: TimeInterval = 2 * 3600
     /// When the backend last showed a sign of life, so the wait is for silence, not a fixed total time.
@@ -410,17 +413,22 @@ public final class Conductor {
     /// Lotti's sentence, and a choice for the list of all items (first while something is pending).
     private func todayScreen(_ info: TodayInfo) -> Screen {
         var screen = composer.screen(for: info)
+        // Catch-up after the today choices; on a short rail Agenda/Weather make room, not it or "All items".
+        let catchup = lastCatchup.flatMap { brief in
+            now().timeIntervalSince(brief.received) <= Self.catchupChoiceMaxAge ? [RailItem("Catch-up", .show(Screen(.says, brief.catchup.text)))] : nil
+        } ?? []
         let active = inbox.active(at: now())
-        guard !active.isEmpty else { return screen }
         let pending = active.filter { $0.status == .pending }
-        let all = RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))
-        var items = screen.rail?.items ?? []
-        if pending.isEmpty { items.append(all) } else { items.insert(all, at: 0) }
+        let all = active.isEmpty ? [] : [RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))]
+        let (lead, tail) = pending.isEmpty ? ([RailItem](), catchup + all) : (all, catchup)
+        guard !lead.isEmpty || !tail.isEmpty else { return screen }
         if !pending.isEmpty {
             screen.text = summary.line(pending, now: now()) + ". " + screen.text
             reportShown(pending)
         }
-        screen.rail = Rail(items)
+        let limit = Rail.maxItems
+        let today = (screen.rail?.items ?? []).prefix(max(limit - lead.count - tail.count, 0))
+        screen.rail = Rail(lead + today + tail, limit: limit)
         return screen
     }
 
@@ -520,6 +528,7 @@ public final class Conductor {
     /// known to be off your face, it waits for the next "worn" (at most `heldCatchupMaxAge`). An
     /// unknown wear state (not reported yet) shows it right away.
     private func showCatchup(_ catchup: Catchup) {
+        lastCatchup = (catchup, now())
         if link.status.isConnected, link.wearState == .removed {
             heldCatchup = (catchup, now())
             log("catch-up held until the glasses are worn")
@@ -905,11 +914,16 @@ public final class Conductor {
     }
 
     /// Actions first (Lotti's best guess), then follow-ups, and Undo last when the backend already
-    /// did something: a stray tap on the best guess should not take it back.
+    /// did something: a stray tap on the best guess should not take it back. A delete can't be
+    /// undone, so it goes after the follow-ups too instead of under the highlight. A short rail
+    /// drops follow-ups, never an action.
     private func rail(for answer: Answer, question: String) -> Rail {
         let limit = Rail.maxItems
-        var items = answer.actions.map { RailItem($0.title, .perform($0)) }
-        items += answer.followUps.map { RailItem($0, .ask($0)) }
+        let (destructive, actions) = (answer.actions.filter(\.isDestructive), answer.actions.filter { !$0.isDestructive })
+        let room = max(limit - answer.actions.count - (answer.undo == nil ? 0 : 1), 0)
+        var items = actions.map { RailItem($0.title, .perform($0)) }
+        items += answer.followUps.prefix(room).map { RailItem($0, .ask($0)) }
+        items += destructive.map { RailItem($0.title, .perform($0)) }
         if let undo = answer.undo {
             items = Array(items.prefix(limit - 1)) + [undoItem(undo)]
         }
