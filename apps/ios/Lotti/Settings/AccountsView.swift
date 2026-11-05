@@ -160,7 +160,11 @@ struct GoogleClientView: View {
             }
         }
         .errorAlert($error)
-        .task { info = (try? await model.call("accounts.google_client")).map(GoogleClientInfo.init) }
+        .task {
+            // A brain that is unreachable or refuses this phone says so, instead of showing an empty form.
+            guard model.isPaired else { return }
+            await attempt($error) { info = GoogleClientInfo(try await model.call("accounts.google_client")) }
+        }
     }
 }
 

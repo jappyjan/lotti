@@ -272,7 +272,7 @@ struct McpDetailView: View {
         } header: {
             Text("Sign-in")
         } footer: {
-            Text(needsClient ? "This server has no automatic registration. Enter the client id (and secret) you registered with it; the redirect is shown by the server's console or is lotti://oauth." : "For servers that use OAuth. Tokens stay on your Lotti Brain and refresh by themselves.")
+            Text(needsClient ? "This server has no automatic registration. Register Lotti there yourself, with the redirect URI lotti://oauth (or your Lotti Brain's https address followed by /oauth/callback), then enter the client id (and secret) here." : "For servers that use OAuth. Tokens stay on your Lotti Brain and refresh by themselves.")
         }
     }
 

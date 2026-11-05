@@ -199,6 +199,45 @@ test('rrule: TZID keeps wall-clock time across DST; Windows zone names work', ()
   );
 });
 
+test('rrule: unsupported or hostile rules never invent events, loop or crash', () => {
+  const [from, to] = range('2026-11-05T00:00:00Z', '2026-12-05T00:00:00Z');
+  const one = (rule: string) =>
+    expandEvents(
+      cal(ev('UID:u', 'SUMMARY:T', 'DTSTART:20261101T090000Z', rule)),
+      from,
+      to,
+    );
+  // Parts we cannot evaluate: the series is not expanded (ignoring them would mean 22 phantom events).
+  assert.equal(
+    one('RRULE:FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1').length,
+    0,
+  );
+  assert.equal(one('RRULE:FREQ=YEARLY;BYWEEKNO=20').length, 0);
+  assert.equal(one('RRULE:FREQ=HOURLY').length, 0);
+  // A date beyond the calendar's range ends the series; no NaN events.
+  const huge = one('RRULE:FREQ=DAILY;INTERVAL=99999999999');
+  assert.equal(huge.length, 0);
+  assert.ok(huge.every((e) => Number.isFinite(e.start)));
+  // Garbage, zero interval and an endless rule over a long-past start stay bounded.
+  assert.equal(one('RRULE:FREQ=;;;BYDAY=ZZ;COUNT=abc').length, 0);
+  assert.equal(one('RRULE:FREQ=DAILY;INTERVAL=0').length, 30);
+  const old = expandEvents(
+    cal(
+      ev('UID:o', 'SUMMARY:T', 'DTSTART:19860101T090000Z', 'RRULE:FREQ=DAILY'),
+    ),
+    from,
+    to,
+  );
+  assert.equal(old.length, 30);
+  // One feed cannot return an unbounded number of events.
+  const many = cal(
+    ...Array.from({ length: 6000 }, (_, i) =>
+      ev(`UID:m${i}`, 'SUMMARY:T', 'DTSTART:20261110T090000Z'),
+    ),
+  );
+  assert.equal(expandEvents(many, from, to).length, 5000);
+});
+
 test('rrule: all-day events, multi-day spans and yearly', () => {
   const ics = cal(
     ev(

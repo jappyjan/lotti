@@ -11,6 +11,8 @@ import { zonedToEpoch } from './ics.ts';
 const DAY = 86_400_000;
 const MAX_OCCURRENCES = 20_000;
 const MAX_PERIODS = 60_000;
+/** A feed cannot make one expansion return more than this many events. */
+const MAX_EVENTS = 5_000;
 
 const WINDOWS_ZONES: Record<string, string> = {
   'W. Europe Standard Time': 'Europe/Berlin',
@@ -136,6 +138,8 @@ function parseRule(v: string): Rule | undefined {
   ) as Record<string, string>;
   if (!['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'].includes(kv.FREQ ?? ''))
     return undefined;
+  // Parts we cannot evaluate: ignoring them would invent events, so the series is not expanded.
+  if (kv.BYSETPOS || kv.BYWEEKNO || kv.BYYEARDAY) return undefined;
   const nums = (s?: string) =>
     (s ? s.split(',') : []).map(Number).filter((n) => Number.isInteger(n));
   const byDay = (kv.BYDAY ? kv.BYDAY.split(',') : []).flatMap((x) => {
@@ -331,6 +335,8 @@ export function expandEvents(
   }
 
   const emit = (p: Props, inst: Instance, id: string) => {
+    if (!Number.isFinite(inst.start) || !Number.isFinite(inst.end)) return;
+    if (out.length >= MAX_EVENTS) return;
     if (inst.end <= from || inst.start >= to) return;
     const loc = first(p, 'LOCATION')?.v;
     out.push({
@@ -345,6 +351,7 @@ export function expandEvents(
   };
 
   for (const p of events) {
+    if (out.length >= MAX_EVENTS) break;
     const ds = first(p, 'DTSTART');
     const start = ds && parseDt(ds.v, ds.p);
     if (!ds || !start) continue;
@@ -389,6 +396,8 @@ export function expandEvents(
       const f = fromDayNum(day);
       const occ: Dt = { ...start, ...f };
       const inst = instanceAt(occ, sp);
+      // A date beyond the calendar's range (huge INTERVAL) ends the series.
+      if (!Number.isFinite(inst.start)) break;
       if (inst.start >= until) break;
       if (rule.count !== undefined && n >= rule.count) break;
       if (++n > MAX_OCCURRENCES) break;
