@@ -55,7 +55,7 @@ _Done when:_ you wear Lotti for a normal day and use the today view and chat fro
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the default. Wider rail still switchable in Debug. **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
+1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the only layout (side and wide rail removed). **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
 2. **Put it on** `ios` `design` `brain`: **built as the catch-up brief** (wear on/off decoded from sid `0x0D` plus away/slept heuristics; not verified on real glasses yet). When Jan comes back after ≥ 2 h or sleep, one short catch-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".

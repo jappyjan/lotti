@@ -10,19 +10,26 @@ struct DebugView: View {
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
 
-    @State private var displayStyle: DisplayStyle = Settings.displayStyle
-
-    private func setDisplayStyle(_ style: DisplayStyle) {
-        Settings.displayStyle = style
-        conductor.setDisplayStyle(style)
-    }
-
     var body: some View {
         List {
             Section("On the glasses") {
                 if let screen = conductor.screen {
+                    if let header = screen.header {
+                        LabeledContent(header.left, value: header.right).font(.caption)
+                    }
                     Text(screen.text).font(.headline)
                     ForEach(screen.details, id: \.self) { Text($0).foregroundStyle(.secondary) }
+                    if !screen.cards.isEmpty {
+                        HStack(alignment: .top) {
+                            ForEach(Array(screen.cards.enumerated()), id: \.offset) { _, card in
+                                VStack(alignment: .leading) {
+                                    Text(card.title).font(.subheadline.bold())
+                                    ForEach(card.lines, id: \.self) { Text($0).font(.caption) }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
                     if let rail = screen.rail {
                         ForEach(Array(rail.items.enumerated()), id: \.offset) { index, item in
                             Label(item.title, systemImage: index == rail.highlighted ? "chevron.right.circle.fill" : "circle")
@@ -33,15 +40,6 @@ struct DebugView: View {
                     Text("Display off").foregroundStyle(.secondary)
                 }
                 LabeledContent("Mode", value: String(describing: conductor.mode))
-            }
-
-            Section("Display layout") {
-                Picker("Choices", selection: $displayStyle) {
-                    Text("Choices below (default)").tag(DisplayStyle.choicesBelow)
-                    Text("Wider rail, 3 choices").tag(DisplayStyle.wideRail)
-                    Text("Rail (old)").tag(DisplayStyle.rail)
-                }
-                .onChange(of: displayStyle) { _, style in setDisplayStyle(style) }
             }
 
             Section("Lotti") {

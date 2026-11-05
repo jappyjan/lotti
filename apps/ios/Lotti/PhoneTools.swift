@@ -141,12 +141,16 @@ struct SetTimerTool: PhoneTool {
         guard manager.authorizationState == .authorized else {
             throw ToolError("Lotti may not set alarms. Allow it in Settings.")
         }
-        let label = arguments.string("label") ?? "Timer"
+        let named = arguments.string("label")
+        let label = named ?? "Timer"
         let alert = AlarmPresentation.Alert(
             title: LocalizedStringResource(stringLiteral: label),
             stopButton: AlarmButton(text: "Stop", textColor: .white, systemImageName: "stop.circle"))
         let attributes = AlarmAttributes<TimerMetadata>(presentation: AlarmPresentation(alert: alert), tintColor: .green)
-        _ = try await manager.schedule(id: UUID(), configuration: .timer(duration: TimeInterval(minutes * 60), attributes: attributes))
+        let id = UUID()
+        // Before scheduling, so the glasses know the name even if the first update is quick.
+        AlarmTimers.remember(id, label: named, duration: TimeInterval(minutes * 60))
+        _ = try await manager.schedule(id: id, configuration: .timer(duration: TimeInterval(minutes * 60), attributes: attributes))
         return "Timer set for \(minutes) min."
     }
 }

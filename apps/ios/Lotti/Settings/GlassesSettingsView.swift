@@ -1,10 +1,9 @@
 import LottiKit
 import SwiftUI
 
-/// The glasses: connection, head tracking, wear detection, layout, and a test for the indicators.
+/// The glasses: connection, head tracking, wear detection, the mascot, and a test for the indicators.
 struct GlassesSettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var displayStyle = Settings.displayStyle
     @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
     @State private var note: String?
     @State private var error: String?
@@ -17,19 +16,6 @@ struct GlassesSettingsView: View {
             connectionSection
             wearSection
             lookUpSection
-            Section {
-                Picker("Choices", selection: $displayStyle) {
-                    Text("Choices below (default)").tag(DisplayStyle.choicesBelow)
-                    Text("Wider rail, 3 choices").tag(DisplayStyle.wideRail)
-                    Text("Rail (old)").tag(DisplayStyle.rail)
-                }
-                .onChange(of: displayStyle) { _, style in
-                    Settings.displayStyle = style
-                    conductor.setDisplayStyle(style)
-                }
-            } header: {
-                Text("Layout")
-            }
             Section {
                 Toggle("Mascot", isOn: $mascotEnabled)
             } footer: {
