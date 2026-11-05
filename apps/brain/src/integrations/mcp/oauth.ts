@@ -1,11 +1,13 @@
 import type { App } from '../../app.ts';
 import {
   APP_REDIRECT,
+  TokenError,
   newPkce,
   newState,
   publicUrl,
   reachWhy,
   savePending,
+  sentence,
   takePending,
   tokenPost,
   webRedirect,
@@ -23,10 +25,63 @@ export const oauthPrefix = (id: string) => `mcp.${id}.oauth.`;
 const SKEW_MS = 60_000;
 
 export const AUTH_REFUSED = 'MCP server refused the login';
+export const BEARER_REFUSED = `${AUTH_REFUSED}: sign in or set the bearer token in the app.`;
 export const SIGN_IN_AGAIN = 'MCP sign-in expired: sign in again in the app.';
-/** True for errors that mean "the user has to sign in (again)". */
+export const SIGNED_OUT =
+  'Signed out of this MCP server: sign in again in the app.';
+const SIGN_IN_GONE =
+  'The MCP sign-in was removed while it was being renewed: sign in again in the app.';
+const AUTH_MESSAGES = new Set([
+  BEARER_REFUSED,
+  SIGN_IN_AGAIN,
+  SIGNED_OUT,
+  SIGN_IN_GONE,
+]);
+
+/** Our own "the user has to sign in (again)" signal. Server-supplied error text never is one. */
+export class McpAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'McpAuthError';
+  }
+}
+/** For a stored last_error: exactly one of our own sign-in messages (never a substring of server text). */
 export const isAuthError = (msg: string | null | undefined) =>
-  !!msg && (msg.includes(AUTH_REFUSED) || msg.includes('sign in again'));
+  !!msg && AUTH_MESSAGES.has(msg);
+
+/**
+ * The resource indicator (RFC 8707) of a server: its URL without query and fragment, which may hold a token
+ * and would otherwise reach a third-party authorization server and the browser's address bar.
+ */
+export function canonicalResource(serverUrl: string): string {
+  const u = new URL(serverUrl);
+  return `${u.origin}${u.pathname === '/' ? '' : u.pathname}`;
+}
+/** For comparing resource and issuer identifiers: lower-case scheme/host, no query, no trailing slash. */
+function idOf(u: string): { origin: string; path: string } | undefined {
+  try {
+    const x = new URL(u);
+    return { origin: x.origin, path: x.pathname.replace(/\/+$/, '') };
+  } catch {
+    return undefined;
+  }
+}
+const sameId = (a: string, b: string) => {
+  const x = idOf(a);
+  const y = idOf(b);
+  return !!x && !!y && x.origin === y.origin && x.path === y.path;
+};
+/** RFC 9728 §3.3: metadata must be for this server (same origin, and the server's path at or below its path). */
+function resourceCovers(resource: string, serverUrl: string): boolean {
+  const r = idOf(resource);
+  const s = idOf(serverUrl);
+  return (
+    !!r &&
+    !!s &&
+    r.origin === s.origin &&
+    (s.path === r.path || s.path.startsWith(`${r.path}/`))
+  );
+}
 
 interface AsMeta {
   authorization_endpoint: string;
@@ -94,6 +149,13 @@ export async function discover(
     prm = await getJson(app, u);
     if (prm) break;
   }
+  if (
+    typeof prm?.resource === 'string' &&
+    !resourceCovers(prm.resource, serverUrl)
+  )
+    throw new Error(
+      `The MCP server's sign-in metadata is for a different resource (${publicUrl(prm.resource)}).`,
+    );
   const scope =
     challengeParam(wwwAuthenticate, 'scope') ??
     (Array.isArray(prm?.scopes_supported) && prm.scopes_supported.length
@@ -117,6 +179,11 @@ export async function discover(
     if (as?.authorization_endpoint && as?.token_endpoint) break;
     as = undefined;
   }
+  // RFC 8414 §3.3: the metadata must name the issuer it was fetched for.
+  if (typeof as?.issuer === 'string' && !sameId(as.issuer, issuer))
+    throw new Error(
+      `The authorization server's metadata names a different issuer (${publicUrl(as.issuer)}).`,
+    );
   const meta: AsMeta = as
     ? {
         authorization_endpoint: as.authorization_endpoint,
@@ -160,7 +227,9 @@ async function probe(app: App, url: string): Promise<string> {
     });
   } catch (e) {
     throw new Error(
-      `Cannot reach the MCP server at ${publicUrl(url)}: ${reachWhy(e)}`,
+      sentence(
+        `Cannot reach the MCP server at ${publicUrl(url)}: ${reachWhy(e)}`,
+      ),
     );
   }
   if (r.status === 401 || r.status === 403)
@@ -172,39 +241,56 @@ async function probe(app: App, url: string): Promise<string> {
   );
 }
 
+const NO_DCR = 'This server has no automatic client registration.';
+
+/** Dynamic client registration (RFC 7591). A refusal is no error: the user can enter a client instead. */
 async function register(
   app: App,
   endpoint: string,
   redirectUri: string,
   scope?: string,
-): Promise<string> {
-  const res = await app.fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      client_name: 'Lotti',
-      redirect_uris: [redirectUri],
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      ...(scope ? { scope } : {}),
-    }),
-    signal: AbortSignal.timeout(15_000),
-  });
+): Promise<{ clientId: string } | { refused: string }> {
+  let res: Response;
+  try {
+    res = await app.fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({
+        client_name: 'Lotti',
+        redirect_uris: [redirectUri],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+        ...(scope ? { scope } : {}),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw new Error(
+      sentence(`Cannot reach the client registration: ${reachWhy(e)}`),
+    );
+  }
+  if (res.status >= 500)
+    throw new Error(
+      `The client registration answered HTTP ${res.status}: try again later.`,
+    );
+  // The origin fallback guesses /register: not there means no automatic registration.
+  if (res.status === 404) return { refused: NO_DCR };
   const j: any = await res.json().catch(() => ({}));
   if (!res.ok || !j.client_id)
-    throw new Error(
-      `The server refused the automatic client registration (${j.error_description ?? j.error ?? res.status}): enter a client id in the app.`,
-    );
-  return String(j.client_id);
+    return {
+      refused: `The server refused the automatic client registration (${j.error_description ?? j.error ?? `HTTP ${res.status}`}).`,
+    };
+  return { clientId: String(j.client_id) };
 }
 
-export interface McpOauthStart {
-  url: string;
-  state: string;
-  redirectUri: string;
-  callbackScheme: string;
-}
+export type McpOauthStart =
+  | { url: string; state: string; redirectUri: string; callbackScheme: string }
+  /** No client to sign in with: register Lotti at the server with `redirectUri`, then mcp.oauth_set_client. */
+  | { needsClient: true; redirectUri: string; reason: string };
 
 export async function mcpOauthStart(
   app: App,
@@ -223,19 +309,27 @@ export async function mcpOauthStart(
       app.secrets.get(S(server.id, 'client_redirect')) !== redirectUri)
   ) {
     if (!d.registration_endpoint)
-      throw new Error(
-        'This server has no automatic client registration: enter a client id (and secret) in the app.',
-      );
-    clientId = await register(
+      return { needsClient: true, redirectUri, reason: NO_DCR };
+    const r = await register(
       app,
       d.registration_endpoint,
       redirectUri,
       d.scope,
     );
+    if ('refused' in r)
+      return { needsClient: true, redirectUri, reason: r.refused };
+    clientId = r.clientId;
     app.secrets.set(S(server.id, 'client_id'), clientId);
     app.secrets.set(S(server.id, 'client_redirect'), redirectUri);
   }
-  if (!clientId) throw new Error('Enter a client id for this server first.');
+  if (!clientId)
+    return {
+      needsClient: true,
+      redirectUri,
+      reason: 'Enter a client ID for this server first.',
+    };
+  const moved = manual && pinTokenOrigin(app, server.id, d.token_endpoint);
+  if (moved) return { needsClient: true, redirectUri, reason: moved };
   const { verifier, challenge } = newPkce();
   const state = newState();
   savePending(app, 'mcp', state, {
@@ -253,11 +347,28 @@ export async function mcpOauthStart(
     state,
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    resource: server.url,
+    resource: canonicalResource(server.url),
     ...(d.scope ? { scope: d.scope } : {}),
   }))
     au.searchParams.set(k, v);
   return { url: au.href, state, redirectUri, callbackScheme: 'lotti' };
+}
+
+/**
+ * A client secret the user entered goes only to the token endpoint origin of the first sign-in after it was
+ * entered: later sign-ins that discover another origin are refused.
+ */
+function pinTokenOrigin(
+  app: App,
+  id: string,
+  tokenEndpoint: string,
+): string | undefined {
+  const origin = new URL(tokenEndpoint).origin;
+  const pinned = app.secrets.get(S(id, 'client_token_origin'));
+  if (!pinned) app.secrets.set(S(id, 'client_token_origin'), origin);
+  else if (pinned !== origin && app.secrets.get(S(id, 'client_secret')))
+    return `The server now uses another token endpoint (${origin}) than the one your client was set up with (${pinned}): enter the client again.`;
+  return undefined;
 }
 
 function store(
@@ -275,8 +386,16 @@ function store(
   app.secrets.set(S(id, 'token_endpoint'), tokenEndpoint);
 }
 
-function clientBody(app: App, id: string): Record<string, string> {
-  const secret = app.secrets.get(S(id, 'client_secret'));
+function clientBody(
+  app: App,
+  id: string,
+  tokenEndpoint: string,
+): Record<string, string> {
+  const pinned = app.secrets.get(S(id, 'client_token_origin'));
+  const secret =
+    !pinned || pinned === new URL(tokenEndpoint).origin
+      ? app.secrets.get(S(id, 'client_secret'))
+      : undefined;
   return {
     client_id: app.secrets.get(S(id, 'client_id')) ?? '',
     ...(secret ? { client_secret: secret } : {}),
@@ -307,8 +426,8 @@ export async function mcpOauthExchange(
       code,
       redirect_uri: p.redirectUri,
       code_verifier: p.verifier,
-      resource: p.serverUrl,
-      ...clientBody(app, p.serverId),
+      resource: canonicalResource(p.serverUrl),
+      ...clientBody(app, p.serverId, p.tokenEndpoint),
     },
     'MCP',
   );
@@ -328,6 +447,8 @@ export function setManualClient(
 ): void {
   app.secrets.set(S(id, 'client_id'), clientId);
   app.secrets.set(S(id, 'client_manual'), '1');
+  // Pinned again at the next sign-in.
+  app.secrets.delete(S(id, 'client_token_origin'));
   if (clientSecret) app.secrets.set(S(id, 'client_secret'), clientSecret);
   else app.secrets.delete(S(id, 'client_secret'));
 }
@@ -342,37 +463,77 @@ export function clearMcpOauth(app: App, id: string): void {
   for (const x of app.secrets.list(oauthPrefix(id))) app.secrets.delete(x.name);
 }
 
+/** Sign out: drop the tokens, keep the client (registered or entered) and any bearer. */
+export function signOutMcpOauth(app: App, id: string): void {
+  for (const k of [
+    'access_token',
+    'refresh_token',
+    'expires_at',
+    'token_endpoint',
+  ])
+    app.secrets.delete(S(id, k));
+  app.db.run(
+    "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",
+    SIGNED_OUT,
+    id,
+  );
+}
+
 const inflight = new Map<string, Promise<string>>();
 
+function signInAgain(app: App, id: string): McpAuthError {
+  app.db.run(
+    "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",
+    SIGN_IN_AGAIN,
+    id,
+  );
+  return new McpAuthError(SIGN_IN_AGAIN);
+}
+
+/**
+ * Only an OAuth error reply of the token endpoint (or no refresh token at all) means "sign in again". An
+ * unreachable or failing sign-in server throws a plain error: the request fails and is retried later.
+ */
 function refreshToken(app: App, server: McpServerConfig): Promise<string> {
   const hit = inflight.get(server.id);
   if (hit) return hit;
   const run = (async () => {
     const rt = app.secrets.get(S(server.id, 'refresh_token'));
     const te = app.secrets.get(S(server.id, 'token_endpoint'));
+    if (!rt || !te) throw signInAgain(app, server.id);
+    let t: Awaited<ReturnType<typeof tokenPost>>;
     try {
-      if (!rt || !te) throw new Error('no refresh token');
-      const t = await tokenPost(
+      t = await tokenPost(
         app,
         te,
         {
           grant_type: 'refresh_token',
           refresh_token: rt,
-          ...(server.url ? { resource: server.url } : {}),
-          ...clientBody(app, server.id),
+          ...(server.url ? { resource: canonicalResource(server.url) } : {}),
+          ...clientBody(app, server.id, te),
         },
         'MCP',
       );
-      store(app, server.id, t, te);
-      return t.access_token;
-    } catch {
-      app.db.run(
-        "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",
-        SIGN_IN_AGAIN,
-        server.id,
-      );
-      throw new Error(SIGN_IN_AGAIN);
+    } catch (e) {
+      if (e instanceof TokenError && e.kind === 'refused')
+        throw signInAgain(app, server.id);
+      throw e;
     }
+    // Signed out, signed in anew or moved to another URL meanwhile: these tokens belong to nobody now.
+    const url = app.db.get<{ url: string | null }>(
+      'SELECT url FROM mcp_servers WHERE id=?',
+      server.id,
+    )?.url;
+    const now = app.secrets.get(S(server.id, 'refresh_token'));
+    if (!now || url !== server.url) throw new McpAuthError(SIGN_IN_GONE);
+    // A new sign-in finished meanwhile: keep its tokens, drop these.
+    if (now !== rt) {
+      const cur = app.secrets.get(S(server.id, 'access_token'));
+      if (cur) return cur;
+      throw new McpAuthError(SIGN_IN_GONE);
+    }
+    store(app, server.id, t, te);
+    return t.access_token;
   })().finally(() => inflight.delete(server.id));
   inflight.set(server.id, run);
   return run;

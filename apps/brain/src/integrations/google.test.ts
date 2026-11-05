@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { googleAccessToken } from './google/oauth.ts';
+import { GOOGLE_SECRETS, googleAccessToken } from './google/oauth.ts';
 import { connectGoogle, googleApp } from './testing.ts';
 
 test('google oauth: auth url has PKCE + custom scheme redirect; exchange stores encrypted tokens', async () => {
@@ -68,7 +68,7 @@ test('google oauth: auth url has PKCE + custom scheme redirect; exchange stores 
     { code: 'good', state: u.result.state },
     'app',
   )) as any;
-  assert.match(again.error, /Unknown or already used/);
+  assert.match(again.error, /already used/);
 });
 
 test('google oauth: bad code and agent access', async () => {
@@ -120,4 +120,30 @@ test('google: access token refreshes when expired, and a revoked refresh token i
     googleAccessToken(t.app, id),
     /connect the account again/,
   );
+});
+
+test('google: refresh only needs client id + secret, not a derivable redirect', async () => {
+  const { t, m } = googleApp();
+  const id = await connectGoogle(t);
+  // Web client without override and an http PUBLIC_URL: sign-in can't derive a redirect, refresh still works.
+  t.app.secrets.delete(GOOGLE_SECRETS.redirect);
+  t.app.config.publicUrl = 'http://lotti.local:8787';
+  assert.match(
+    ((await t.app.ops.invoke('accounts.google_auth_url', {}, 'app')) as any)
+      .error,
+    /HTTPS PUBLIC_URL/,
+  );
+  t.clock.advance(2 * 3600_000);
+  const fresh = await googleAccessToken(t.app, id);
+  assert.notEqual(fresh, 'at1');
+  const body = new URLSearchParams(
+    m.seen.filter((s) => s.url.includes('/token')).at(-1)!.body,
+  );
+  assert.equal(body.get('grant_type'), 'refresh_token');
+  assert.equal(body.get('client_secret'), 'csec');
+  assert.equal(body.get('redirect_uri'), null);
+  // Secret-less client id that is not an iOS client id: same.
+  t.app.secrets.delete(GOOGLE_SECRETS.clientSecret);
+  t.clock.advance(2 * 3600_000);
+  assert.notEqual(await googleAccessToken(t.app, id), fresh);
 });

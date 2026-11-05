@@ -116,7 +116,11 @@ struct GoogleClientView: View {
                 SecretField(title: "Client secret (Web client only)", text: $clientSecret)
                 TextField("Redirect URI (optional)", text: $redirect).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
             } footer: {
-                Text("An iOS client has no secret and needs nothing else. A Web client has a secret and needs the redirect below in the console. Values are stored encrypted on your Lotti Brain.")
+                if info?.configured == true {
+                    Text("An iOS client has no secret and needs nothing else. A Web client has a secret and needs the redirect below in the console. Saving replaces the stored client: enter the secret again for a Web client. Values are stored encrypted on your Lotti Brain.")
+                } else {
+                    Text("An iOS client has no secret and needs nothing else. A Web client has a secret. Save a client to see the redirect URI to paste into the console. Values are stored encrypted on your Lotti Brain.")
+                }
             }
             if let info, info.configured {
                 Section {
@@ -206,7 +210,7 @@ struct AddAccountView: View {
                 }
             } footer: {
                 if kind == .ics {
-                    Text("The calendar's secret link (https:// or webcal://). Anyone with the link can read the calendar: it is stored encrypted on your Lotti Brain and never shown again. Lotti only reads it.")
+                    Text("Google Calendar (web): Settings → your calendar → Integrate calendar → “Secret address in iCal format”. Outlook / Microsoft 365 (web): Settings → Calendar → Shared calendars → Publish a calendar → “Can view all details” → copy the ICS link. https:// and webcal:// links work. Anyone with the link can read the calendar: it is stored encrypted on your Lotti Brain and never shown again.")
                 } else if kind == .icloud {
                     Text("Create an app-specific password at account.apple.com → Sign-In and Security. Your Apple ID password does not work.")
                 }
@@ -221,7 +225,7 @@ struct AddAccountView: View {
             }
         }
         .errorAlert($error)
-        .alert(checkFailed ? "Added, but the link does not work" : "Calendar added", isPresented: Binding(get: { checked != nil }, set: { if !$0 { checked = nil; dismiss() } })) {
+        .alert(checkFailed ? "Added, but the calendar could not be read" : "Calendar added", isPresented: Binding(get: { checked != nil }, set: { if !$0 { checked = nil; dismiss() } })) {
             Button("OK") {}
         } message: {
             Text(checked ?? "")
@@ -253,8 +257,11 @@ struct AddAccountView: View {
                 await done()
                 if kind == .ics {
                     // "N events" when the link works, else why not (the account stays, fix the link in its details).
-                    checkFailed = result?.text("detail") == nil
-                    checked = result?.text("detail") ?? result?.text("error") ?? "Added."
+                    // A check that failed to run at all (result nil) counts as not read.
+                    checkFailed = result?.flag("ok") != true
+                    checked = checkFailed
+                        ? result?.text("error") ?? "Open the calendar and tap Check connection."
+                        : result?.text("detail") ?? "Added."
                 } else {
                     dismiss()
                 }

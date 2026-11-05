@@ -7,7 +7,9 @@ import {
   mcpOauthExchange,
   mcpOauthStart,
   mcpSignedIn,
+  oauthPrefix,
   setManualClient,
+  signOutMcpOauth,
 } from '../integrations/mcp/oauth.ts';
 import { newId } from '../util/crypto.ts';
 import { defineOp, out, type Operation } from './registry.ts';
@@ -74,6 +76,24 @@ const stdioTargetChanged = (
 
 const mcpRow = (app: App, id: string) =>
   app.db.get<McpRow>('SELECT * FROM mcp_servers WHERE id=?', id);
+
+/**
+ * A credential the user gave: bearer, env.* value, an OAuth sign-in or a client they entered. A client that
+ * Lotti registered by itself (kept after a cancelled sign-in) is none.
+ */
+function mcpHasCredential(app: App, id: string): boolean {
+  const o = oauthPrefix(id);
+  return app.secrets
+    .list(`mcp.${id}.`)
+    .some(
+      ({ name }) =>
+        name === `mcp.${id}.bearer` ||
+        name.startsWith(`mcp.${id}.env.`) ||
+        [`${o}access_token`, `${o}refresh_token`, `${o}client_manual`].includes(
+          name,
+        ),
+    );
+}
 
 /** What an mcp.update would change (only real changes), for the confirmation title. */
 function mcpChanges(
@@ -186,8 +206,8 @@ export const integrationOps: Operation[] = [
         .all<McpRow>('SELECT * FROM mcp_servers ORDER BY created_at')
         .map((r) => ({
           ...toMcp(r),
-          // Counts OAuth secrets too (mcp.<id>.oauth.*), never returns any.
-          hasCredential: app.secrets.list(`mcp.${r.id}.`).length > 0,
+          // Counts an OAuth sign-in and an entered client too, never returns any secret.
+          hasCredential: mcpHasCredential(app, r.id),
           signedIn: mcpSignedIn(app, r.id),
           authRequired: r.status === 'error' && isAuthError(r.last_error),
         })),
@@ -252,7 +272,7 @@ export const integrationOps: Operation[] = [
         cur &&
         ((i.url !== undefined && i.url !== cur.url) ||
           stdioTargetChanged(cur, i)) &&
-        app.secrets.list(`mcp.${cur.id}.`).length
+        mcpHasCredential(app, cur.id)
           ? ' (its saved credential is removed)'
           : '';
       return `Change MCP server "${cur?.name ?? i.id}": ${ch.join(', ') || 'no change'}${secrets}`;
@@ -386,7 +406,7 @@ export const integrationOps: Operation[] = [
     name: 'mcp.oauth_start',
     group: 'mcp',
     description:
-      'Start OAuth sign-in to an HTTP MCP server: discovers the authorization server, registers a client when the server allows it, returns {url, state, redirectUri, callbackScheme}. The app opens url in a web auth session; then call mcp.oauth_exchange with the code and state.',
+      'Start OAuth sign-in to an HTTP MCP server: discovers the authorization server, registers a client when the server allows it, returns {url, state, redirectUri, callbackScheme}. The app opens url in a web auth session; then call mcp.oauth_exchange with the code and state. Without a client to sign in with (no automatic registration, or it was refused) it returns {needsClient: true, redirectUri, reason}: register Lotti at the server with redirectUri, then mcp.oauth_set_client.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'app_only',
     async handler(i, { app }) {
@@ -428,9 +448,27 @@ export const integrationOps: Operation[] = [
     handler(i, { app }) {
       if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
       const clientId = i.clientId.trim();
-      if (!clientId) throw new Error('Client id is empty.');
+      if (!clientId) throw new Error('Client ID is empty.');
       setManualClient(app, i.id, clientId, i.clientSecret?.trim() || undefined);
       return { id: i.id, configured: true };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_sign_out',
+    group: 'mcp',
+    description:
+      'Sign out of an MCP server: deletes only the OAuth tokens; the client registration, an entered client and a bearer token stay. The server then needs a sign-in.',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
+      signOutMcpOauth(app, i.id);
+      refreshMcp(app);
+      return {
+        id: i.id,
+        signedIn: false,
+        hasCredential: mcpHasCredential(app, i.id),
+      };
     },
   }),
   defineOp({

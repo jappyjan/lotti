@@ -40,8 +40,15 @@ export interface GoogleRedirect {
   callbackScheme: string;
 }
 
-const schemeOf = (u: string) =>
-  /^([a-z][a-z0-9+.-]*):/i.exec(u)?.[1] ?? 'lotti';
+/** The URI scheme (`lotti`, `https`, `com.googleusercontent.apps.x`), or undefined without one. */
+export const schemeOf = (u: string): string | undefined =>
+  /^([a-z][a-z0-9+.-]*):/i.exec(u)?.[1];
+
+/** An http(s) redirect lands on the brain's /oauth/callback, which bounces the browser to lotti://oauth. */
+const callbackSchemeOf = (u: string) => {
+  const s = schemeOf(u) ?? 'lotti';
+  return /^https?$/i.test(s) ? 'lotti' : s;
+};
 
 /**
  * Which redirect URI is used: an explicit override always wins; otherwise an iOS-type client (no secret)
@@ -59,7 +66,7 @@ export function googleRedirect(
     return {
       mode: 'custom',
       redirectUri: c.explicit,
-      callbackScheme: schemeOf(c.explicit),
+      callbackScheme: callbackSchemeOf(c.explicit),
     };
   if (!c.clientSecret) {
     const r = iosRedirect(c.clientId);
@@ -67,7 +74,7 @@ export function googleRedirect(
       throw new Error(
         'This client id does not look like a Google iOS client (…apps.googleusercontent.com). Enter a redirect URI explicitly or use a Web client with a secret.',
       );
-    return { mode: 'ios', redirectUri: r, callbackScheme: schemeOf(r) };
+    return { mode: 'ios', redirectUri: r, callbackScheme: callbackSchemeOf(r) };
   }
   if (!isHttps(app.config.publicUrl))
     throw new Error(
@@ -80,19 +87,57 @@ export function googleRedirect(
   };
 }
 
-export function googleClient(app: App) {
+/** Client id and secret only: what token refresh needs (never depends on the redirect). */
+function googleCredentials(app: App) {
   const clientId = app.secrets.get(GOOGLE_SECRETS.clientId);
   if (!clientId)
     throw new Error(
       'Google client id is not set: enter it in the app (accounts.set_google_client).',
     );
-  const clientSecret = app.secrets.get(GOOGLE_SECRETS.clientSecret);
-  const r = googleRedirect(app, {
+  return {
     clientId,
-    clientSecret,
+    clientSecret: app.secrets.get(GOOGLE_SECRETS.clientSecret),
+  };
+}
+
+/** Credentials plus the redirect sign-in uses. Throws when no redirect can be derived. */
+export function googleClient(app: App) {
+  const cred = googleCredentials(app);
+  const r = googleRedirect(app, {
+    ...cred,
     explicit: app.secrets.get(GOOGLE_SECRETS.redirect),
   });
-  return { clientId, clientSecret, redirect: r.redirectUri, ...r };
+  return { ...cred, ...r };
+}
+
+/** Stores a new client. It replaces the old one completely (secret and override included). */
+export function setGoogleClient(
+  app: App,
+  i: {
+    clientId: string;
+    clientSecret?: string | undefined;
+    redirectUri?: string | undefined;
+  },
+): ReturnType<typeof googleClientInfo> {
+  const clientId = i.clientId.trim();
+  const clientSecret = i.clientSecret?.trim();
+  const redirectUri = i.redirectUri?.trim();
+  if (!clientId) throw new Error('Client id is empty.');
+  if (redirectUri) {
+    const scheme = schemeOf(redirectUri);
+    if (!scheme)
+      throw new Error(
+        'The redirect URI needs a scheme, e.g. lotti://oauth or https://host/path.',
+      );
+    if (/^(javascript|data|file|vbscript|about|blob)$/i.test(scheme))
+      throw new Error(`The redirect URI scheme "${scheme}" is not allowed.`);
+  }
+  app.secrets.set(GOOGLE_SECRETS.clientId, clientId);
+  if (clientSecret) app.secrets.set(GOOGLE_SECRETS.clientSecret, clientSecret);
+  else app.secrets.delete(GOOGLE_SECRETS.clientSecret);
+  if (redirectUri) app.secrets.set(GOOGLE_SECRETS.redirect, redirectUri);
+  else app.secrets.delete(GOOGLE_SECRETS.redirect);
+  return googleClientInfo(app);
 }
 
 /** What is configured, without any secret (the app shows the redirect URI to paste into the console). */
@@ -123,10 +168,15 @@ export function googleAuthUrl(
   const c = googleClient(app);
   const { verifier, challenge } = newPkce();
   const state = newState();
-  savePending(app, 'google', state, { verifier, ...opts });
+  // The exchange must send exactly this redirect_uri, even if settings change meanwhile.
+  savePending(app, 'google', state, {
+    verifier,
+    redirectUri: c.redirectUri,
+    ...opts,
+  });
   const q = new URLSearchParams({
     client_id: c.clientId,
-    redirect_uri: c.redirect,
+    redirect_uri: c.redirectUri,
     response_type: 'code',
     scope: GOOGLE_SCOPES.join(' '),
     access_type: 'offline',
@@ -139,7 +189,7 @@ export function googleAuthUrl(
   return {
     url: `${AUTH_URL}?${q}`,
     state,
-    redirectUri: c.redirect,
+    redirectUri: c.redirectUri,
     callbackScheme: c.callbackScheme,
   };
 }
@@ -174,15 +224,17 @@ export async function googleExchange(
 ): Promise<{ accountId: string; email: string | null }> {
   const p = takePending<{
     verifier: string;
+    redirectUri?: string;
     accountId?: string;
     label?: string;
   }>(app, 'google', state);
-  const c = googleClient(app);
+  const c = googleCredentials(app);
   const t = await tokenRequest(app, {
     grant_type: 'authorization_code',
     code,
     client_id: c.clientId,
-    redirect_uri: c.redirect,
+    // Older pending entries (before redirectUri was saved) fall back to the current redirect.
+    redirect_uri: p.redirectUri ?? googleClient(app).redirectUri,
     code_verifier: p.verifier,
     ...(c.clientSecret ? { client_secret: c.clientSecret } : {}),
   });
@@ -234,7 +286,7 @@ export async function googleAccessToken(
   const refresh = app.secrets.get(`account.${accountId}.refresh_token`);
   if (!refresh)
     throw new Error('Google account is not signed in: connect it in the app.');
-  const c = googleClient(app);
+  const c = googleCredentials(app);
   try {
     const t = await tokenRequest(app, {
       grant_type: 'refresh_token',

@@ -166,7 +166,7 @@ struct McpServer: Identifiable, Equatable {
     var confirmation: [String: Bool]
     var status: String?
     var lastError: String?
-    /// A bearer token, OAuth login or env value is stored (`mcp.list` `hasCredential`).
+    /// A bearer token, OAuth login, entered client or env value is stored (`mcp.list` `hasCredential`).
     var hasCredential: Bool
     /// Signed in with OAuth (`mcp.list` `signedIn`).
     var signedIn: Bool
@@ -194,10 +194,11 @@ struct McpServer: Identifiable, Equatable {
 
     func needsConfirmation(_ tool: String) -> Bool { confirmation[tool] ?? true }
 
-    /// One word for the list: off, needs sign-in, signed in, or the connection status.
+    /// One word for the list: off, needs sign-in, sign-in expired, signed in, or the connection status.
+    /// Says the same as the detail screen's sign-in row.
     var summary: String {
         if !enabled { return "Off" }
-        if authRequired { return "Needs sign-in" }
+        if authRequired { return signedIn ? "Sign-in expired" : "Needs sign-in" }
         if status == "ok" { return signedIn ? "Signed in" : "OK" }
         return status?.capitalized ?? "On"
     }

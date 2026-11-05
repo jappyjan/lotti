@@ -531,8 +531,8 @@ test('mcp: a server that needs a sign-in is not retried on a timer', async () =>
     const calls = t.fetchCalls.length;
     mock.timers.tick(600_000);
     await settle(t);
-    // Only the explicit settle() refresh ran again; no timer-driven one.
-    assert.ok(t.fetchCalls.length - calls <= 1);
+    // Only the explicit settle() refresh ran again (one initialize request); no timer-driven one.
+    assert.equal(t.fetchCalls.length - calls, 1);
   } finally {
     mock.timers.reset();
   }

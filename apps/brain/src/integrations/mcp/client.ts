@@ -9,9 +9,10 @@ import { proposeAction } from '../../tools/proposals.ts';
 import type { ToolDef } from '../../tools/registry.ts';
 import { clip } from '../../util/text.ts';
 import type { McpClient, McpServerConfig } from '../index.ts';
-import { publicUrl, reachWhy } from '../oauth/common.ts';
+import { publicUrl, reachWhy, sentence } from '../oauth/common.ts';
 import {
-  AUTH_REFUSED,
+  BEARER_REFUSED,
+  McpAuthError,
   SIGN_IN_AGAIN,
   isAuthError,
   mcpAccessToken,
@@ -149,7 +150,9 @@ class HttpSession implements Session {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch((e: unknown) => {
       throw new Error(
-        `Cannot reach the MCP server at ${publicUrl(this.url)}: ${reachWhy(e)}`,
+        sentence(
+          `Cannot reach the MCP server at ${publicUrl(this.url)}: ${reachWhy(e)}`,
+        ),
       );
     });
   }
@@ -164,13 +167,15 @@ class HttpSession implements Session {
       if (fresh) res = await this.send(body, fresh);
     }
     this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
-    if (res.status === 401 || res.status === 403)
+    if (this.oauth && res.status === 401) throw new McpAuthError(SIGN_IN_AGAIN);
+    // With OAuth a 403 means "signed in, but not allowed" (e.g. insufficient_scope): a new sign-in will not help.
+    if (this.oauth && res.status === 403)
       throw new Error(
-        this.oauth
-          ? SIGN_IN_AGAIN
-          : `${AUTH_REFUSED}: sign in or set the bearer token in the app.`,
+        'The MCP server refused access (HTTP 403): the signed-in account lacks permission.',
       );
-    if (!res.ok) throw new Error(`MCP server answered HTTP ${res.status}`);
+    if (res.status === 401 || res.status === 403)
+      throw new McpAuthError(BEARER_REFUSED);
+    if (!res.ok) throw new Error(`MCP server answered HTTP ${res.status}.`);
     if (expectId === undefined) return undefined;
     const text = await res.text();
     const msgs: any[] = /event-stream/i.test(
@@ -307,7 +312,7 @@ export class McpClientImpl implements McpClient {
       };
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      return { ok: false, error, authRequired: isAuthError(error) };
+      return { ok: false, error, authRequired: e instanceof McpAuthError };
     }
   }
 
@@ -389,7 +394,7 @@ export class McpClientImpl implements McpClient {
         staged.push({ server, tools });
       } catch (e) {
         // A server that needs a (new) sign-in only comes back when the user signs in: no timed retry.
-        if (!isAuthError(e instanceof Error ? e.message : String(e))) failed++;
+        if (!(e instanceof McpAuthError)) failed++;
         this.app.log.warn(`MCP server ${server.name} unavailable`, String(e));
         this.app.db.run(
           "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",

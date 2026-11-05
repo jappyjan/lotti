@@ -25,10 +25,17 @@ enum OAuthFlow {
     static func callbackScheme(_ start: JSONValue) -> String { start.text("callbackScheme") ?? "lotti" }
 
     /// The `code` and `state` to hand back to the backend, from the URL the browser returned.
+    /// The redirect must carry the state of the sign-in we started.
     static func result(_ callback: URL, start: JSONValue) throws -> (code: String, state: String) {
         guard let result = OAuthCallback(callback) else { throw BackendError.badResponse }
         if let problem = result.error { throw BackendError.server(problem) }
-        guard let code = result.code, let state = result.state ?? start.text("state") else { throw BackendError.badResponse }
+        guard let code = result.code, let expected = start.text("state") else { throw BackendError.badResponse }
+        guard let state = result.state else {
+            throw BackendError.server("The sign-in page answered without a state. Start the sign-in again.")
+        }
+        guard state == expected else {
+            throw BackendError.server("The sign-in answer belongs to a different sign-in. Start the sign-in again.")
+        }
         return (code, state)
     }
 

@@ -6,10 +6,10 @@ import { accountRow } from '../ops/integration-ops.ts';
 import { defineOp, out, type Operation } from '../ops/registry.ts';
 import { accountCalendars, accountMailboxes } from './connectors.ts';
 import {
-  GOOGLE_SECRETS,
   googleAuthUrl,
   googleClientInfo,
   googleExchange,
+  setGoogleClient,
 } from './google/oauth.ts';
 
 const acc = (app: App, id: string) => {
@@ -38,31 +38,7 @@ export const accountOps: Operation[] = [
       redirectUri: z.string().optional(),
     }),
     risk: 'app_only',
-    handler(i, { app }) {
-      const clientId = i.clientId.trim();
-      const clientSecret = i.clientSecret?.trim();
-      const redirectUri = i.redirectUri?.trim();
-      if (!clientId) throw new Error('Client id is empty.');
-      if (redirectUri) {
-        const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(redirectUri)?.[1];
-        if (!scheme)
-          throw new Error(
-            'The redirect URI needs a scheme, e.g. lotti://oauth or https://host/path.',
-          );
-        if (/^(javascript|data|file|vbscript|about|blob)$/i.test(scheme))
-          throw new Error(
-            `The redirect URI scheme "${scheme}" is not allowed.`,
-          );
-      }
-      app.secrets.set(GOOGLE_SECRETS.clientId, clientId);
-      // A new client replaces the old one completely (secret and override included).
-      if (clientSecret)
-        app.secrets.set(GOOGLE_SECRETS.clientSecret, clientSecret);
-      else app.secrets.delete(GOOGLE_SECRETS.clientSecret);
-      if (redirectUri) app.secrets.set(GOOGLE_SECRETS.redirect, redirectUri);
-      else app.secrets.delete(GOOGLE_SECRETS.redirect);
-      return googleClientInfo(app);
-    },
+    handler: (i, { app }) => setGoogleClient(app, i),
   }),
   defineOp({
     name: 'accounts.google_client',

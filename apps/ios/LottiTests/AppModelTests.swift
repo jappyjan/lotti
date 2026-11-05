@@ -252,9 +252,22 @@ struct BackendStoreTests {
         #expect(OAuthFlow.callbackScheme(["url": "https://x"]) == "lotti")
         let result = try OAuthFlow.result(url, start: start)
         #expect(result.code == "c2" && result.state == "s2")
-        // The state of the start answer fills in when the redirect carries none.
-        #expect(try OAuthFlow.result(URL(string: "lotti://oauth?code=c3")!, start: start).state == "s2")
         #expect(throws: BackendError.self) { try OAuthFlow.result(URL(string: "lotti://oauth?error=access_denied")!, start: start) }
+    }
+
+    @Test func refusesAnOAuthReturnOfAnotherSignIn() {
+        let start: JSONValue = ["callbackScheme": "lotti", "state": "s2"]
+        // No state, or a different one: not the sign-in we started.
+        #expect(throws: BackendError.server("The sign-in page answered without a state. Start the sign-in again.")) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3")!, start: start)
+        }
+        #expect(throws: BackendError.server("The sign-in answer belongs to a different sign-in. Start the sign-in again.")) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3&state=other")!, start: start)
+        }
+        // A start answer without a state is unreadable.
+        #expect(throws: BackendError.badResponse) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3&state=s2")!, start: ["callbackScheme": "lotti"])
+        }
     }
 
     @Test func readsTheGoogleClientInfo() {
@@ -626,4 +639,25 @@ private struct CountingTool: PhoneTool {
 
 private struct NoToday: TodayProvider {
     func today(at now: Date) async -> TodayInfo { TodayInfo(now: now) }
+}
+
+// MARK: - MCP sign-in
+
+@MainActor
+struct McpSignInTests {
+    @Test func listAndDetailSayTheSameAboutAnExpiredSignIn() throws {
+        let expired = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true, "signedIn": true]))
+        #expect(expired.summary == "Sign-in expired")
+        let none = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true]))
+        #expect(none.summary == "Needs sign-in")
+    }
+
+    @Test func readsTheNeedsClientAnswerOfOauthStart() throws {
+        let need = try #require(McpClientNeed(["needsClient": true, "redirectUri": "https://lotti.example/oauth/callback",
+                                               "reason": "This server has no automatic client registration."]))
+        #expect(need.redirectUri == "https://lotti.example/oauth/callback")
+        #expect(need.reason == "This server has no automatic client registration.")
+        // A normal start answer is no client need.
+        #expect(McpClientNeed(["url": "https://auth.example/authz", "state": "s", "redirectUri": "lotti://oauth"]) == nil)
+    }
 }

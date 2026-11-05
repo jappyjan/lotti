@@ -122,10 +122,12 @@ struct McpDetailView: View {
     @State private var secretValue = ""
     @State private var confirmDelete = false
     @State private var confirmClearSecret = false
+    @State private var confirmSignOut = false
     @State private var hasCredential: Bool
     @State private var signedIn: Bool
     @State private var authRequired: Bool
-    @State private var needsClient = false
+    @State private var clientNeed: McpClientNeed?
+    @State private var copied = false
     @State private var clientId = ""
     @State private var clientSecret = ""
     @State private var signingIn = false
@@ -178,7 +180,7 @@ struct McpDetailView: View {
                 Button("Save secret") { saveSecret() }
                     .disabled(secretValue.isEmpty || (secretKey == "env" && secretName.isEmpty))
                 if hasCredential {
-                    Button("Remove secrets", role: .destructive) { confirmClearSecret = true }
+                    Button("Remove credentials", role: .destructive) { confirmClearSecret = true }
                 }
             } header: {
                 Text("Credentials")
@@ -210,10 +212,15 @@ struct McpDetailView: View {
                 Task { await attempt($error) { _ = try await model.call("mcp.delete", ["id": .string(server.id)]); dismiss() } }
             }
         }
-        .confirmationDialog("Remove the stored secrets of \(server.name)?", isPresented: $confirmClearSecret, titleVisibility: .visible) {
-            Button("Remove secrets", role: .destructive) { clearSecret() }
+        .confirmationDialog("Remove the credentials of \(server.name)?", isPresented: $confirmClearSecret, titleVisibility: .visible) {
+            Button("Remove credentials", role: .destructive) { clearSecret() }
         } message: {
-            Text("The bearer token, the sign-in and environment values are deleted. A server that needs them stops working.")
+            Text("The bearer token, the sign-in, an entered client ID and environment values are deleted. A server that needs them stops working.")
+        }
+        .confirmationDialog("Sign out of \(server.name)?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("Sign out", role: .destructive) { signOut() }
+        } message: {
+            Text("Lotti forgets the sign-in. The client and a bearer token stay, so you can sign in again later.")
         }
     }
 
@@ -262,23 +269,32 @@ struct McpDetailView: View {
         return authRequired ? "Needs sign-in" : "Not signed in"
     }
 
+    /// Green when signed in, orange when the server wants a sign-in (none, or an expired one), no dot otherwise.
+    private var signInGood: Bool? { signedIn ? !authRequired : (authRequired ? false : nil) }
+
     /// OAuth login for servers that ask for one. The backend discovers the login page and registers Lotti when the
-    /// server allows it; only a server without that needs you to enter a client id.
+    /// server allows it; only a server without that needs you to enter a client ID.
     @ViewBuilder private var signInSection: some View {
         Section {
-            StatusRow(title: "Sign-in", value: signInStatus, good: signedIn ? !authRequired : nil)
+            StatusRow(title: "Sign-in", value: signInStatus, good: signInGood)
             Button { signIn() } label: { if signingIn { ProgressView() } else { Text(signedIn ? "Sign in again" : "Sign in") } }
                 .disabled(signingIn)
-            if needsClient {
+            if let clientNeed {
+                Text(clientNeed.reason).font(.footnote)
+                Text(clientNeed.redirectUri).font(.footnote.monospaced()).textSelection(.enabled)
+                Button(copied ? "Copied" : "Copy redirect URI", systemImage: "doc.on.doc") {
+                    UIPasteboard.general.string = clientNeed.redirectUri
+                    copied = true
+                }
                 TextField("Client ID", text: $clientId).textInputAutocapitalization(.never).autocorrectionDisabled()
                 SecretField(title: "Client secret (if it has one)", text: $clientSecret)
                 Button("Save client and sign in") { saveClient() }.disabled(clientId.isEmpty || signingIn)
             }
-            if signedIn { Button("Sign out", role: .destructive) { confirmClearSecret = true } }
+            if signedIn { Button("Sign out", role: .destructive) { confirmSignOut = true } }
         } header: {
             Text("Sign-in")
         } footer: {
-            Text(needsClient ? "This server has no automatic registration. Register Lotti there yourself, with the redirect URI lotti://oauth (or your Lotti Brain's https address followed by /oauth/callback), then enter the client id (and secret) here." : "For servers that use OAuth. Tokens stay on your Lotti Brain and refresh by themselves.")
+            Text(clientNeed != nil ? "Register Lotti at this server with the redirect URI above, then enter the client ID (and secret, if it has one) here. If this server uses an API key instead, enter it under Credentials as a bearer token." : "For servers that use OAuth. Tokens stay on your Lotti Brain and refresh by themselves.")
         }
     }
 
@@ -286,18 +302,21 @@ struct McpDetailView: View {
         signingIn = true
         Task {
             defer { signingIn = false }
-            do {
+            await attempt($error) {
                 let start = try await model.call("mcp.oauth_start", ["id": .string(server.id)])
+                // No client to sign in with: show the redirect URI to register Lotti with, and the client fields.
+                if let need = McpClientNeed(start) {
+                    if need != clientNeed { copied = false }
+                    clientNeed = need
+                    return
+                }
                 guard let (code, state) = try await OAuthFlow.authorize(start: start, using: webAuthentication) else { return }
                 _ = try await model.call("mcp.oauth_exchange", ["code": .string(code), "state": .string(state)])
                 signedIn = true
                 authRequired = false
-                needsClient = false
+                clientNeed = nil
                 hasCredential = true
                 test()
-            } catch {
-                let text = error.localizedDescription
-                if text.contains("client id") { needsClient = true } else { self.error = text }
             }
         }
     }
@@ -336,8 +355,21 @@ struct McpDetailView: View {
                 hasCredential = false
                 authRequired = authRequired || signedIn // a login that is gone is a login the server will ask for again
                 signedIn = false
-                needsClient = false
-                testNote = "Secrets removed."
+                clientNeed = nil
+                testNote = "Credentials removed."
+            }
+        }
+    }
+
+    /// Only the OAuth tokens go; the client and a bearer token stay.
+    private func signOut() {
+        Task {
+            await attempt($error) {
+                let result = try await model.call("mcp.oauth_sign_out", ["id": .string(server.id)])
+                signedIn = false
+                authRequired = true
+                hasCredential = result.flag("hasCredential")
+                testNote = "Signed out."
             }
         }
     }
@@ -349,5 +381,18 @@ struct McpDetailView: View {
                 _ = try await model.call("mcp.set_tool_confirmation", ["id": .string(server.id), "tool": .string(tool), "needsConfirmation": .bool(needs)])
             }
         }
+    }
+}
+
+/// `mcp.oauth_start` found no client to sign in with (no automatic registration, or it was refused): register Lotti
+/// at the server with `redirectUri`, then enter the client.
+struct McpClientNeed: Equatable {
+    var redirectUri: String
+    var reason: String
+
+    init?(_ start: JSONValue) {
+        guard start.flag("needsClient"), let uri = start.text("redirectUri") else { return nil }
+        redirectUri = uri
+        reason = start.text("reason") ?? "This server has no automatic client registration."
     }
 }
