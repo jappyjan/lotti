@@ -97,3 +97,13 @@ export async function tokenPost(
     );
   return j;
 }
+
+/** A server URL as shown in messages and logs: no query, fragment or credentials (they may hold a token). */
+export function publicUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    return '[MCP server URL]';
+  }
+}

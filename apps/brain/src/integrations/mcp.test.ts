@@ -341,3 +341,29 @@ test('mcp http: a non-MCP reply gives a readable error without echoing the body'
   assert.match(r.result.error, /did not answer like an MCP server/);
   assert.ok(!r.result.error.includes('secret-body'));
 });
+
+test('mcp http: an unreachable server does not echo the URL query (it may hold a token)', async () => {
+  const t = makeApp({
+    fetch: async () => {
+      throw new TypeError('fetch failed');
+    },
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      {
+        name: 'q',
+        transport: 'http',
+        url: 'https://mcp.example/rpc?token=SECRETKEY',
+      },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(
+    r.result.error,
+    /Cannot reach the MCP server at https:\/\/mcp\.example\/rpc:/,
+  );
+  assert.ok(!JSON.stringify(r).includes('SECRETKEY'));
+});

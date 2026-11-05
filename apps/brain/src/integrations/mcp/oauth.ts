@@ -3,6 +3,7 @@ import {
   APP_REDIRECT,
   newPkce,
   newState,
+  publicUrl,
   savePending,
   takePending,
   tokenPost,
@@ -158,7 +159,7 @@ async function probe(app: App, url: string): Promise<string> {
     });
   } catch (e) {
     throw new Error(
-      `Cannot reach the MCP server at ${url}: ${e instanceof Error ? e.message : e}`,
+      `Cannot reach the MCP server at ${publicUrl(url)}: ${e instanceof Error ? e.message : e}`,
     );
   }
   if (r.status === 401 || r.status === 403)
