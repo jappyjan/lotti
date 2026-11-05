@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses. The UI schema, simulator and messengers are plans.
+Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses (the old device log held 43 state messages, none a wear event; Debug → Wear capture and `[state]`/`[MARK]` log lines collect the real bytes). The UI schema, simulator and messengers are plans.
 
 ## Big picture
 
@@ -70,7 +70,7 @@ The firmware's UI service table (`g2.service_id_def.SID`, decoded in g2-kit) sep
 
 The spawn command is already decoded in g2-kit (`EvenHub_pb.ts`): EvenHub `Cmd 17` `OS_NOTIFY_MENU_STARTUP_PACKET` carries `MenuStartUpEvent { uint32 widgetId = 1 }`, where `widgetId` is the foreground SID (3=menu, 4=notification, 7=even_ai); the glasses reply `Cmd 18` `APP_RESPONSE_MENU_STARTUP_FAILED_PACKET` (`MenuStartUpResPonse`). See [apk-recon](spikes/apk-recon.md).
 
-So the foreground layer is the natural home for the rail once 176 px stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
+So the foreground layer is the natural home for the choices once the block under the sentence stops being enough ([design.md](design.md#the-rail-is-too-narrow)): Lotti's sentence stays on the layer below while choices, a "More" list or the Actions list appear above it and close again, without rebuilding the content page.
 
 The one genuinely open piece is the foreground notification body: it travels over the **file service** (sid `0xc4`/`0xc5`, `ANDROID_MSG_JSON_NOTIFICATION`) as a JSON payload whose title/body field names are still undecoded (the dashboard's `APP_SEND_NEWS_DATA` is the background news widget, not this). Confirm with a BLE capture of the official app showing a notification.
 
@@ -135,13 +135,13 @@ One set of tools on the phone, used by the offline brain, by Lotti Brain (proxie
 | `location`         | read   | CoreLocation + MapKit address                                                   | ✅            | ✅ if shared      |
 | `reminders`        | read   | EventKit reminders                                                              | ✅            | ✅ if shared      |
 | `start_navigation` | action | MapKit: place search near Jan (~30 km), turn-by-turn on the glasses' nav screen | ✅            | ✅ (suggest only) |
-| `set_timer`        | action | AlarmKit (rings in silent mode)                                                 | ✅            | ✅ (suggest only) |
+| `set_timer`        | action | AlarmKit (rings in silent mode; also on the glasses, tap to stop)               | ✅            | ✅ (suggest only) |
 | `create_reminder`  | action | EventKit reminders                                                              | ✅            | ✅ (suggest only) |
 
 Rules (enforced by `Toolbox`, not by prompts):
 
 - **Reads** run as soon as a brain asks, several at once, each with a 10 s limit. Arguments are checked against the tool's parameters first.
-- **Actions never run on a brain's say-so.** A brain can only _prepare_ one: it becomes a choice in the rail ("Timer 10 min"), and runs when you tap it. A wrong transcript or a confused model can't set anything.
+- **Actions never run on a brain's say-so.** A brain can only _prepare_ one: it becomes a choice under the sentence ("Timer 10 min"), and runs when you tap it. A wrong transcript or a confused model can't set anything.
 - **You choose which phone tools the backend may call** (Settings → Phone tools). The client refuses any other tool name.
 - **No fixed facts in any prompt.** Brains get the date and time; everything about Jan (where he is, his calendar, the weather there) comes from a tool in that turn. Weather needs a location fix (at most 15 minutes old); without one there is no weather rather than another city's.
 - Tool results are written for small models: days by name ("tomorrow", "monday"; the code works out the date), weather spelled out ("Rain today: yes, from 15:00").
@@ -175,7 +175,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 - `location` is a phone tool the agent may call any time. Every read emits `location_access`, shows a small location icon on the glasses and is logged in the app.
 - Calendar (Google, iCloud/CalDAV, generic), mail (Gmail, iCloud/IMAP, generic), `web_fetch`, web search with a key, `shell` (workspace cwd, timeout, output cap, no secrets in env, non-root, logged).
 - Bring! (unofficial API, isolated in one client): adds and removes run at once with a "Done" line and **Undo**.
-- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
+- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event`, `delete_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
 - MCP client: stdio and streamable HTTP servers, added and tested in the app, with per-tool confirmation switches.
 
 **Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces the old turns in the model's context; the turns themselves are kept, flagged `compacted`, so the history stays complete and searchable); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.

@@ -53,8 +53,13 @@ export class ProviderRegistry {
       new OpenAiCompatProvider(
         'deepseek',
         'DeepSeek',
-        'deepseek-chat',
-        ['deepseek-chat', 'deepseek-reasoner'],
+        'deepseek-v4-flash',
+        [
+          'deepseek-v4-flash',
+          'deepseek-v4-pro',
+          'deepseek-chat',
+          'deepseek-reasoner',
+        ],
         {
           fetch: f,
           apiKey: secret('deepseek'),

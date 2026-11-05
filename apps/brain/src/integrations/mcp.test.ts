@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
-import { makeApp } from '../testing/helpers.ts';
+import { mock, test } from 'node:test';
+import { buildSystemPrompt } from '../agent/prompt.ts';
+import { makeApp, text } from '../testing/helpers.ts';
 import { newRun } from '../tools/registry.ts';
 import { handleMcp } from '../server/mcp.ts';
 import { registerIntegrations } from './register.ts';
@@ -366,4 +367,105 @@ test('mcp http: an unreachable server does not echo the URL query (it may hold a
     /Cannot reach the MCP server at https:\/\/mcp\.example\/rpc:/,
   );
   assert.ok(!JSON.stringify(r).includes('SECRETKEY'));
+});
+
+test('/mcp/tools: a proposal with no live ask is parked in the inbox, one with a live ask rides on it', async () => {
+  const { t, id } = await stdioApp();
+  await t.app.ops.invoke('mcp.test', { id }, 'app');
+  await settle(t);
+  const rpc = (headers: Record<string, string>) =>
+    handleMcp(
+      t.app,
+      'tools',
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'mcp__My_Server__echo', arguments: { text: 'hi' } },
+      },
+      headers,
+    ) as Promise<any>;
+
+  const lost = await rpc({ 'x-lotti-ask': 'gone' });
+  assert.match(lost.result.content[0].text, /inbox/);
+  const items = t.app.inbox.full().items;
+  assert.equal(items.length, 1);
+  assert.equal(items[0]!.actions?.[0]?.tool, 'mcp__My_Server__echo');
+
+  const run = newRun();
+  t.app.runs.set('live', run);
+  const live = await rpc({ 'x-lotti-ask': 'live' });
+  assert.doesNotMatch(live.result.content[0].text, /inbox/);
+  assert.equal(run.actions.length, 1);
+  assert.equal(t.app.inbox.full().items.length, 1, 'nothing else parked');
+});
+
+test('a server that was down at boot is retried, and the model is told while it is down', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mock-mcp-'));
+  const file = join(dir, 'late.mjs');
+  const t = makeApp();
+  registerIntegrations(t.app);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await t.app.ops.invoke(
+      'mcp.add',
+      {
+        name: 'Late',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [file],
+      },
+      'app',
+    );
+    await settle(t);
+    assert.ok(!t.app.tools.all().some((x) => x.name.startsWith('mcp__')));
+    t.mock.script(text('Home Assistant ist nicht erreichbar.'));
+    await t.app.ask({ text: 'Tür auf', channel: 'phone', locale: 'de' });
+    const sys = t.mock.calls[0]!.messages[0] as any;
+    assert.match(sys.content, /unreachable right now.*Late \(/);
+
+    writeFileSync(file, SERVER); // it comes up
+    mock.timers.tick(30_000);
+    await settle(t); // refreshes run in order: ends after the retry's
+    assert.ok(t.app.tools.get('mcp__Late__echo'), 'registered by the retry');
+    assert.equal(
+      buildSystemPrompt({
+        now: 0,
+        locale: 'en',
+        channel: 'phone',
+        userName: 'Jan',
+        memories: [],
+        skillIndex: '',
+        conversationSummary: null,
+      }).includes('unreachable'),
+      false,
+    );
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('mcp: a server that needs a sign-in is not retried on a timer', async () => {
+  const t = makeApp({
+    fetch: async () => new Response('', { status: 401 }),
+  });
+  registerIntegrations(t.app);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'Locked', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    );
+    await settle(t);
+    const list = (await t.app.ops.invoke('mcp.list', {}, 'app')) as any;
+    assert.equal(list.result[0].authRequired, true);
+    const calls = t.fetchCalls.length;
+    mock.timers.tick(600_000);
+    await settle(t);
+    // Only the explicit settle() refresh ran again; no timer-driven one.
+    assert.ok(t.fetchCalls.length - calls <= 1);
+  } finally {
+    mock.timers.reset();
+  }
 });

@@ -108,9 +108,34 @@ final class AppModel {
     func pair(url: URL, code: String) async throws {
         isPairing = true
         defer { isPairing = false }
-        let token = try await BackendManagementClient(baseURL: url, http: http).pair(code: code, deviceName: deviceName)
+        let token: String
+        do {
+            token = try await BackendManagementClient(baseURL: url, http: http).pair(code: code, deviceName: deviceName)
+        } catch BackendError.http(401, _) {
+            throw BackendError.server("That pairing code is wrong, already used or expired.")
+        } catch BackendError.http(429, _) {
+            throw BackendError.server("Too many wrong codes. Try again in a few minutes.")
+        }
+        let previousURL = store.url
+        let previousToken = store.token
         store.url = url
         store.token = token
+        // The code is used up and the server lists this phone now: never claim success without the token.
+        guard store.token == token else {
+            // An earlier pairing whose token is still stored keeps working; otherwise nothing is left.
+            let kept = previousToken != nil && previousURL != nil && store.token == previousToken
+            if kept {
+                store.url = previousURL
+            } else {
+                backend.stop()
+                store.clear()
+                ops = [:]
+            }
+            applyConfiguration()
+            throw BackendError.server(kept
+                ? "Lotti couldn't save the new device token in the Keychain, so it keeps the pairing it had. The new pairing is listed as an extra device in Lotti Brain's paired devices: remove it there."
+                : "Lotti couldn't save the device token in the Keychain, so this pairing didn't stick. Lotti Brain already lists this phone: remove it there from another paired phone, or restart Lotti Brain once with LOTTI_RESET_PAIRING=1, then pair again.")
+        }
         applyConfiguration()
         backend.start()
     }

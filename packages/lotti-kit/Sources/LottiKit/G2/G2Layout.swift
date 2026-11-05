@@ -11,75 +11,16 @@ public enum G2Layout {
     public static let width = 576
     public static let height = 288
 
-    /// The gap between the sentence and the rail when they sit side by side.
-    public static let gap = 16
-
-    /// About how many average characters fit on one line, for the `.rail` style.
-    public static let charsPerLineFullWidth = 46
-    public static let charsPerLineWithRail = 31
-    public static let charsPerLineRail = 13
-    /// Lines that fit on the display (all columns are full height).
-    public static let lines = 10
-
-    /// Six lines above the choices block in `.choicesBelow` (one line ≈ 29 px).
-    public static let choicesBelowMainHeight = 174
-    /// The choices block in `.choicesBelow`, under the sentence.
-    public static let choicesBelowRailY = 174
-    public static let choicesBelowRailHeight = 114
-
-    /// The width of Lotti's text when the rail sits next to it.
-    public static func mainWidth(_ style: DisplayStyle) -> Int {
-        switch style {
-        case .rail: 384
-        case .wideRail: 320
-        case .choicesBelow: width
-        }
-    }
-
-    /// The rail's left edge and width when it sits next to the sentence.
-    public static func railX(_ style: DisplayStyle) -> Int {
-        switch style {
-        case .rail: 400
-        case .wideRail: 336
-        case .choicesBelow: 0
-        }
-    }
-
-    public static func railWidth(_ style: DisplayStyle) -> Int {
-        switch style {
-        case .rail: 176
-        case .wideRail: 240
-        case .choicesBelow: width
-        }
-    }
-
-    public static func railY(_ style: DisplayStyle) -> Int {
-        switch style {
-        case .rail, .wideRail: 0
-        case .choicesBelow: choicesBelowRailY
-        }
-    }
-
-    public static func railHeight(_ style: DisplayStyle) -> Int {
-        switch style {
-        case .rail, .wideRail: height
-        case .choicesBelow: choicesBelowRailHeight
-        }
-    }
+    /// One line of text is about this high (≈ 10 rows on the display; plan with 9).
+    public static let lineHeight = 29
+    /// Where the choices block starts under a plain sentence: six lines above it, four choices in it.
+    public static let choicesY = 174
+    /// The SDK allows at most 8 text containers on a page.
+    public static let maxTextBoxes = 8
 
     /// What a blank container gets. MentraOS blanks text in place with "\n" (keeps the page and
     /// the event pipeline alive); an empty Cmd 5 isn't confirmed to work.
     static let blank = "\n"
-}
-
-/// The page layouts Lotti uses.
-public enum G2PageShape: Equatable, Sendable {
-    /// One text container across the whole display.
-    case fullWidth
-    /// Lotti's text on the left, the rail on the right, with the style's widths.
-    case withRail(DisplayStyle)
-    /// The sentence on top, the choices in a block underneath.
-    case choicesBelow
 }
 
 /// One text container on the page. Ids are the routing key for Cmd 5 updates (even-g2-protocol
@@ -98,22 +39,45 @@ public struct G2TextBox: Equatable, Sendable {
 
     public static let mainID = 1
     public static let railID = 2
+    /// Header and card boxes start here: the indicator images own ids 3 and 4.
+    public static let firstExtraID = 10
 
-    static func main(_ text: String, shape: G2PageShape, style: DisplayStyle = .rail) -> G2TextBox {
-        let width: Int = switch shape {
-        case .fullWidth, .choicesBelow: G2Layout.width
-        case .withRail(let style): G2Layout.mainWidth(style)
-        }
-        // Full-width screens keep the full height; only the choicesBelow shape shares it.
-        let height: Int = shape == .choicesBelow ? G2Layout.choicesBelowMainHeight : G2Layout.height
-        return G2TextBox(id: mainID, name: "main", x: 0, y: 0, width: width,
-                         height: height, capturesEvents: true, text: text)
+    public init(id: Int, name: String, x: Int, y: Int, width: Int, height: Int, capturesEvents: Bool, text: String) {
+        self.id = id
+        self.name = name
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.capturesEvents = capturesEvents
+        self.text = text
     }
 
-    static func rail(_ text: String, style: DisplayStyle) -> G2TextBox {
-        G2TextBox(id: railID, name: "rail", x: G2Layout.railX(style), y: G2Layout.railY(style),
-                  width: G2Layout.railWidth(style), height: G2Layout.railHeight(style),
-                  capturesEvents: false, text: text)
+    /// The containers for a frame. The main box is id 1 and takes the events, the choices block
+    /// (`rail`) is id 2, everything else counts up from `firstExtraID`.
+    static func boxes(for frame: GlassesFrame) -> [G2TextBox] {
+        var next = firstExtraID
+        return frame.boxes.prefix(G2Layout.maxTextBoxes).enumerated().map { index, box in
+            let id: Int
+            if index == 0 {
+                id = mainID
+            } else if box.name == "rail" {
+                id = railID
+            } else {
+                id = next
+                next += 1
+            }
+            return G2TextBox(id: id, name: String(box.name.prefix(14)), x: box.x, y: box.y, width: box.width,
+                             height: box.height, capturesEvents: index == 0,
+                             text: box.text.isEmpty ? G2Layout.blank : box.text)
+        }
+    }
+
+    /// The same container without its text: what decides between an update and a rebuild.
+    var geometry: G2TextBox {
+        var shape = self
+        shape.text = ""
+        return shape
     }
 }
 
@@ -167,9 +131,9 @@ public struct G2ImageBox: Equatable, Sendable {
 /// Decides what to send to show a frame, given what the glasses show now. Pure, so the diffing is
 /// testable without Bluetooth.
 ///
-/// - First frame of a session: Cmd 0 CreateStartUpPage with the frame's shape.
-/// - Same shape: Cmd 5 text updates, only for containers whose text changed.
-/// - Other shape, or the page state is unknown after a failure: Cmd 7 RebuildPage.
+/// - First frame of a session: Cmd 0 CreateStartUpPage with the frame's containers.
+/// - Same containers in the same places: Cmd 5 text updates, only for those whose text changed.
+/// - Other containers, or the page state is unknown after a failure: Cmd 7 RebuildPage.
 public struct G2PagePlanner: Equatable, Sendable {
     public enum Command: Equatable, Sendable {
         case create([G2TextBox], images: [G2ImageBox] = [])
@@ -183,7 +147,7 @@ public struct G2PagePlanner: Equatable, Sendable {
     private enum State: Equatable, Sendable {
         /// No page yet this session.
         case none
-        case live(G2PageShape, texts: [Int: String], images: [G2ImageBox])
+        case live(shape: [G2TextBox], texts: [Int: String], images: [G2ImageBox])
         /// A page exists, but we don't know what it shows (a send failed).
         case unknown
     }
@@ -195,7 +159,8 @@ public struct G2PagePlanner: Equatable, Sendable {
     /// Whether a page has been created this session. IMU and mic only work with a live page.
     public var hasPage: Bool { state != .none }
 
-    public var shape: G2PageShape? {
+    /// The text containers on the page now, without their text.
+    public var shape: [G2TextBox]? {
         if case .live(let shape, _, _) = state { return shape }
         return nil
     }
@@ -203,13 +168,8 @@ public struct G2PagePlanner: Equatable, Sendable {
     /// The commands that show `frame`, and assumes they all succeed. Call `markUnknown()` if one
     /// fails.
     public mutating func plan(_ frame: GlassesFrame) -> [Command] {
-        let shape: G2PageShape = frame.rail == nil
-            ? .fullWidth
-            : (frame.style == .choicesBelow ? .choicesBelow : .withRail(frame.style))
-        var boxes = [G2TextBox.main(Self.text(frame.main), shape: shape, style: frame.style)]
-        if let rail = frame.rail, shape != .fullWidth {
-            boxes.append(.rail(Self.text(rail), style: frame.style))
-        }
+        let boxes = G2TextBox.boxes(for: frame)
+        let shape = boxes.map(\.geometry)
         let texts = Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, $0.text) })
 
         let images = frame.images
@@ -226,7 +186,7 @@ public struct G2PagePlanner: Equatable, Sendable {
         case .live, .unknown:
             commands = [.rebuild(boxes, images: images)] + images.map { .uploadImage($0) }
         }
-        state = .live(shape, texts: texts, images: images)
+        state = .live(shape: shape, texts: texts, images: images)
         return commands
     }
 
@@ -245,7 +205,4 @@ public struct G2PagePlanner: Equatable, Sendable {
         a.count == b.count && zip(a, b).allSatisfy { $0.sameGeometry(as: $1) }
     }
 
-    private static func text(_ text: String) -> String {
-        text.isEmpty ? G2Layout.blank : text
-    }
 }

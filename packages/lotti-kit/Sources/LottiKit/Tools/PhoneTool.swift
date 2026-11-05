@@ -195,6 +195,9 @@ public struct ProposedAction: Equatable, Sendable {
     /// The backend's id for a `.server` action (from the answer's `actions`).
     public var actionId: String?
 
+    /// Can't be taken back (deleting an event): no highlight on the glasses, a red button on the phone.
+    public var isDestructive: Bool { tool == "delete_calendar_event" }
+
     public init(tool: String, arguments: ToolArguments, title: String, target: Target = .phone, actionId: String? = nil) {
         self.tool = tool
         self.arguments = arguments

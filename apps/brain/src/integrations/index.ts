@@ -19,6 +19,12 @@ export interface CalendarEvent {
   allDay?: boolean;
   /** Calendar name (for the merged view). */
   calendar?: string;
+  /** Backend calendar id (google: calendar id, caldav: calendar URL). */
+  calendarId?: string;
+  /** Part of a repeating series (an occurrence, or the series itself). */
+  recurring?: boolean;
+  /** Opaque reference the agent passes to `delete_calendar_event` (set by the merged source). */
+  ref?: string;
 }
 
 /** Used by the built-in `meeting_soon` job and the catch-up brief. */
@@ -29,6 +35,12 @@ export interface CalendarSource {
   next?(from: number): Promise<CalendarEvent | undefined>;
   /** Server action `create_calendar_event` runs this after `perform`. */
   createEvent?(args: Record<string, unknown>): Promise<ActionOutcome>;
+  /** The event behind a `ref`, read from the service when a delete is proposed; or why it can't be deleted. */
+  deletable?(
+    ref: unknown,
+  ): Promise<{ ok: true; event: CalendarEvent } | { ok: false; text: string }>;
+  /** Server action `delete_calendar_event` runs this after `perform`. */
+  deleteEvent?(args: Record<string, unknown>): Promise<ActionOutcome>;
 }
 
 export interface MailMessage {

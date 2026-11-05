@@ -13,6 +13,11 @@ function refuseProviderKey(key: string): void {
     );
 }
 
+/** `provider.<id>.base_url` -> `<id>`. */
+function providerEndpoint(key: string): string | undefined {
+  return /^provider\.([^.]+)\.base_url$/.exec(key)?.[1];
+}
+
 export const coreOps = [
   // ---- status ---------------------------------------------------------------
   defineOp({
@@ -142,7 +147,13 @@ export const coreOps = [
         try {
           return {
             source: 'live',
-            models: await p.listModels(AbortSignal.timeout(8000)),
+            // Suggestions stay in the list: a provider's own list may lag behind new models.
+            models: [
+              ...new Set([
+                ...p.knownModels,
+                ...(await p.listModels(AbortSignal.timeout(8000))),
+              ]),
+            ],
           };
         } catch (e) {
           return {
@@ -208,7 +219,8 @@ export const coreOps = [
     inputSchema: z.object({ key: z.string(), value: z.unknown() }),
     risk: 'free',
     handler(i, { app }) {
-      if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
+      const def = SETTING_DEFS[i.key];
+      if (!def) throw new Error(`Unknown setting ${i.key}`);
       refuseProviderKey(i.key);
       if (app.settings.isSafety(i.key))
         throw new Error(
@@ -235,13 +247,27 @@ export const coreOps = [
       "Change a safety setting (shell, web fetch, location, step limit, which ops the agent may use). Needs the user's confirmation when the agent asks.",
     inputSchema: z.object({ key: z.string(), value: z.unknown() }),
     risk: 'tap',
-    proposalTitle: (i) => `Set ${i.key} = ${JSON.stringify(i.value)}`,
+    proposalTitle(i, app) {
+      const provider = providerEndpoint(i.key);
+      // The consequence goes first: titles are clipped (one short line on the glasses).
+      if (
+        provider &&
+        app.settings.get(i.key) !== i.value &&
+        app.secrets.has(`provider.${provider}.api_key`)
+      )
+        return `Remove the saved ${provider} API key and set ${i.key} = ${JSON.stringify(i.value)}`;
+      return `Set ${i.key} = ${JSON.stringify(i.value)}`;
+    },
     handler(i, { app }) {
       if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
       if (!app.settings.isSafety(i.key))
         throw new Error(`${i.key} is not a safety setting: use settings.set.`);
       const prev = app.settings.get(i.key);
       app.settings.set(i.key, i.value);
+      // A saved key must never follow a confirmed change of the endpoint it is sent to.
+      const provider = providerEndpoint(i.key);
+      if (provider && prev !== i.value)
+        app.secrets.delete(`provider.${provider}.api_key`);
       return out(
         { key: i.key, value: i.value },
         {

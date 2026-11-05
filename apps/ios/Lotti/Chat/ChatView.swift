@@ -95,11 +95,14 @@ private struct ConnectionBanner: View {
     private func banner(_ text: String, _ icon: String) -> some View {
         Label(text, systemImage: icon)
             .font(.footnote)
+            // A status strip, not content: at the largest accessibility sizes it would fill the whole screen.
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             .foregroundStyle(.primary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal)
             .padding(.vertical, 8)
-            .background(.orange.opacity(0.15))
+            // Opaque base: the chat scrolls under this inset, and a bare tint lets the messages show through.
+            .background { Color(.systemBackground).overlay(Color.orange.opacity(0.15)) }
     }
 }
 
@@ -173,13 +176,11 @@ struct ChatRow: View {
                 .foregroundStyle(.secondary)
             }
             ForEach(Array(item.actions.enumerated()), id: \.offset) { _, action in
-                Button {
+                ActionCard(action: action) {
                     Task { await chat.perform(action, in: item.id) }
-                } label: {
-                    Label(action.title, systemImage: action.target == .server ? "bolt.horizontal" : "iphone")
+                } dismiss: {
+                    chat.dismiss(action, in: item.id)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
             }
             if let undo = item.undo { undoButton(undo) }
             if isLast, !item.followUps.isEmpty {

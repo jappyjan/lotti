@@ -1,8 +1,17 @@
-# Lotti Brain on Coolify, reachable only over Tailscale HTTPS (no published port, no public domain).
+# Lotti Brain on Coolify, reachable only over Tailscale HTTPS (no published port, no public domain),
+# and able to reach OTHER devices on the tailnet: `brain` shares the Tailscale sidecar's network
+# namespace, so outbound connections from Lotti (MCP servers, Ollama, Home Assistant, CalDAV, ...)
+# to any tailnet hostname or 100.x.y.z IP just work - no proxy config in the app.
 # Coolify: Application (private GitHub repo) -> build pack "Docker Compose", base directory "/apps/brain",
 # compose file "/docker-compose.coolify.yml" (so ../.. is the repo root). Secret env vars to set in Coolify:
 #   MASTER_KEY   (openssl rand -hex 32; keep it: it decrypts the stored secrets)
 #   TS_AUTHKEY   (Tailscale auth key, reusable or one-off; the tailnet may need to approve the device)
+# and the plain env var PUBLIC_URL=https://lotti-brain.<tailnet>.ts.net (the URL in the pairing QR).
+# Tailnet requirements:
+#   - MagicDNS must be enabled (default) so tailnet hostnames resolve in `brain`
+#   - ACLs must allow lotti-brain -> the devices you want to reach (default allow-all)
+# Note: since the network namespace is shared, `brain`'s port 8787 is now also reachable directly
+# from the tailnet (ACLs still apply); HTTPS via serve on 443 is unchanged.
 # Pairing code/QR: Coolify logs of `brain` on first start.
 services:
   brain:
@@ -10,6 +19,17 @@ services:
       context: ../..
       dockerfile: apps/brain/Dockerfile
     restart: unless-stopped
+    # Join the Tailscale sidecar's network namespace: brain IS on the tailnet.
+    # It literally shares the sidecar's /etc/resolv.conf, which tailscaled rewrites
+    # to MagicDNS (100.100.100.100) on startup - so tailnet hostnames resolve, and
+    # MagicDNS forwards everything else upstream (public internet keeps working).
+    # Start after the sidecar is healthy so that rewrite has happened.
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_healthy
+        # Restart brain when the sidecar restarts, otherwise its network namespace dies.
+        restart: true
     environment:
       MASTER_KEY: ${MASTER_KEY:?set MASTER_KEY}
       PUBLIC_URL: ${PUBLIC_URL:?set PUBLIC_URL}
@@ -20,22 +40,29 @@ services:
     image: tailscale/tailscale:stable
     restart: unless-stopped
     hostname: lotti-brain
-    depends_on:
-      - brain
+    # Kernel networking (not userspace) so the shared namespace gets a real tailscale0
+    # interface and full routing/DNS. Needs NET_ADMIN + /dev/net/tun.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY}
       TS_HOSTNAME: lotti-brain
       TS_STATE_DIR: /var/lib/tailscale
-      TS_USERSPACE: 'true'
+      TS_USERSPACE: 'false'
+      TS_ACCEPT_DNS: 'true'
       TS_AUTH_ONCE: 'true'
       TS_SERVE_CONFIG: /tmp/serve.json
     # HTTPS 443 -> brain:8787 (WebSockets included); the cert name comes from the tailnet.
+    # localhost, because brain shares this container's network namespace.
     entrypoint:
       - /bin/sh
       - -c
       - |
         cat > /tmp/serve.json <<'JSON'
-        {"TCP":{"443":{"HTTPS":true}},"Web":{"$${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://brain:8787"}}}}}
+        {"TCP":{"443":{"HTTPS":true}},"Web":{"$${TS_CERT_DOMAIN}:443":{"Handlers":{"/":{"Proxy":"http://localhost:8787"}}}}}
         JSON
         exec /usr/local/bin/containerboot
     volumes:

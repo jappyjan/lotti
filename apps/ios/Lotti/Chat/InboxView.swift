@@ -16,19 +16,26 @@ struct InboxCard: View {
     @Environment(AppModel.self) private var model
     @Environment(ChatModel.self) private var chat
     let item: InboxItem
+    /// Actions tapped (Confirm or "Not now") here: gone from this card so they can't run twice.
+    @State private var handled: Set<Int> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(item.title, systemImage: icon(for: item.kind)).font(.subheadline.weight(.semibold))
             if !item.summary.isEmpty { Text(item.summary).font(.callout).foregroundStyle(.secondary) }
+            ForEach(Array(item.actions.enumerated()), id: \.offset) { index, action in
+                if !handled.contains(index) {
+                    ActionCard(action: action) {
+                        handled.insert(index)
+                        Task { await chat.perform(action) }
+                    } dismiss: {
+                        handled.insert(index)
+                    }
+                }
+            }
             HStack {
                 NavigationLink("Open") { InboxItemView(itemId: item.id) }
                     .buttonStyle(.bordered)
-                ForEach(Array(item.actions.enumerated()), id: \.offset) { _, action in
-                    Button(action.title) { Task { await chat.perform(action) } }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                }
                 Spacer()
                 Button("Dismiss") { model.backend.inboxEvent(item.id, .dismissed) }
                     .buttonStyle(.borderless)
@@ -120,6 +127,8 @@ struct InboxItemView: View {
     /// The action running now, and what each one that ran said (keyed by `actionKey`).
     @State private var running: String?
     @State private var results: [String: ChatModel.ActionResult] = [:]
+    /// Actions put aside with "Not now".
+    @State private var notNow: Set<String> = []
 
     var body: some View {
         let item = model.backend.inbox.item(itemId) ?? fallback
@@ -166,29 +175,33 @@ struct InboxItemView: View {
 
     private func actionKey(_ action: ProposedAction) -> String { action.actionId ?? action.title }
 
-    /// The action as a button with a spinner while it runs; afterwards what it did, in place, and
-    /// the button stays off so it isn't run twice.
+    /// The action as a card (Confirm / "Not now"), a spinner while it runs; afterwards what it did, in
+    /// place, and the card is gone so it isn't run twice.
     @ViewBuilder private func actionRow(_ action: ProposedAction) -> some View {
         let key = actionKey(action)
-        Button {
-            running = key
-            Task {
-                let result = await chat.perform(action)
-                results[key] = result
-                running = nil
-            }
-        } label: {
-            HStack {
-                Text(action.title)
-                Spacer()
-                if running == key { ProgressView() }
-            }
-        }
-        .disabled(running != nil || results[key] != nil)
         if let result = results[key] {
             Label(result.text, systemImage: result.ok ? "checkmark.circle" : "exclamationmark.triangle")
                 .font(.callout)
                 .foregroundStyle(result.ok ? Color.secondary : Color.red)
+        } else if running == key {
+            HStack {
+                Text(action.title).foregroundStyle(.secondary)
+                Spacer()
+                ProgressView()
+            }
+        } else if !notNow.contains(key) {
+            ActionCard(action: action) {
+                running = key
+                Task {
+                    let result = await chat.perform(action)
+                    results[key] = result
+                    running = nil
+                }
+            } dismiss: {
+                notNow.insert(key)
+            }
+            .disabled(running != nil)
+            .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
         }
     }
 }

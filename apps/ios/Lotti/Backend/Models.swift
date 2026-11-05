@@ -59,10 +59,24 @@ struct JobInfo: Identifiable, Equatable {
     var enabled: Bool
     var nextRunAt: Date?
     var lastRunAt: Date?
+    var summary: String?
+    /// "none", "conditional" or "always": does a run spend AI tokens?
+    var ai: String
+    var aiNote: String
+    /// An extra editable setting of a built-in job (e.g. the meeting lead time).
+    var settingKey: String?
+    var settingLabel: String?
+    var settingUnit: String?
 
     init?(_ json: JSONValue) {
         guard let id = json.text("id") else { return nil }
         self.id = id
+        summary = json.text("description")
+        ai = json.text("ai") ?? "always"
+        aiNote = json.text("aiNote") ?? ""
+        settingKey = json["setting"]?.text("key")
+        settingLabel = json["setting"]?.text("label")
+        settingUnit = json["setting"]?.text("unit")
         name = json.text("name") ?? id
         isBuiltin = json.text("kind") == "builtin"
         prompt = json.text("prompt") ?? ""
@@ -75,6 +89,14 @@ struct JobInfo: Identifiable, Equatable {
 
     /// What to show for the schedule: the friendly text if there is one.
     var scheduleLabel: String { scheduleText ?? cron }
+
+    var aiBadge: String {
+        switch ai {
+        case "none": "No AI"
+        case "conditional": "AI when needed"
+        default: "Uses AI"
+        }
+    }
 }
 
 struct JobRunInfo: Identifiable, Equatable {

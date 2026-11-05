@@ -77,7 +77,10 @@ struct ConductorBackendTests {
         try await fill(Self.mail1)
         try await eventually { attention != nil }
         press(.doubleTap)
-        try await eventually { link.frames.last?.images.isEmpty == true && link.frames.last?.isDark == false }
+        // The today view has its own pictures (the clock, card icons), but no attention mark.
+        try await eventually {
+            link.frames.last?.images.contains { $0.id == G2ImageBox.attentionID } == false && link.frames.last?.isDark == false
+        }
         press(.doubleTap)
         try await eventually { attention != nil && link.frames.last?.isDark == true }
     }
@@ -214,6 +217,52 @@ struct ConductorBackendTests {
         #expect(link.wearState == .unknown)
         backend.send(#"{"type":"catchup","id":"k1","text":"Hallo zurück.","at":"2026-11-03T08:15:00+01:00"}"#)
         try await eventually { conductor.screen?.text == "Hallo zurück." }
+    }
+
+    @Test func theTodayViewOffersTheCatchupForTwelveHours() async throws {
+        let clock = ManualClock(Date())
+        let conductor = Conductor(link: link, brain: brain, backend: client, speech: FakeSpeech(),
+                                  today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: true),
+                                  now: { clock.now })
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
+        conductor.handle(InputEvent(.doubleTap, from: .ring))  // back: off
+        backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails, nichts Dringendes.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup?.id == "k1" }
+        try await Task.sleep(for: .milliseconds(30))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        clock.now += 3600
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        let choice = try #require(conductor.screen?.rail?.items.first { $0.title == "Catch-up" })
+        #expect(choice.action == .show(Screen(.says, "Zwei Mails, nichts Dringendes.")))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        clock.now += 12 * 3600
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
+    }
+
+    @Test func theCatchupChoiceDoesNotPushAllItemsOffTheRail() async throws {
+        try await fill(#"{"id":"m1","kind":"mail","title":"Mara","summary":"Pizza um 8?","body":"x","createdAt":"2026-11-03T08:15:00+01:00","status":"seen"}"#)
+        backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails.","at":"2026-11-03T08:15:00+01:00"}"#)
+        try await eventually { client.lastCatchup?.id == "k1" }
+        try await Task.sleep(for: .milliseconds(30))
+        conductor.handle(InputEvent(.removed, from: .glasses))
+        press(.doubleTap)
+        let titles = try #require(conductor.screen?.rail?.items.map(\.title))
+        #expect(titles.suffix(2) == ["Catch-up", "Alle ansehen"], "\(titles)")
+    }
+
+    @Test func aDeleteIsNotUnderTheHighlightAndNeverCutOff() async throws {
+        backend.script = { frame in
+            guard frame["type"]?.string == "ask" else { return MockBackend.defaultReply(frame) }
+            let actions = #"[{"id":"d1","title":"Delete \"Zahnarzt\"","target":"server","tool":"delete_calendar_event","args":{"eventRef":"a|b|c"}}]"#
+            return [#"{"type":"answer","id":"\#(frame["id"]!.string!)","text":"Soll ich ihn löschen?","followUps":["Nein","Später","Mehr","Noch mehr","Und mehr"],"actions":\#(actions)}"#]
+        }
+        conductor.ask("Lösch den Zahnarzt")
+        try await eventually { conductor.screen?.rail != nil }
+        let titles = try #require(conductor.screen?.rail?.items.map(\.title))
+        #expect(titles.first == "Nein" && titles.last == "Delete \"Zahnarzt\"", "\(titles)")
+        #expect(conductor.screen?.rail?.highlighted == 0)
     }
 
     @Test func mirroredMessagesNeverReachTheGlasses() async throws {

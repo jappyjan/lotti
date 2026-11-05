@@ -505,3 +505,16 @@ test('ics account: an oversized feed is refused while streaming, TLS failures st
   assert.match(tls, /secure connection failed/);
   assert.ok(!/openssl|\n/i.test(tls), tls);
 });
+
+test('ics account: events carry no delete ref and a hand-made one is refused', async () => {
+  const { t, op, id } = await icsApp();
+  await op('accounts.set_credential', { id, key: 'url', value: SECRET });
+  const cal = t.app.integrations.calendar as any;
+  const from = Date.parse('2026-11-03T00:00:00Z');
+  const evs = await cal.events(from, from + 3 * 86_400_000);
+  assert.ok(evs.length > 0 && evs.every((e: any) => !e.ref));
+  const r = await cal.deleteEvent({ eventRef: `${id}|ics|m2`, title: 'Lunch' });
+  assert.equal(r.ok, false);
+  assert.match(r.text, /read-only/);
+  assert.match((await cal.deletable(`${id}|ics|m2`)).text, /read-only/);
+});

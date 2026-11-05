@@ -1,6 +1,7 @@
 import type { App } from './app.ts';
 import type { ActionOutcome } from './integrations/index.ts';
 import { newId } from './util/crypto.ts';
+import { clip } from './util/text.ts';
 
 /** What the app sees in `answer.actions[]`. */
 export interface ProposedAction {
@@ -35,6 +36,17 @@ export class ActionService {
   }
   hasHandler(tool: string): boolean {
     return this.handlers.has(tool);
+  }
+
+  /** A proposal with nobody on the other end to tap: park it in the app's inbox so it never just vanishes. */
+  toInbox(a: ProposedAction, summary: string): void {
+    this.app.inbox.create({
+      kind: 'info',
+      title: a.title,
+      summary,
+      actions: [a],
+      expiresInHours: 24,
+    });
   }
 
   propose(a: Omit<ProposedAction, 'id'>): ProposedAction {
@@ -109,6 +121,9 @@ export class ActionService {
       'UPDATE actions SET status=? WHERE id=?',
       out.ok ? 'done' : 'failed',
       actionId,
+    );
+    this.app.log.info(
+      `action ${actionId} ${a.tool} ${out.ok ? 'done' : 'FAILED'}: ${clip(out.text, 300)}`,
     );
     const undoHandle =
       opUndo ?? (out.undo ? this.createUndo(out.undo) : undefined);

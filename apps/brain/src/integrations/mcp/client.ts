@@ -341,12 +341,35 @@ export class McpClientImpl implements McpClient {
    * overlapping refreshes run one after the other.
    */
   refresh(): Promise<void> {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     const run = this.refreshing.then(() => this.doRefresh());
     this.refreshing = run.catch(() => undefined);
     return run;
   }
 
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private retries = 0;
+  /**
+   * A server that was down at boot (tailnet not up yet, a restart) would otherwise stay without tools until
+   * someone edits its config, and the model would have nothing to call. Retry with growing pauses.
+   */
+  private scheduleRetry(failed: number): void {
+    if (!failed) {
+      this.retries = 0;
+      return;
+    }
+    const delay = Math.min(30_000 * 2 ** this.retries, 300_000);
+    this.retries++;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.refresh().catch(() => undefined);
+    }, delay);
+    this.retryTimer.unref();
+  }
+
   private async doRefresh(): Promise<void> {
+    let failed = 0;
     const staged: {
       server: McpServerConfig;
       tools: { name: string; description?: string; inputSchema?: unknown }[];
@@ -360,6 +383,8 @@ export class McpClientImpl implements McpClient {
         );
         staged.push({ server, tools });
       } catch (e) {
+        // A server that needs a (new) sign-in only comes back when the user signs in: no timed retry.
+        if (!isAuthError(e instanceof Error ? e.message : String(e))) failed++;
         this.app.log.warn(`MCP server ${server.name} unavailable`, String(e));
         this.app.db.run(
           "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",
@@ -374,8 +399,11 @@ export class McpClientImpl implements McpClient {
       this.app.actions.unregister(n);
     }
     this.registered.clear();
-    for (const { server, tools } of staged)
+    for (const { server, tools } of staged) {
       for (const t of tools) this.registerTool(server, t);
+      this.app.log.info(`MCP server ${server.name}: ${tools.length} tools`);
+    }
+    this.scheduleRetry(failed);
   }
 
   private registerTool(

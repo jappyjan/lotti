@@ -45,10 +45,27 @@ public struct ToolText: Sendable {
         return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day)
     }
 
-    /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]`, or a bare
-    /// `YYYY-MM-DD` (then 09:00).
+    /// A moment from a tool argument: `YYYY-MM-DD HH:mm`, `YYYY-MM-DDTHH:mm[:ss]` (also with a zone
+    /// offset), or a bare `YYYY-MM-DD` (then 09:00).
     public func moment(_ text: String) -> Date? {
-        let parts = text.trimmingCharacters(in: .whitespaces)
+        // upper case: `day(_:now:)` passes lowered text ("…t09:00z")
+        let trimmed = text.trimmingCharacters(in: .whitespaces).uppercased()
+        // ISO-8601 with a zone ("2026-11-05T09:00:00+01:00", "…Z", a space for the T only with seconds:
+        // "… 09:00-10:00" reads as a range), as models and the backend write it: that is an exact instant,
+        // so the zone is honoured. Never falls back to reading digits: that would drop the zone.
+        if trimmed.range(of: #"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}|[T ]\d{2}:\d{2}:\d{2}).*(Z|[+-]\d{2}:?\d{2})$"#, options: .regularExpression) != nil {
+            // the formatter needs a T and seconds: "… 09:00+01:00" → "…T09:00:00+01:00"
+            let withSeconds = trimmed
+                .replacingOccurrences(of: #"^(\d{4}-\d{2}-\d{2}) "#, with: "$1T", options: .regularExpression)
+                .replacingOccurrences(
+                    of: #"T(\d{2}:\d{2})(?=Z$|[+-]\d{2}:?\d{2}$)"#, with: "T$1:00", options: .regularExpression)
+            let ymd = trimmed.prefix(10).split(separator: "-").compactMap { Int($0) }
+            guard ymd.count == 3,
+                  DateComponents(year: ymd[0], month: ymd[1], day: ymd[2]).isValidDate(in: calendar)  // rejects 2026-02-31
+            else { return nil }
+            return BackendDates.parse(withSeconds)
+        }
+        let parts = trimmed
             .split(whereSeparator: { "-T :".contains($0) }).map { Int($0) }
         guard parts.count >= 3, parts.allSatisfy({ $0 != nil }) else { return nil }
         let n = parts.map { $0! }
@@ -75,6 +92,10 @@ public struct ToolText: Sendable {
             lines.append("Rain today: no")
         }
         if let t = w.tomorrow { lines.append("Tomorrow: \(t.condition), \(t.low) to \(t.high)°C") }
+        for day in w.days.dropFirst(2) {
+            lines.append(format(day.date, "EEEE") + ": \(day.condition), \(day.low) to \(day.high)°C"
+                         + (day.rainChance.map { ", chance of rain \($0) %" } ?? ""))
+        }
         return lines.joined(separator: "\n")
     }
 

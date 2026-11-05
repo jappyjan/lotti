@@ -47,6 +47,16 @@ struct BackendClientTests {
         #expect(backend.connectCount == 2)
     }
 
+    @Test func stoppingForgetsTheLastError() async throws {
+        let slow = ReconnectPolicy(initial: .seconds(30), maximum: .seconds(30))
+        let client = Fixtures.client(backend, policy: slow, start: false)
+        backend.refuse(1)
+        client.start()
+        try await eventually { client.state == .disconnected && client.lastError != nil }
+        client.stop()
+        #expect(client.lastError == nil)
+    }
+
     @Test func reconnectNowOnALiveSocketOnlyChecksIt() async throws {
         let client = try await ready()
         let before = backend.connectCount
