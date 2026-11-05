@@ -11,6 +11,10 @@ import Observation
 /// - long press: talk to Lotti while held (nothing else is ever on long press). With the display
 ///   off, talking needs a double tap first (the today view opens), then the hold, so a stray hold
 ///   in your pocket or hair doesn't start listening.
+///
+/// A timer that rings on the phone shows on the glasses too: tap "Stop" or double tap stops it
+/// (on the phone as well), then you're back where you were. It waits while you talk or Lotti
+/// thinks. Running timers show on the today view, which updates when the minute changes.
 @MainActor
 @Observable
 public final class Conductor {
@@ -79,6 +83,8 @@ public final class Conductor {
         /// Lotti's answer or a screen from the rail.
         case showing
         case done
+        /// A timer is ringing; tap or double tap stops it.
+        case alert
     }
 
     /// What the glasses show right now; nil when the display is off. The phone mirrors it.
@@ -102,6 +108,7 @@ public final class Conductor {
     @ObservationIgnored private let indicators: IndicatorRenderer
     @ObservationIgnored private let summary: InboxSummary
     @ObservationIgnored private let toolbox: Toolbox
+    @ObservationIgnored private let timers: (any Timers)?
     @ObservationIgnored let speech: any SpeechRecognizer
     @ObservationIgnored private let phoneMicrophone: (any Microphone)?
     @ObservationIgnored private let todayProvider: any TodayProvider
@@ -113,6 +120,14 @@ public final class Conductor {
     @ObservationIgnored var backStack: [Screen] = []
     @ObservationIgnored private var today: TodayInfo?
     @ObservationIgnored var timer: Task<Void, Never>?
+    /// Redraws the today view when the minute changes (clock, timers, "in 5 min").
+    @ObservationIgnored private var ticker: Task<Void, Never>?
+    /// Lotti's timers on the phone, minus the ones you just stopped.
+    @ObservationIgnored private var phoneTimers: [PhoneTimer] = []
+    /// Stopped from the glasses, but the phone hasn't said they're quiet yet.
+    @ObservationIgnored private var stopping: Set<UUID> = []
+    /// The timer the alert on the lens is for.
+    @ObservationIgnored private var alertFor: UUID?
     @ObservationIgnored var listening: Task<String, Never>?
     @ObservationIgnored var thinking: Task<Void, Never>?
     @ObservationIgnored private var usingPhoneMic = false
@@ -128,6 +143,9 @@ public final class Conductor {
     @ObservationIgnored private var syncingHeadUp = false
     /// A catch-up brief that came while the glasses were off your face, shown when you put them on.
     @ObservationIgnored private var heldCatchup: (catchup: Catchup, received: Date)?
+    /// The latest brief, kept so the today view can offer it as "Catch-up" for `catchupChoiceMaxAge`.
+    @ObservationIgnored private var lastCatchup: (catchup: Catchup, received: Date)?
+    static let catchupChoiceMaxAge: TimeInterval = 12 * 3600
     /// A held brief older than this is dropped instead of shown.
     static let heldCatchupMaxAge: TimeInterval = 2 * 3600
     /// When the backend last showed a sign of life, so the wait is for silence, not a fixed total time.
@@ -173,7 +191,7 @@ public final class Conductor {
     ///   - inboxSummary: the language of the today summary ("2 Mails, Termin in 10 min").
     public init(
         link: any GlassesLink, brain: any Brain, remote: (any RemoteBrain)? = nil, backend: BackendClient? = nil,
-        inbox: InboxStore? = nil, toolbox: Toolbox = Toolbox(),
+        inbox: InboxStore? = nil, toolbox: Toolbox = Toolbox(), timers: (any Timers)? = nil,
         speech: any SpeechRecognizer, phoneMicrophone: (any Microphone)? = nil, today: any TodayProvider,
         composer: TodayComposer = TodayComposer(), renderer: ScreenRenderer = ScreenRenderer(),
         indicatorIcons: any IndicatorIconProvider = BuiltInIndicatorIcons(), inboxSummary: InboxSummary = .system,
@@ -188,6 +206,7 @@ public final class Conductor {
         self.indicators = IndicatorRenderer(icons: indicatorIcons)
         self.summary = inboxSummary
         self.toolbox = toolbox
+        self.timers = timers
         self.speech = speech
         self.phoneMicrophone = phoneMicrophone
         self.todayProvider = today
@@ -209,10 +228,14 @@ public final class Conductor {
         eventsTask?.cancel()
     }
 
-    /// Handle gestures until the stream ends.
+    /// Handle gestures (and the phone's timers) until the gesture stream ends.
     public func run() async {
         brain.prewarm()
         Task { await speech.prepare() }
+        let watching = timers.map { timers in
+            Task { for await now in timers.updates() { self.timersChanged(now) } }
+        }
+        defer { watching?.cancel() }
         for await event in link.inputs() {
             handle(event)
         }
@@ -265,13 +288,6 @@ public final class Conductor {
     /// (the app edited `inbox` directly).
     public func refreshIndicators() { draw() }
 
-    /// Switch the layout variant for the choices. The frame carries the style, so the link
-    /// rebuilds the page geometry and the next answers build their rails to fit it.
-    public func setDisplayStyle(_ style: DisplayStyle) {
-        renderer.style = style
-        draw()
-    }
-
     // MARK: - Gestures
 
     public func handle(_ event: InputEvent) {
@@ -290,6 +306,7 @@ public final class Conductor {
         case .headUp: if mode == .off { showToday(byHead: true) }
         case .headDown: if mode == .today(byHead: true) { turnOff() }
         case .tap: tap()
+        case .doubleTap where mode == .alert: if let alertFor { stopTimer(alertFor) }
         case .doubleTap where mode == .off: showToday(byHead: false)
         case .doubleTap: back()
         case .scrollDown: moveHighlight(down: true)
@@ -300,7 +317,7 @@ public final class Conductor {
     private func tap() {
         switch mode {
         case .off, .done: break  // a single tap alone does nothing; a double tap opens today
-        case .today, .showing:
+        case .today, .showing, .alert:
             guard let item = screen?.rail?.current else { return restartIdleTimer() }
             pick(item.action)
         case .listening, .working: break
@@ -316,9 +333,7 @@ public final class Conductor {
             thinking?.cancel()
             turnOff()
         case .showing where !backStack.isEmpty:
-            let previous = backStack.removeLast()
-            mode = previous.kind == .today ? .today(byHead: false) : .showing
-            show(previous)
+            showAgain(backStack.removeLast())
         default:
             turnOff()
         }
@@ -355,6 +370,8 @@ public final class Conductor {
             openItem(id)
         case .dismissItem(let id):
             dismissItem(id)
+        case .stopTimer(let id):
+            stopTimer(id)
         }
     }
 
@@ -380,36 +397,76 @@ public final class Conductor {
     private func showToday(byHead: Bool) {
         backStack = []
         mode = .today(byHead: byHead)
-        let info = TodayInfo(now: now(), events: today?.events ?? [], weather: today?.weather)
-        show(todayScreen(info), timeout: !byHead)
+        show(todayScreen(todayInfo()), timeout: !byHead)
+        startTicker()
         Task {
-            let fresh = await todayProvider.today(at: now())
-            today = fresh
-            // Redraw only if the today view is still up and the facts changed.
-            guard case .today = mode, let current = screen, current.kind == .today else { return }
-            var updated = todayScreen(fresh)
-            if let rail = current.rail, let fresh = updated.rail, rail.items.map(\.title) == fresh.items.map(\.title) {
-                updated.rail = Rail(fresh.items, highlighted: rail.highlighted)
-            }
-            if updated != current { show(updated, timeout: mode == .today(byHead: false)) }
+            today = await todayProvider.today(at: now())
+            refreshToday()
         }
+    }
+
+    /// What the today view shows: the last facts fetched, the clock, and running timers.
+    private func todayInfo() -> TodayInfo {
+        TodayInfo(now: now(), events: today?.events ?? [], weather: today?.weather, timers: phoneTimers)
+    }
+
+    /// Redraws the today view if it's up and something on it changed, keeping the highlight and
+    /// without counting as a gesture (the idle timeout keeps running).
+    private func refreshToday() {
+        guard case .today = mode, let current = screen, current.kind == .today else { return }
+        var updated = todayScreen(todayInfo())
+        if let rail = current.rail, let fresh = updated.rail, rail.items.map(\.title) == fresh.items.map(\.title) {
+            updated.rail = Rail(fresh.items, highlighted: rail.highlighted)
+        }
+        guard updated != current else { return }
+        screen = updated
+        draw()
+    }
+
+    private func startTicker() {
+        ticker?.cancel()
+        ticker = Task { [weak self] in
+            while let self, case .today = self.mode, !Task.isCancelled {
+                let seconds = self.now().timeIntervalSince1970
+                let next = (seconds / 60).rounded(.down) * 60 + 60
+                try? await Task.sleep(for: .seconds(next - seconds + 0.2))
+                self.refreshToday()
+            }
+        }
+    }
+
+    /// Shows a screen from the back stack again; the today view comes back up to date.
+    private func showAgain(_ previous: Screen) {
+        guard previous.kind == .today else {
+            mode = .showing
+            return show(previous)
+        }
+        mode = .today(byHead: false)
+        show(previous)
+        refreshToday()
+        startTicker()
     }
 
     /// The today view with the inbox in it: a short summary of what's pending in front of
     /// Lotti's sentence, and a choice for the list of all items (first while something is pending).
     private func todayScreen(_ info: TodayInfo) -> Screen {
         var screen = composer.screen(for: info)
+        // Catch-up after the today choices; on a short rail Agenda/Weather make room, not it or "All items".
+        let catchup = lastCatchup.flatMap { brief in
+            now().timeIntervalSince(brief.received) <= Self.catchupChoiceMaxAge ? [RailItem("Catch-up", .show(Screen(.says, brief.catchup.text)))] : nil
+        } ?? []
         let active = inbox.active(at: now())
-        guard !active.isEmpty else { return screen }
         let pending = active.filter { $0.status == .pending }
-        let all = RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))
-        var items = screen.rail?.items ?? []
-        if pending.isEmpty { items.append(all) } else { items.insert(all, at: 0) }
+        let all = active.isEmpty ? [] : [RailItem(summary.german ? "Alle ansehen" : "All items", .openInbox(page: 0))]
+        let (lead, tail) = pending.isEmpty ? ([RailItem](), catchup + all) : (all, catchup)
+        guard !lead.isEmpty || !tail.isEmpty else { return screen }
         if !pending.isEmpty {
             screen.text = summary.line(pending, now: now()) + ". " + screen.text
             reportShown(pending)
         }
-        screen.rail = Rail(items, limit: renderer.style.maxRailItems)
+        let limit = Rail.maxItems
+        let today = (screen.rail?.items ?? []).prefix(max(limit - lead.count - tail.count, 0))
+        screen.rail = Rail(lead + today + tail, limit: limit)
         return screen
     }
 
@@ -426,7 +483,7 @@ public final class Conductor {
         let text = items.isEmpty
             ? (summary.german ? "Nichts offen." : "Nothing waiting.")
             : (summary.german ? "\(items.count) offen." : "\(items.count) waiting.")
-        return Screen(.list, text, rail: Rail(rail, limit: renderer.style.maxRailItems))
+        return Screen(.list, text, rail: Rail(rail))
     }
 
     /// One item in full, word for word, with its actions and Dismiss.
@@ -434,7 +491,7 @@ public final class Conductor {
         var rail = item.actions.map { RailItem($0.title, .perform($0)) }
         rail.append(RailItem(summary.german ? "Verwerfen" : "Dismiss", .dismissItem(item.id)))
         return Screen(.original, item.body.isEmpty ? item.summary : item.body,
-                      details: ["\(summary.label(item.kind)) · \(item.title)"], rail: Rail(rail, limit: renderer.style.maxRailItems))
+                      details: ["\(summary.label(item.kind)) · \(item.title)"], rail: Rail(rail))
     }
 
     private func openItem(_ id: String) {
@@ -452,7 +509,7 @@ public final class Conductor {
         if inbox.active(at: now()).isEmpty {
             backStack = []
             mode = .done
-            show(Screen(.done, summary.german ? "Verworfen." : "Dismissed."))
+            show(Screen(.done, summary.german ? "Verworfen." : "Dismissed.", icon: .check))
         } else {
             mode = .showing
             show(inboxScreen(page: 0))
@@ -509,6 +566,7 @@ public final class Conductor {
     /// known to be off your face, it waits for the next "worn" (at most `heldCatchupMaxAge`). An
     /// unknown wear state (not reported yet) shows it right away.
     private func showCatchup(_ catchup: Catchup) {
+        lastCatchup = (catchup, now())
         if link.status.isConnected, link.wearState == .removed {
             heldCatchup = (catchup, now())
             log("catch-up held until the glasses are worn")
@@ -539,6 +597,7 @@ public final class Conductor {
     func turnOff() {
         let hadConversation = lastAsked != nil
         timer?.cancel()
+        ticker?.cancel()
         backStack = []
         mode = .off
         screen = nil
@@ -555,6 +614,12 @@ public final class Conductor {
     }
 
     func show(_ next: Screen, timeout: Bool = true) {
+        // A ringing timer goes first; what you'd have seen waits behind it (a "Done" line doesn't).
+        if let ringer = ringing.first, ![.alert, .listening, .working].contains(mode),
+           next.kind != .listening, next.kind != .working {
+            if next.kind != .done { backStack.append(next) }
+            return showAlert(ringer)
+        }
         screen = next
         draw()
         if next.kind == .done {
@@ -577,6 +642,7 @@ public final class Conductor {
         timer = Task { [weak self] in
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
+            self.timer = nil
             self.goDark()
         }
     }
@@ -584,25 +650,91 @@ public final class Conductor {
     /// An unanswered or timed-out screen goes dark; the conversation stays for a while.
     func goDark() {
         timer?.cancel()
-        timer = nil
+        ticker?.cancel()
         backStack = []
         mode = .off
         screen = nil
         draw()
     }
 
+    // MARK: - Timers
+
+    /// The ringing ones, oldest first.
+    private var ringing: [PhoneTimer] { phoneTimers.filter(\.isRinging) }
+
+    /// The phone says which timers run and ring now.
+    func timersChanged(_ timers: [PhoneTimer]) {
+        stopping.formIntersection(timers.filter(\.isRinging).map(\.id))
+        phoneTimers = timers.filter { !stopping.contains($0.id) }
+        log("timers: \(phoneTimers.map { "\($0.label ?? "timer") \($0.state)" })")
+        guard mode == .alert else {
+            showAlertIfDue()
+            return refreshToday()
+        }
+        if let shown = ringing.first(where: { $0.id == alertFor }) {
+            showAlert(shown)  // the "more ringing" line may have changed
+        } else {
+            leaveAlert()  // stopped on the phone
+        }
+    }
+
+    /// Shows the oldest ringing timer, unless you're talking or Lotti is thinking.
+    private func showAlertIfDue() {
+        guard let ringer = ringing.first, ![.alert, .listening, .working].contains(mode) else { return }
+        if let current = screen, current.kind != .done { backStack.append(current) }
+        showAlert(ringer)
+    }
+
+    private func showAlert(_ ringer: PhoneTimer) {
+        alertFor = ringer.id
+        mode = .alert
+        let others = ringing.count - 1
+        show(Screen(.says, ringer.label.map { "Time's up: \($0)" } ?? "Time's up!",
+                    details: others > 0 ? ["\(others) more ringing"] : [], icon: .bell,
+                    rail: Rail([RailItem("Stop", .stopTimer(ringer.id))])),
+             timeout: false)
+    }
+
+    /// The alert is done: the next ringing timer, or back where you were, or dark.
+    private func leaveAlert() {
+        alertFor = nil
+        if let next = ringing.first { return showAlert(next) }
+        guard let previous = backStack.popLast() else { return goDark() }
+        showAgain(previous)
+    }
+
+    private func stopTimer(_ id: UUID) {
+        guard let ringer = ringing.first(where: { $0.id == id }) else { return }
+        stopping.insert(id)
+        phoneTimers.removeAll { $0.id == id }
+        if mode == .alert, alertFor == id { leaveAlert() }
+        guard let timers else { return }
+        Task {
+            do {
+                try await timers.stop(id)
+            } catch {
+                // Still ringing on the phone: show it again.
+                lastError = "Timer: \(error.localizedDescription)"
+                log("stopping the timer failed: \(error.localizedDescription)")
+                stopping.remove(id)
+                if !phoneTimers.contains(where: { $0.id == id }) { phoneTimers.append(ringer) }
+                showAlertIfDue()
+            }
+        }
+    }
+
     /// What the glasses should show now: the screen, plus the indicators. The attention indicator
     /// shows only while the display is off (it is a mark, never a screen, and never over text);
-    /// the location icon only when there are no choices in the way.
+    /// the location icon only on a lone sentence (no choices or cards in the way).
     private func currentFrame() -> GlassesFrame {
         var frame = screen.map(renderer.render) ?? .dark
         let key = IndicatorKey(
             state: IndicatorState(attention: inbox.pendingCounts(at: now()), locationActive: locationActive),
-            attention: screen == nil, location: frame.rail == nil)
+            attention: screen == nil, location: frame.boxes.count == 1)
         if indicatorCache?.key != key {
             indicatorCache = (key, indicators.images(for: key.state, showAttention: key.attention, showLocation: key.location))
         }
-        frame.images = indicatorCache?.images ?? []
+        frame.images += indicatorCache?.images ?? []
         return frame
     }
 
@@ -842,11 +974,16 @@ public final class Conductor {
     }
 
     /// Actions first (Lotti's best guess), then follow-ups, and Undo last when the backend already
-    /// did something: a stray tap on the best guess should not take it back.
+    /// did something: a stray tap on the best guess should not take it back. A delete can't be
+    /// undone, so it goes after the follow-ups too instead of under the highlight. A short rail
+    /// drops follow-ups, never an action.
     private func rail(for answer: Answer, question: String) -> Rail {
-        let limit = renderer.style.maxRailItems
-        var items = answer.actions.map { RailItem($0.title, .perform($0)) }
-        items += answer.followUps.map { RailItem($0, .ask($0)) }
+        let limit = Rail.maxItems
+        let (destructive, actions) = (answer.actions.filter(\.isDestructive), answer.actions.filter { !$0.isDestructive })
+        let room = max(limit - answer.actions.count - (answer.undo == nil ? 0 : 1), 0)
+        var items = actions.map { RailItem($0.title, .perform($0)) }
+        items += answer.followUps.prefix(room).map { RailItem($0, .ask($0)) }
+        items += destructive.map { RailItem($0.title, .perform($0)) }
         if let undo = answer.undo {
             items = Array(items.prefix(limit - 1)) + [undoItem(undo)]
         }
@@ -919,7 +1056,7 @@ public final class Conductor {
                 show(Screen(.says, result.content, rail: Rail([undoItem(undo)])))
             } else {
                 mode = .done
-                show(Screen(.done, result.content))
+                show(Screen(.done, result.content, icon: .check))
             }
         } else {
             lastError = result.content

@@ -62,28 +62,77 @@ public enum WearState: Equatable, Sendable {
     case removed
 }
 
-/// What the display shows. `main` is Lotti's text on the left; `rail` is the column of choices on
-/// the right, or nil for a full-width `main`. Both are plain text, already laid out by
-/// `ScreenRenderer`; the link only draws them. Black is invisible on the lens, so `.dark` (empty
-/// text, no rail) turns the display off without ending the session.
+/// One line of the wear-detection capture: a raw state message (sid 0x0D) from the glasses, or a
+/// marker you set ("glasses ON now") so the bytes can be matched to what you did.
+public struct StateTraceEntry: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public var time: Date
+    public var text: String
+    public var isMarker: Bool
+
+    public init(time: Date = .now, text: String, isMarker: Bool = false) {
+        self.time = time
+        self.text = text
+        self.isMarker = isMarker
+    }
+}
+
+/// One block of text at a fixed place on the display (pixels, 576 × 288 on the G2).
+public struct FrameBox: Equatable, Sendable {
+    /// Short and unique within a frame ("main", "rail", "card1"); at most 14 characters.
+    public var name: String
+    public var x: Int
+    public var y: Int
+    public var width: Int
+    public var height: Int
+    public var text: String
+
+    public init(_ name: String, x: Int, y: Int, width: Int, height: Int, text: String) {
+        self.name = name
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.text = text
+    }
+}
+
+/// What the display shows: text boxes, already laid out by `ScreenRenderer`; the link only draws
+/// them. The first box is the main one (Lotti's sentence; it takes the touch events); `rail` is
+/// the block of choices under it. Black is invisible on the lens, so `.dark` (empty text) turns
+/// the display off without ending the session.
 public struct GlassesFrame: Equatable, Sendable {
-    public var main: String
-    public var rail: String?
-    /// The layout the strings were written for, so switching styles rebuilds the page geometry.
-    public var style: DisplayStyle
+    public var boxes: [FrameBox]
     /// Small image containers (the attention and location indicators) drawn over the page.
     /// They don't count for `isDark`: a dark frame with an indicator is the "display off" state.
     public var images: [G2ImageBox]
 
-    public init(main: String, rail: String? = nil, style: DisplayStyle = .rail, images: [G2ImageBox] = []) {
-        self.main = main
-        self.rail = rail
-        self.style = style
+    public init(boxes: [FrameBox], images: [G2ImageBox] = []) {
+        self.boxes = boxes
         self.images = images
     }
 
+    /// Lotti's text across the display, with the choices block underneath if there is one.
+    public init(main: String, rail: String? = nil, images: [G2ImageBox] = []) {
+        var boxes = [FrameBox("main", x: 0, y: 0, width: G2Layout.width,
+                              height: rail == nil ? G2Layout.height : G2Layout.choicesY, text: main)]
+        if let rail {
+            boxes.append(FrameBox("rail", x: 0, y: G2Layout.choicesY, width: G2Layout.width,
+                                  height: G2Layout.height - G2Layout.choicesY, text: rail))
+        }
+        self.init(boxes: boxes, images: images)
+    }
+
     public static let dark = GlassesFrame(main: "")
-    public var isDark: Bool { main.isEmpty && (rail ?? "").isEmpty }
+    public var isDark: Bool { boxes.allSatisfy(\.text.isEmpty) }
+
+    /// The main box's text.
+    public var main: String { boxes.first?.text ?? "" }
+    /// The choices block's text, if there are choices.
+    public var rail: String? { self["rail"] }
+    public subscript(name: String) -> String? { boxes.first { $0.name == name }?.text }
+    /// Every box's text, top to bottom, for logs and tests.
+    public var allText: String { boxes.map(\.text).joined(separator: "\n") }
 }
 
 /// The connection to a pair of smart glasses. The app talks only to this, so other glasses can
@@ -120,6 +169,11 @@ public protocol GlassesLink: AnyObject, Observable {
     /// `.removed` inputs. **Unverified on hardware:** the sid 0x0D layout is a best guess (see
     /// `G2Events.wearState`).
     var wearState: WearState { get }
+    /// Every raw state message (sid 0x0D) and marker this session, newest last (at most 100). Also
+    /// written to the log as `[state]` and `[MARK]` lines, to find the real wear-detection bytes.
+    var stateTrace: [StateTraceEntry] { get }
+    /// Adds a marker to the trace and the log, e.g. "glasses ON".
+    func addStateMarker(_ text: String)
     /// When looking up counts as head-up.
     var headUpSettings: HeadUpSettings { get set }
     /// The head's latest pitch in degrees while head tracking is on, for calibrating.

@@ -7,6 +7,13 @@ export interface BuiltinJob {
   name: string;
   cron: string;
   scheduleText: string;
+  /** What it does, shown in the app. */
+  description: string;
+  /** Does a run spend AI tokens? `conditional` = only when `aiNote` says so. */
+  ai: 'none' | 'conditional' | 'always';
+  aiNote: string;
+  /** A setting of this job the app lets you edit next to schedule and enabled. */
+  setting?: { key: string; label: string; unit: string };
   run(app: App): Promise<string>;
 }
 
@@ -20,6 +27,15 @@ export const builtinJobs: BuiltinJob[] = [
     name: 'Meeting soon',
     cron: '* * * * *',
     scheduleText: 'every minute',
+    description:
+      'Looks at your calendar and puts events that start within the lead time into your inbox (once per event).',
+    ai: 'none',
+    aiNote: 'No AI tokens: it only reads the calendar.',
+    setting: {
+      key: 'jobs.meeting_soon.lead_min',
+      label: 'Lead time',
+      unit: 'minutes',
+    },
     async run(app) {
       const cal = app.integrations.calendar;
       if (!cal) return 'No calendar connected.';
@@ -48,6 +64,10 @@ export const builtinJobs: BuiltinJob[] = [
     name: 'Important mail',
     cron: '*/10 * * * *',
     scheduleText: 'every 10 minutes',
+    description:
+      'Checks for new mail and lets the AI pick out what needs attention soon; those mails land in your inbox.',
+    ai: 'conditional',
+    aiNote: 'Spends AI tokens only when there is new mail since the last run.',
     async run(app) {
       const mail = app.integrations.mail;
       if (!mail) return 'No mail account connected.';
@@ -101,6 +121,10 @@ export const builtinJobs: BuiltinJob[] = [
     name: 'Dreaming',
     cron: '0 3 * * *',
     scheduleText: 'daily at 03:00',
+    description:
+      'Tidies up your memory overnight: merges duplicates, drops stale notes and writes a report.',
+    ai: 'always',
+    aiNote: 'Spends AI tokens on every run (when dreaming is on).',
     async run(app) {
       if (!app.settings.bool('dreaming.enabled'))
         return 'Dreaming is turned off.';

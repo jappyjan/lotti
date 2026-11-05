@@ -33,6 +33,8 @@ public final class FakeGlassesLink: GlassesLink {
     public var headUpSettings = HeadUpSettings()
     public var headPitch: Double?
     public private(set) var wearState: WearState = .unknown
+    public private(set) var stateTrace: [StateTraceEntry] = []
+    public func addStateMarker(_ text: String) { stateTrace.append(StateTraceEntry(text: text, isMarker: true)) }
 
     @ObservationIgnored private let imuBroadcast = Broadcast<IMUSample>()
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()

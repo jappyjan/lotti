@@ -17,6 +17,12 @@ export interface Job {
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
+  /** Shown in the app: what the job does and whether it spends AI tokens. */
+  description: string | null;
+  ai: 'none' | 'conditional' | 'always';
+  aiNote: string;
+  /** Built-in jobs with an extra editable setting (key into settings.*). */
+  setting: { key: string; label: string; unit: string } | null;
 }
 
 interface Row {
@@ -32,18 +38,28 @@ interface Row {
   last_run_at: number | null;
 }
 
-const toJob = (r: Row): Job => ({
-  id: r.id,
-  name: r.name,
-  kind: r.kind,
-  builtinKey: r.builtin_key,
-  prompt: r.prompt,
-  cron: r.cron,
-  scheduleText: r.schedule_text,
-  enabled: !!r.enabled,
-  nextRunAt: r.next_run_at ? isoLocal(r.next_run_at) : null,
-  lastRunAt: r.last_run_at ? isoLocal(r.last_run_at) : null,
-});
+const toJob = (r: Row): Job => {
+  const b =
+    r.kind === 'builtin'
+      ? builtinJobs.find((x) => x.key === r.builtin_key)
+      : undefined;
+  return {
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    builtinKey: r.builtin_key,
+    prompt: r.prompt,
+    cron: r.cron,
+    scheduleText: r.schedule_text,
+    enabled: !!r.enabled,
+    nextRunAt: r.next_run_at ? isoLocal(r.next_run_at) : null,
+    lastRunAt: r.last_run_at ? isoLocal(r.last_run_at) : null,
+    description: b?.description ?? null,
+    ai: b?.ai ?? 'always',
+    aiNote: b?.aiNote ?? 'Spends AI tokens on every run.',
+    setting: b?.setting ?? null,
+  };
+};
 
 export interface JobRun {
   id: string;

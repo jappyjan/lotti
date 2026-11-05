@@ -1,10 +1,9 @@
 import LottiKit
 import SwiftUI
 
-/// The glasses: connection, head tracking, wear detection, layout, and a test for the indicators.
+/// The glasses: connection, head tracking, wear detection, the mascot, and a test for the indicators.
 struct GlassesSettingsView: View {
     @Environment(AppModel.self) private var model
-    @State private var displayStyle = Settings.displayStyle
     @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
     @AppStorage(Settings.wakeWordKey) private var wakeWord = Settings.wakeWordEnabled
     @State private var note: String?
@@ -19,19 +18,6 @@ struct GlassesSettingsView: View {
             wearSection
             lookUpSection
             voiceSection
-            Section {
-                Picker("Choices", selection: $displayStyle) {
-                    Text("Choices below (default)").tag(DisplayStyle.choicesBelow)
-                    Text("Wider rail, 3 choices").tag(DisplayStyle.wideRail)
-                    Text("Rail (old)").tag(DisplayStyle.rail)
-                }
-                .onChange(of: displayStyle) { _, style in
-                    Settings.displayStyle = style
-                    conductor.setDisplayStyle(style)
-                }
-            } header: {
-                Text("Layout")
-            }
             Section {
                 Toggle("Mascot", isOn: $mascotEnabled)
             } footer: {
@@ -75,7 +61,7 @@ struct GlassesSettingsView: View {
             Text("Connection")
         } footer: {
             Text(link.status.isConnected
-                 ? "Tap or look up for today. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
+                 ? "Display off? Double tap, or look up (if switched on below), to open Today. A \"Catch-up\" choice appears there for 12 hours after Lotti sends one. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
                  : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
     }
@@ -86,7 +72,7 @@ struct GlassesSettingsView: View {
         } header: {
             Text("Wear detection")
         } footer: {
-            Text("From the glasses' own sensor. Lotti Brain uses it to know when you're around; the display goes dark when you take them off.")
+            Text("From the glasses' own sensor. Lotti Brain uses it to know when you're around; the display goes dark when you take them off. \"Unknown\" means the glasses haven't sent a wear signal yet; Debug → Wear capture records what they do send.")
         }
     }
 

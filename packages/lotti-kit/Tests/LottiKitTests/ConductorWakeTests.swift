@@ -105,6 +105,22 @@ struct ConductorWakeTests {
         #expect(conductor.mode == .off)
     }
 
+    @Test func aWakeWhileATimerRingsListensAndTheAnswerWaitsBehindTheAlert() async throws {
+        speech.script = [Transcript("Hey Lotti, wie spät ist es")]
+        brain.answers["wie spät ist es"] = Answer(sentence: "Es ist drei.")
+        conductor.timersChanged([PhoneTimer(id: UUID(), label: "Pasta", state: .ringing)])
+        #expect(conductor.mode == .alert)
+        try await wakeOn()
+        sayHeyLotti()
+        try await eventually { conductor.mode == .listening }
+        hush(4)
+        try await eventually { brain.asked.last == "wie spät ist es" }
+        // Like after a hold: the ringing timer comes first, the answer waits behind it.
+        try await eventually { conductor.mode == .alert }
+        press(.doubleTap)  // stops the timer, then the answer shows
+        try await eventually { conductor.screen?.text == "Es ist drei." }
+    }
+
     @Test func theSameBreathCommandReachesTheRecognizerThroughThePreRoll() async throws {
         let speech = RecordingSpeech()
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: classifier)

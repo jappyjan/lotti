@@ -75,8 +75,20 @@ export function humanLocal(
   });
   const p = (n: number) => String(n).padStart(2, '0');
   const [y, mo, da, h, mi] = shifted
-    ? [d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), d.getUTCHours(), d.getUTCMinutes()]
-    : [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()];
+    ? [
+        d.getUTCFullYear(),
+        d.getUTCMonth(),
+        d.getUTCDate(),
+        d.getUTCHours(),
+        d.getUTCMinutes(),
+      ]
+    : [
+        d.getFullYear(),
+        d.getMonth(),
+        d.getDate(),
+        d.getHours(),
+        d.getMinutes(),
+      ];
   return `${y}-${p(mo + 1)}-${p(da)} ${day} ${p(h)}:${p(mi)}`;
 }
 
@@ -85,4 +97,36 @@ export function offsetLabel(offsetMin: number): string {
   const a = Math.abs(offsetMin);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${offsetMin < 0 ? '-' : '+'}${p(Math.floor(a / 60))}:${p(a % 60)}`;
+}
+
+/**
+ * "Tue 3 Nov 14:30–15:30" (24 h) for confirm buttons. Shown at `offsetMin` (the phone's UTC offset) or
+ * the server's local zone; an end on another day gets its own date.
+ */
+export function shortWhen(
+  start: number,
+  end: number | null,
+  locale: 'de' | 'en' = 'en',
+  offsetMin?: number | null,
+): string {
+  const shifted = offsetMin !== undefined && offsetMin !== null;
+  const zone = (ms: number) => new Date(shifted ? ms + offsetMin * MIN : ms);
+  const day = (ms: number) =>
+    zone(ms).toLocaleDateString(locale === 'de' ? 'de-DE' : 'en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      ...(shifted ? { timeZone: 'UTC' } : {}),
+    });
+  const p = (n: number) => String(n).padStart(2, '0');
+  const time = (ms: number) => {
+    const d = zone(ms);
+    return shifted
+      ? `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`
+      : `${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  if (end === null || Number.isNaN(end)) return `${day(start)} ${time(start)}`;
+  return day(start) === day(end)
+    ? `${day(start)} ${time(start)}–${time(end)}`
+    : `${day(start)} ${time(start)} – ${day(end)} ${time(end)}`;
 }

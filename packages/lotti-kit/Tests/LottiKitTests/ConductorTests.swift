@@ -327,6 +327,132 @@ struct ConductorTests {
         press(.longPress)
         #expect(conductor.mode == .listening)
     }
+
+    // MARK: Ringing timers
+
+    func conductorWithTimers(_ timers: FakeTimers) -> Conductor {
+        Conductor(link: link, brain: brain, timers: timers, speech: speech,
+                  today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: false),
+                  timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200)))
+    }
+
+    @Test func aRingingTimerLightsUpTheGlassesAndTapStopsIt() async throws {
+        let timers = FakeTimers()
+        let conductor = conductorWithTimers(timers)
+        let running = Task { await conductor.run() }
+        defer { running.cancel() }
+        try await eventually { timers.watching }
+
+        let pasta = PhoneTimer(id: UUID(), label: "Pasta", state: .ringing)
+        timers.ring([pasta])
+        try await eventually { conductor.mode == .alert }
+        #expect(conductor.screen?.text == "Time's up: Pasta")
+        #expect(conductor.screen?.rail?.current?.title == "Stop")
+        try await eventually { link.frames.last?.main.contains("Time's up: Pasta") == true }
+
+        try await Task.sleep(for: .milliseconds(400))  // longer than idle: it keeps ringing on the lens
+        #expect(conductor.mode == .alert)
+
+        conductor.handle(InputEvent(.tap, from: .ring))
+        #expect(conductor.mode == .off)
+        try await eventually { timers.stopped == [pasta.id] }
+        try await eventually { link.frames.last == .dark }
+    }
+
+    @Test func doubleTapStopsATimerAndGoesBackToWhereYouWere() async throws {
+        let timers = FakeTimers()
+        let conductor = conductorWithTimers(timers)
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(conductor.mode == .today(byHead: false))
+
+        let tea = PhoneTimer(id: UUID(), state: .ringing)
+        conductor.timersChanged([tea])
+        #expect(conductor.mode == .alert)
+        #expect(conductor.screen?.text == "Time's up!")
+
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        try await eventually { timers.stopped == [tea.id] }
+        #expect(conductor.mode == .today(byHead: false))
+        #expect(conductor.screen?.kind == .today)
+    }
+
+    @Test func aTimerStoppedOnThePhoneLeavesTheGlasses() {
+        let timers = FakeTimers()
+        let conductor = conductorWithTimers(timers)
+        conductor.timersChanged([PhoneTimer(id: UUID(), state: .ringing)])
+        #expect(conductor.mode == .alert)
+        conductor.timersChanged([])
+        #expect(conductor.mode == .off)
+        #expect(timers.stopped.isEmpty)
+    }
+
+    @Test func aTimerWaitsUntilLottiHasAnswered() async throws {
+        let timers = FakeTimers()
+        let conductor = conductorWithTimers(timers)
+        brain.delay = .milliseconds(50)
+        brain.answers = ["Rain?": Answer(sentence: "No rain today.")]
+        conductor.ask("Rain?")
+        let pasta = PhoneTimer(id: UUID(), label: "Pasta", state: .ringing)
+        conductor.timersChanged([pasta])
+        #expect(conductor.mode == .working)
+
+        try await eventually { conductor.mode == .alert }
+        #expect(conductor.screen?.text == "Time's up: Pasta")
+        conductor.handle(InputEvent(.tap, from: .ring))
+        #expect(conductor.screen?.text == "No rain today.")
+        #expect(conductor.mode == .showing)
+    }
+
+    @Test func severalTimersRingOneAfterTheOther() {
+        let timers = FakeTimers()
+        let conductor = conductorWithTimers(timers)
+        let first = PhoneTimer(id: UUID(), label: "Pasta", state: .ringing)
+        let second = PhoneTimer(id: UUID(), label: "Sauce", state: .ringing)
+        conductor.timersChanged([first, second])
+        #expect(conductor.screen?.text == "Time's up: Pasta")
+        #expect(conductor.screen?.details == ["1 more ringing"])
+        conductor.handle(InputEvent(.tap, from: .ring))
+        #expect(conductor.screen?.text == "Time's up: Sauce")
+        // The phone hasn't caught up yet: the stopped one doesn't come back.
+        conductor.timersChanged([first, second])
+        #expect(conductor.screen?.text == "Time's up: Sauce")
+        #expect(conductor.screen?.details == [])
+    }
+
+    @Test func theTodayViewShowsRunningTimers() async throws {
+        let conductor = conductorWithTimers(FakeTimers())
+        let pasta = PhoneTimer(id: UUID(), label: "Pasta", state: .running(ends: Date().addingTimeInterval(240)))
+        conductor.timersChanged([pasta])
+        conductor.handle(InputEvent(.doubleTap, from: .ring))
+        #expect(conductor.screen?.cards.first == Card("Pasta", ["4 min left", "Rings " + clock(pasta)], art: .icon(.timer(left: 1))))
+        try await eventually { link.frames.last?["card1"]?.hasPrefix("Pasta") == true }
+
+        // It rings, you stop it, and the today view comes back without it.
+        var ringing = pasta
+        ringing.state = .ringing
+        conductor.timersChanged([ringing])
+        #expect(conductor.mode == .alert)
+        conductor.handle(InputEvent(.tap, from: .ring))
+        #expect(conductor.mode == .today(byHead: false))
+        #expect(conductor.screen?.cards == [])
+    }
+
+    func clock(_ timer: PhoneTimer) -> String {
+        guard case .running(let ends) = timer.state else { return "" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: ends)
+    }
+
+    @Test func aTimerThatWontStopShowsAgain() async throws {
+        let timers = FakeTimers()
+        timers.stopError = ToolError("AlarmKit said no.")
+        let conductor = conductorWithTimers(timers)
+        conductor.timersChanged([PhoneTimer(id: UUID(), state: .ringing)])
+        conductor.handle(InputEvent(.tap, from: .ring))
+        try await eventually { conductor.mode == .alert }
+        #expect(conductor.lastError == "Timer: AlarmKit said no.")
+    }
 }
 
 // MARK: - Fakes
@@ -438,6 +564,26 @@ final class FakeMicrophone: Microphone {
     func stop() async {
         on = false
         continuation?.finish()
+    }
+}
+
+@MainActor
+final class FakeTimers: Timers {
+    var stopError: Error?
+    private(set) var stopped: [UUID] = []
+    private(set) var watching = false
+    private var continuation: AsyncStream<[PhoneTimer]>.Continuation?
+
+    func updates() -> AsyncStream<[PhoneTimer]> {
+        let (stream, continuation) = AsyncStream<[PhoneTimer]>.makeStream()
+        self.continuation = continuation
+        watching = true
+        return stream
+    }
+    func ring(_ timers: [PhoneTimer]) { continuation?.yield(timers) }
+    func stop(_ id: UUID) async throws {
+        if let stopError { throw stopError }
+        stopped.append(id)
     }
 }
 

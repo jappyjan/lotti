@@ -132,7 +132,7 @@ function timeOf(s: string): { h: number; m: number } | null {
 }
 
 /**
- * Friendly schedule -> cron. Examples: "every 10 minutes", "hourly", "daily at 08:00", "täglich um 7:30",
+ * Friendly schedule -> cron. Examples: "every minute", "every 10 minutes", "hourly", "daily at 08:00", "täglich um 7:30",
  * "weekdays at 07:30", "every monday at 9:00", "weekly on friday at 17:00", "monthly at 09:00".
  */
 export function friendlyToCron(text: string): string | null {
@@ -144,6 +144,8 @@ export function friendlyToCron(text: string): string | null {
   if (m) return `*/${Number(m[1])} * * * *`;
   m = /^(?:every|alle)\s+(\d+)\s*(?:h|hours?|stunden?)$/.exec(t);
   if (m) return `0 */${Number(m[1])} * * *`;
+  if (/^(every minute|minutely|jede minute|minütlich)$/.test(t))
+    return '* * * * *';
   if (/^(hourly|stündlich|every hour|jede stunde)$/.test(t)) return '0 * * * *';
   const at = /(?:at|um)\s+(.+)$/.exec(t);
   const time = at ? timeOf(at[1]!) : null;

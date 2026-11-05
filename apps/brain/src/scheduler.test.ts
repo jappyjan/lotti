@@ -43,6 +43,7 @@ test('cron: next run for common expressions (local time)', () => {
 });
 
 test('friendly schedules (en/de) become cron', () => {
+  assert.equal(friendlyToCron('every minute'), '* * * * *'); // what Meeting soon shows; the app sends it back on Save
   assert.equal(friendlyToCron('every 10 minutes'), '*/10 * * * *');
   assert.equal(friendlyToCron('hourly'), '0 * * * *');
   assert.equal(friendlyToCron('daily at 08:00'), '0 8 * * *');
@@ -343,6 +344,20 @@ test('job_runs are pruned per job; retention sweep drops old logs; catch-up read
   assert.ok(t.app.inbox.get(keep.id));
 });
 
+test('jobs.list tells what each job does and whether it spends AI tokens', () => {
+  const t = makeApp();
+  const by = (k: string) => t.app.scheduler.list().find((j) => j.builtinKey === k)!;
+  assert.equal(by('meeting_soon').ai, 'none');
+  assert.equal(by('meeting_soon').setting?.key, 'jobs.meeting_soon.lead_min');
+  assert.equal(by('important_mail').ai, 'conditional');
+  assert.equal(by('dreaming').ai, 'always');
+  for (const k of ['meeting_soon', 'important_mail', 'dreaming'])
+    assert.ok(by(k).description, k);
+  const mine = t.app.scheduler.create({ name: 'x', prompt: 'p', schedule: 'daily at 08:00' });
+  assert.equal(mine.ai, 'always');
+  assert.equal(mine.description, null);
+});
+
 test('meeting soon lead time is a setting (jobs.meeting_soon.lead_min)', async () => {
   const windows: number[] = [];
   const t = makeApp({
@@ -363,6 +378,14 @@ test('meeting soon lead time is a setting (jobs.meeting_soon.lead_min)', async (
   );
   await t.app.scheduler.runNow(job.id);
   assert.deepEqual(windows, [10, 25]);
+  // 0, negative, fractions, text and huge values are refused (the job would fail or misbehave)
+  for (const value of [0, -5, 2.5, '15', 1e300])
+    assert.equal(
+      ((await t.app.ops.invoke('settings.set', { key: 'jobs.meeting_soon.lead_min', value }, 'agent')) as any).ok,
+      false,
+      String(value),
+    );
+  assert.equal(t.app.settings.get('jobs.meeting_soon.lead_min'), 25);
 });
 
 test('"run dreaming now" by voice: the agent sees dreaming_run_now (free, no tap)', async () => {

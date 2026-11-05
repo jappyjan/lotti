@@ -41,7 +41,7 @@ Goal: phone in the pocket, glasses on. Look up or tap and Lotti tells you about 
 In this order:
 
 1. **Screen and gestures** `ios`: one hand-coded screen: Lotti's sentence on the left, choices in the rail on the right. Scroll moves the highlight, tap picks, double tap goes back or turns the display off, long press is talk (only). The rail is reusable for the Actions list later.
-2. **Today view** `ios` `design`: the look-up view. Time, date, your next appointments and the weather, as one sentence from Lotti plus dim details. Opens on a tap when the display is off, or when you look up (head-up from the glasses' IMU, if the firmware sends it).
+2. **Today view** `ios` `design`: the look-up view. Time, date, your next appointments and the weather, as one sentence from Lotti plus dim details. Opens on a double tap when the display is off, or when you look up (head-up from the glasses' IMU, if the firmware sends it).
 3. **Chat** `ios` `brain`: Apple's on-device model as Lotti, with S3's persona. A conversation keeps context until you dismiss it. Answers are one or two sentences plus up to three follow-ups in the rail. Simple tools: today's calendar, weather, time. Prewarmed, with a timeout (S3 saw rare 20–60 s stalls).
 4. **Voice** `ios` `voice`: hold to talk, the glasses' mic (LC3), on-device speech-to-text (`SpeechAnalyzer`), your words shown while you hold (Listening), then Lotti answers. Phone mic as fallback if the glasses' mic doesn't work.
 5. **Keeps running** `ios`: stays connected with the phone locked (Bluetooth background mode) and reconnects on its own.
@@ -59,7 +59,7 @@ _Done when:_ you wear Lotti for a normal day and use the today view and chat fro
 
 Rough order, to be re-sorted by what real use shows:
 
-1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the default. Wider rail still switchable in Debug. **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
+1. **Choices and layout** `ios` `design`: **decided: choices below the sentence** (judged wearing, 2026-11-01), now the only layout (side and wide rail removed). **Open: choices in a popup on the second display layer** (preferred long-term) — menu content is mapped but the menu is firmware-opened; needs a live BLE capture to find an on-demand open ([apk-recon](spikes/apk-recon.md), D12). See [design.md](design.md#the-rail-is-too-narrow).
 2. **Put it on** `ios` `design` `brain`: **built as the catch-up brief** (wear on/off decoded from sid `0x0D` plus away/slept heuristics; not verified on real glasses yet). When Jan comes back after ≥ 2 h or sleep, one short catch-up. See [design.md](design.md#key-flows).
 3. **Actions without voice** `ios` `design`: a tap on the today view opens a ring-driven list of common actions (timer, navigate home, quiet for an hour, read the last answer again). See [design.md](design.md#without-voice).
 4. **Messages** `messaging` (needs a paid developer account): notifications in through `AccessoryNotifications`, triage, one-sentence summaries, suggested replies with a Proposal, more replies behind "Change".

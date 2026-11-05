@@ -16,7 +16,7 @@ struct JobsView: View {
                         NavigationLink { JobDetailView(job: job) } label: { row(job, reload) }
                     }
                 } footer: {
-                    Text("Built-in jobs can be switched off or re-timed, not deleted.")
+                    Text("Built-in jobs can be switched off or re-timed, not deleted. \"No AI\" jobs are plain code and cost no tokens; the others call your AI provider.")
                 }
                 Section {
                     Button("New job", systemImage: "plus") { creating = true }
@@ -35,6 +35,8 @@ struct JobsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.name).foregroundStyle(job.enabled ? .primary : .secondary)
                 Text(job.scheduleLabel).font(.caption).foregroundStyle(.secondary)
+                if let summary = job.summary { Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                Text(job.aiBadge).font(.caption2.weight(.medium)).foregroundStyle(job.ai == "none" ? .green : .orange)
                 Text("Next \(shortDate(job.nextRunAt)) · last \(shortDate(job.lastRunAt))").font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer()
@@ -59,6 +61,9 @@ struct JobDetailView: View {
     @State private var prompt: String
     @State private var schedule: ScheduleDraft
     @State private var enabled: Bool
+    @State private var settingValue = ""
+    /// Only a lead time that was read can be edited and saved: a failed read must not block Save.
+    @State private var settingLoaded = false
     @State private var history: [JobRunInfo] = []
     @State private var runNote: String?
     @State private var running = false
@@ -82,7 +87,26 @@ struct JobDetailView: View {
                     TextField("What should Lotti do?", text: $prompt, axis: .vertical).lineLimit(3...10)
                 }
                 Toggle("Enabled", isOn: $enabled)
+                if let job, let label = job.settingLabel, job.settingKey != nil {
+                    LabeledContent("\(label) (\(job.settingUnit ?? ""))") {
+                        TextField("10", text: $settingValue).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            .disabled(!settingLoaded)
+                    }
+                    if !settingIsValid {
+                        Text("Use a whole number from 1 to 1440.").font(.footnote).foregroundStyle(.red)
+                    }
+                }
+            } header: {
+                if let job {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let summary = job.summary { Text(summary).textCase(nil) }
+                        Text(job.aiNote).textCase(nil).foregroundStyle(job.ai == "none" ? .green : .orange)
+                    }
+                }
             } footer: {
+                if job?.isBuiltin == true {
+                    Text("You can change the schedule, switch it off\(job?.settingKey != nil ? " and set its lead time" : ""). The job itself is built in.")
+                }
                 if job?.isBuiltin != true {
                     Text("Lotti runs this prompt with its tools. If there is nothing to say it answers NOTHING and you hear nothing; otherwise the result lands in your inbox.")
                 }
@@ -113,7 +137,7 @@ struct JobDetailView: View {
             if job == nil { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             ToolbarItem(placement: .confirmationAction) {
                 Button(job == nil ? "Create" : "Save") { save() }
-                    .disabled(name.isEmpty || !schedule.isValid || (job?.isBuiltin != true && prompt.isEmpty))
+                    .disabled(name.isEmpty || !schedule.isValid || (job?.isBuiltin != true && prompt.isEmpty) || !settingIsValid)
             }
         }
         .errorAlert($error)
@@ -128,7 +152,14 @@ struct JobDetailView: View {
                 }
             }
         }
-        .task { await loadHistory() }
+        .task {
+            await loadHistory()
+            if let key = job?.settingKey, let value = try? await model.call("settings.get", ["key": .string(key)]),
+               let minutes = value["value"]?.number {
+                settingValue = String(Int(minutes))
+                settingLoaded = true
+            }
+        }
     }
 
     @ViewBuilder private var scheduleSection: some View {
@@ -177,11 +208,20 @@ struct JobDetailView: View {
         }
     }
 
+    /// A job's own setting (the lead time) needs a whole number from 1 to 1440 (the server's range),
+    /// otherwise Save would quietly skip it.
+    private var settingIsValid: Bool {
+        job?.settingKey == nil || !settingLoaded || (1...1440).contains(Int(settingValue) ?? 0)
+    }
+
     private func save() {
         var input: [String: JSONValue] = ["name": .string(name), "schedule": .string(schedule.text), "enabled": .bool(enabled)]
         if job?.isBuiltin != true { input["prompt"] = .string(prompt) }
         Task {
             await attempt($error) {
+                if let key = job?.settingKey, settingLoaded, let minutes = Int(settingValue), minutes > 0 {
+                    _ = try await model.call("settings.set", ["key": .string(key), "value": .number(Double(minutes))])
+                }
                 if let job {
                     input["id"] = .string(job.id)
                     _ = try await model.call("jobs.update", .object(input))

@@ -26,28 +26,37 @@ public struct Weather: Equatable, Sendable {
     public var low: Int?
     /// When rain starts later today, if it does.
     public var rainFrom: Date?
-    public var tomorrow: DayForecast?
+    /// The next days, today first (up to 5).
+    public var days: [DayForecast]
 
     public init(temperature: Int, condition: String, high: Int? = nil, low: Int? = nil, rainFrom: Date? = nil,
-                tomorrow: DayForecast? = nil) {
+                days: [DayForecast] = []) {
         self.temperature = temperature
         self.condition = condition
         self.high = high
         self.low = low
         self.rainFrom = rainFrom
-        self.tomorrow = tomorrow
+        self.days = days
     }
+
+    public var tomorrow: DayForecast? { days.count > 1 ? days[1] : nil }
 }
 
 public struct DayForecast: Equatable, Sendable {
+    /// The start of the day.
+    public var date: Date
     public var condition: String
     public var high: Int
     public var low: Int
+    /// Highest chance of rain that day, in percent.
+    public var rainChance: Int?
 
-    public init(condition: String, high: Int, low: Int) {
+    public init(date: Date, condition: String, high: Int, low: Int, rainChance: Int? = nil) {
+        self.date = date
         self.condition = condition
         self.high = high
         self.low = low
+        self.rainChance = rainChance
     }
 }
 
@@ -56,11 +65,14 @@ public struct TodayInfo: Equatable, Sendable {
     public var now: Date
     public var events: [CalendarEntry]
     public var weather: Weather?
+    /// Lotti's timers that are counting down, soonest first.
+    public var timers: [PhoneTimer]
 
-    public init(now: Date, events: [CalendarEntry] = [], weather: Weather? = nil) {
+    public init(now: Date, events: [CalendarEntry] = [], weather: Weather? = nil, timers: [PhoneTimer] = []) {
         self.now = now
         self.events = events.sorted { $0.start < $1.start }
         self.weather = weather
+        self.timers = timers.filter { !$0.isRinging }
     }
 
     /// Timed events that haven't ended yet, in order.
@@ -88,20 +100,70 @@ public struct TodayComposer: Sendable {
         self.locale = locale
     }
 
+    /// The date and time on top, what's next, then cards: running timers, the weather, and what's
+    /// later today if there's room.
     public func screen(for info: TodayInfo) -> Screen {
-        var parts = [nextUp(info)]
-        if let weather = info.weather { parts.append(weatherSentence(weather, now: info.now, short: true)) }
-
-        var details = [format(info.now, "EEE d MMM") + " · " + time(info.now)]
+        var details: [String] = []
         let more = info.remaining.count - 1
         if more > 0 { details.append("+\(more) more today") }
 
+        var cards: [Card] = []
+        if let timers = timersCard(info) { cards.append(timers) }
+        if let weather = info.weather { cards.append(weatherCard(weather, now: info.now)) }
+        if cards.count < 2, info.remaining.count > 1 {
+            cards.append(Card("Later", info.remaining.dropFirst().prefix(3).map { "\(time($0.start)) \($0.title)" },
+                              art: .icon(.calendar)))
+        }
+
         var items: [RailItem] = []
         if !info.events.isEmpty { items.append(RailItem("Agenda", .show(agenda(info)))) }
-        if let weather = info.weather {
-            items.append(RailItem("Weather", .show(Screen(.says, weatherSentence(weather, now: info.now, short: false)))))
+        if let weather = info.weather { items.append(RailItem("Weather", .show(forecast(weather, now: info.now)))) }
+        return Screen(.today, nextUp(info), details: details, header: Header(format(info.now, "EEE d MMM"), right: time(info.now)),
+                      cards: cards, rail: Rail(items))
+    }
+
+    /// The weather now, then a card per day (up to 5): its icon, a bar from low to high on the
+    /// scale of the whole forecast with the numbers at its ends, and the chance of rain if it's
+    /// worth saying.
+    public func forecast(_ weather: Weather, now: Date) -> Screen {
+        let days = Array(weather.days.prefix(ScreenRenderer.maxCards))
+        let range = (days.map(\.low).min() ?? 0)...(days.map(\.high).max() ?? 0)
+        let cards = days.enumerated().map { index, day in
+            Card(index == 0 ? "Today" : format(day.date, "EEE"),
+                 day.rainChance.flatMap { $0 >= 20 ? "Rain \($0)%" : nil }.map { [$0] } ?? [],
+                 art: .day(LensIcon(condition: day.condition), low: day.low, high: day.high, range: range))
         }
-        return Screen(.today, parts.joined(separator: " "), details: details, rail: Rail(items))
+        return Screen(.says, weatherSentence(weather, now: now, short: false), cards: cards)
+    }
+
+    func timersCard(_ info: TodayInfo) -> Card? {
+        let running = info.timers.compactMap { timer -> (label: String?, ends: Date, duration: TimeInterval?)? in
+            guard case .running(let ends) = timer.state else { return nil }
+            return (timer.label, ends, timer.duration)
+        }
+        guard let first = running.first else { return nil }
+        // The dial shows what's left of the soonest timer.
+        let share = first.duration.map { first.ends.timeIntervalSince(info.now) / max($0, 1) } ?? 1
+        let art = Card.Art.icon(.timer(left: (share * 12).rounded(.up) / 12))  // twelve steps: redraws stay rare
+        if running.count == 1 {
+            return Card(first.label ?? "Timer", [left(until: first.ends, now: info.now) + " left", "Rings \(time(first.ends))"],
+                        art: art)
+        }
+        return Card("Timers", running.prefix(3).map { "\($0.label ?? "Timer") \(left(until: $0.ends, now: info.now))" }, art: art)
+    }
+
+    func weatherCard(_ w: Weather, now: Date) -> Card {
+        var lines: [String] = []
+        if let high = w.high, let low = w.low { lines.append("\(low)° / \(high)°") }
+        if let rain = w.rainFrom { lines.append(rain <= now ? "Raining" : "Rain from \(time(rain))") }
+        return Card("\(w.temperature)° \(w.condition)", lines, art: .icon(LensIcon(condition: w.condition)))
+    }
+
+    /// "4 min", "1 h 20 min"; rounded up, so a timer never says 0 min before it rings.
+    func left(until end: Date, now: Date) -> String {
+        let minutes = max(Int((end.timeIntervalSince(now) / 60).rounded(.up)), 1)
+        guard minutes >= 60 else { return "\(minutes) min" }
+        return minutes % 60 == 0 ? "\(minutes / 60) h" : "\(minutes / 60) h \(minutes % 60) min"
     }
 
     /// Today's events as Lotti tells them, with one dim line per event.
