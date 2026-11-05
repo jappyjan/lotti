@@ -1,6 +1,10 @@
 import type { App } from '../app.ts';
 import { accountsFor, errText, strList, type Service } from './accounts.ts';
-import { defaultBackend, type BackendFactory } from './calendar/source.ts';
+import {
+  defaultBackend,
+  icsFeed,
+  type BackendFactory,
+} from './calendar/source.ts';
 import { googleFetch } from './google/oauth.ts';
 import type { AccountConnector, AccountRow } from './index.ts';
 import { imapMailboxes, realImapDeps, type ImapDeps } from './mail/imap.ts';
@@ -96,5 +100,27 @@ export function makeConnector(
     },
   };
 }
+
+/** ICS subscription: the check downloads the feed and reports how many events it holds. */
+export const icsConnector: AccountConnector = {
+  kind: 'ics',
+  async check(acc, app) {
+    try {
+      const n = (await icsFeed(app, acc, { retryFailed: true })).count;
+      app.db.run(
+        'UPDATE accounts SET last_sync_at=? WHERE id=?',
+        app.clock.now(),
+        acc.id,
+      );
+      return {
+        ok: true,
+        status: 'ok',
+        detail: n === 1 ? '1 event' : `${n} events`,
+      };
+    } catch (e) {
+      return { ok: false, status: 'error', error: errText(e) };
+    }
+  },
+};
 
 export const connectorKinds = ['google', 'icloud', 'caldav', 'imap'];

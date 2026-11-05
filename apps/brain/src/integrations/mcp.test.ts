@@ -53,7 +53,12 @@ const settle = (t: ReturnType<typeof makeApp>) =>
 test('mcp stdio: test connection lists tools; mcp.tools shows confirmation flags', async () => {
   const { t, id } = await stdioApp();
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
-  assert.deepEqual(r.result, { ok: true, tools: ['echo', 'fail'] });
+  assert.deepEqual(r.result, {
+    ok: true,
+    tools: ['echo', 'fail'],
+    authRequired: false,
+    signedIn: false,
+  });
   const tools = (await t.app.ops.invoke('mcp.tools', { id }, 'app')) as any;
   assert.deepEqual(
     tools.result.map((x: any) => [x.name, x.needsConfirmation]),
@@ -254,7 +259,12 @@ test('mcp http: JSON and SSE replies, bearer token, session id', async () => {
   await settle(t);
   m.seen.length = 0;
   const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
-  assert.deepEqual(r.result, { ok: true, tools: ['now'] });
+  assert.deepEqual(r.result, {
+    ok: true,
+    tools: ['now'],
+    authRequired: false,
+    signedIn: false,
+  });
   assert.equal(m.seen[0]!.headers.authorization, 'Bearer tok');
   assert.match(m.seen[1]!.headers['mcp-session-id']!, /^S\d+$/);
   const out = await t.app.integrations.mcp.callTool(
@@ -310,6 +320,77 @@ test('refresh keeps the old tools until the new set is ready (no "unknown tool" 
   assert.ok(t.app.tools.get('mcp__slow__echo'), 'still there while refreshing');
   await p;
   assert.ok(t.app.tools.get('mcp__slow__echo'));
+});
+
+test('mcp http: a non-MCP reply gives a readable error without echoing the body', async () => {
+  const t = makeApp({
+    fetch: async () =>
+      new Response('BEGIN:VCALENDAR secret-body', {
+        status: 200,
+        headers: { 'content-type': 'text/calendar' },
+      }),
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'ics', transport: 'http', url: 'https://mcp.example/cal.ics' },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(r.result.error, /did not answer like an MCP server/);
+  assert.ok(!r.result.error.includes('secret-body'));
+});
+
+test('mcp http: an unreachable server does not echo the URL query (it may hold a token)', async () => {
+  const t = makeApp({
+    fetch: async () => {
+      throw new TypeError('fetch failed');
+    },
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      {
+        name: 'q',
+        transport: 'http',
+        url: 'https://mcp.example/rpc?token=SECRETKEY',
+      },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(
+    r.result.error,
+    /Cannot reach the MCP server at https:\/\/mcp\.example\/rpc:/,
+  );
+  assert.ok(!JSON.stringify(r).includes('SECRETKEY'));
+});
+
+test('mcp http: a server that never answers says so in plain words, for the test and for the sign-in', async () => {
+  const t = makeApp({
+    fetch: async () => {
+      throw new DOMException(
+        'The operation was aborted due to timeout',
+        'TimeoutError',
+      );
+    },
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'slow', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(r.result.error, /did not answer in time/);
+  assert.doesNotMatch(r.result.error, /aborted/);
+  const s = (await t.app.ops.invoke('mcp.oauth_start', { id }, 'app')) as any;
+  assert.match(s.error, /did not answer in time/);
 });
 
 test('/mcp/tools: a proposal with no live ask is parked in the inbox, one with a live ask rides on it', async () => {
@@ -371,7 +452,87 @@ test('a server that was down at boot is retried, and the model is told while it 
     mock.timers.tick(30_000);
     await settle(t); // refreshes run in order: ends after the retry's
     assert.ok(t.app.tools.get('mcp__Late__echo'), 'registered by the retry');
-    assert.equal(buildSystemPrompt({ now: 0, locale: 'en', channel: 'phone', userName: 'Jan', memories: [], skillIndex: '', conversationSummary: null }).includes('unreachable'), false);
+    assert.equal(
+      buildSystemPrompt({
+        now: 0,
+        locale: 'en',
+        channel: 'phone',
+        userName: 'Jan',
+        memories: [],
+        skillIndex: '',
+        conversationSummary: null,
+      }).includes('unreachable'),
+      false,
+    );
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('mcp: a down server keeps its backoff, but never drags a sign-in server along', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mock-mcp-'));
+  const t = makeApp({
+    fetch: async () => new Response('', { status: 401 }),
+  });
+  registerIntegrations(t.app);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'Locked', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    );
+    await t.app.ops.invoke(
+      'mcp.add',
+      {
+        name: 'Down',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [join(dir, 'missing.mjs')],
+      },
+      'app',
+    );
+    await settle(t);
+    const calls = t.fetchCalls.length;
+    writeFileSync(join(dir, 'missing.mjs'), SERVER); // the down server comes up
+    mock.timers.tick(30_000); // the backoff timer fires
+    // The child process needs real time; setTimeout is mocked, so poll with setImmediate.
+    for (
+      const end = Date.now() + 5000;
+      Date.now() < end && !t.app.tools.get('mcp__Down__echo');
+    )
+      await new Promise((r) => setImmediate(r));
+    assert.ok(t.app.tools.get('mcp__Down__echo'), 'the retry brought it up');
+    assert.equal(
+      t.fetchCalls.length,
+      calls,
+      'the timer must not probe the server that waits for a sign-in',
+    );
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('mcp: a server that needs a sign-in is not retried on a timer', async () => {
+  const t = makeApp({
+    fetch: async () => new Response('', { status: 401 }),
+  });
+  registerIntegrations(t.app);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'Locked', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    );
+    await settle(t);
+    const list = (await t.app.ops.invoke('mcp.list', {}, 'app')) as any;
+    assert.equal(list.result[0].authRequired, true);
+    const calls = t.fetchCalls.length;
+    mock.timers.tick(600_000);
+    await settle(t);
+    // Only the explicit settle() refresh ran again (one initialize request); no timer-driven one.
+    assert.equal(t.fetchCalls.length - calls, 1);
   } finally {
     mock.timers.reset();
   }

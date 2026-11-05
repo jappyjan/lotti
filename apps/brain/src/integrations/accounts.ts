@@ -8,6 +8,7 @@ const DEFAULT_SERVICES: Record<string, Service[]> = {
   google: ['calendar', 'mail'],
   icloud: ['calendar', 'mail'],
   caldav: ['calendar'],
+  ics: ['calendar'],
   imap: ['mail'],
 };
 
@@ -18,6 +19,7 @@ export function accountsFor(app: App, service: Service): AccountRow[] {
     .map((r) => accountRow(app, r.id)!)
     .filter((a) => {
       if (a.config.enabled === false) return false;
+      if (a.kind === 'ics' && service !== 'calendar') return false;
       const v = a.config[service];
       return typeof v === 'boolean'
         ? v

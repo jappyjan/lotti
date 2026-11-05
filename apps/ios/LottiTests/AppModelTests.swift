@@ -238,8 +238,60 @@ struct BackendStoreTests {
     @Test func readsTheOAuthReturn() throws {
         let ok = try #require(OAuthCallback(URL(string: "lotti://oauth?code=c1&state=s1")!))
         #expect(ok.code == "c1" && ok.state == "s1" && ok.error == nil)
-        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied")!)?.error == "access_denied")
+        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied")!)?.error == "access denied")
+        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied&error_description=No%20thanks")!)?.error == "No thanks")
         #expect(OAuthCallback(URL(string: "lotti://oauth")!) == nil)
+    }
+
+    @Test func readsTheOAuthReturnOfAGoogleIosClient() throws {
+        let url = URL(string: "com.googleusercontent.apps.123-abc:/oauth2redirect?code=c2&state=s2")!
+        let ok = try #require(OAuthCallback(url))
+        #expect(ok.code == "c2" && ok.state == "s2")
+        let start: JSONValue = ["callbackScheme": "com.googleusercontent.apps.123-abc", "state": "s2"]
+        #expect(OAuthFlow.callbackScheme(start) == "com.googleusercontent.apps.123-abc")
+        #expect(OAuthFlow.callbackScheme(["url": "https://x"]) == "lotti")
+        let result = try OAuthFlow.result(url, start: start)
+        #expect(result.code == "c2" && result.state == "s2")
+        #expect(throws: BackendError.self) { try OAuthFlow.result(URL(string: "lotti://oauth?error=access_denied")!, start: start) }
+    }
+
+    @Test func refusesAnOAuthReturnOfAnotherSignIn() {
+        let start: JSONValue = ["callbackScheme": "lotti", "state": "s2"]
+        // No state, or a different one: not the sign-in we started.
+        #expect(throws: BackendError.server("The sign-in page answered without a state. Start the sign-in again.")) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3")!, start: start)
+        }
+        #expect(throws: BackendError.server("The sign-in answer belongs to a different sign-in. Start the sign-in again.")) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3&state=other")!, start: start)
+        }
+        // A start answer without a state is unreadable.
+        #expect(throws: BackendError.badResponse) {
+            try OAuthFlow.result(URL(string: "lotti://oauth?code=c3&state=s2")!, start: ["callbackScheme": "lotti"])
+        }
+    }
+
+    @Test func readsTheGoogleClientInfo() {
+        let ios = GoogleClientInfo(["configured": true, "mode": "ios", "redirectUri": "com.googleusercontent.apps.1:/oauth2redirect"])
+        #expect(ios.consoleRedirect == nil && ios.modeTitle == "iOS")
+        let web = GoogleClientInfo(["configured": true, "mode": "web", "redirectUri": "https://lotti.example/oauth/callback"])
+        #expect(web.consoleRedirect == "https://lotti.example/oauth/callback")
+        #expect(!GoogleClientInfo(["configured": false]).configured)
+    }
+
+    @Test func showsTheMcpSignInState() throws {
+        let needs = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true]))
+        #expect(needs.summary == "Needs sign-in")
+        let signed = try #require(McpServer(["id": "m", "name": "Docs", "status": "ok", "signedIn": true, "hasCredential": true]))
+        #expect(signed.summary == "Signed in" && signed.hasCredential)
+        #expect(try #require(McpServer(["id": "m", "name": "Docs", "enabled": false])).summary == "Off")
+    }
+
+    @Test func offersIcsCalendars() {
+        #expect(AccountKind.allCases.contains(.ics))
+        #expect(AccountKind.ics.title == "Add ICS calendar")
+        // An account left unnamed is not called after the action that created it.
+        #expect(AccountKind.ics.defaultName == "ICS calendar")
+        #expect(AccountKind.imap.defaultName == AccountKind.imap.title)
     }
 
     @Test func readsACodexDeviceLogin() throws {
@@ -587,4 +639,25 @@ private struct CountingTool: PhoneTool {
 
 private struct NoToday: TodayProvider {
     func today(at now: Date) async -> TodayInfo { TodayInfo(now: now) }
+}
+
+// MARK: - MCP sign-in
+
+@MainActor
+struct McpSignInTests {
+    @Test func listAndDetailSayTheSameAboutAnExpiredSignIn() throws {
+        let expired = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true, "signedIn": true]))
+        #expect(expired.summary == "Sign-in expired")
+        let none = try #require(McpServer(["id": "m", "name": "Docs", "status": "error", "authRequired": true]))
+        #expect(none.summary == "Needs sign-in")
+    }
+
+    @Test func readsTheNeedsClientAnswerOfOauthStart() throws {
+        let need = try #require(McpClientNeed(["needsClient": true, "redirectUri": "https://lotti.example/oauth/callback",
+                                               "reason": "This server has no automatic client registration."]))
+        #expect(need.redirectUri == "https://lotti.example/oauth/callback")
+        #expect(need.reason == "This server has no automatic client registration.")
+        // A normal start answer is no client need.
+        #expect(McpClientNeed(["url": "https://auth.example/authz", "state": "s", "redirectUri": "lotti://oauth"]) == nil)
+    }
 }

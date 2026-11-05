@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import type { App } from '../app.ts';
 import type { AccountRow, McpServerConfig } from '../integrations/index.ts';
+import {
+  clearMcpOauth,
+  isAuthError,
+  mcpOauthExchange,
+  mcpOauthStart,
+  mcpSignedIn,
+  oauthPrefix,
+  setManualClient,
+  signOutMcpOauth,
+} from '../integrations/mcp/oauth.ts';
 import { newId } from '../util/crypto.ts';
 import { defineOp, out, type Operation } from './registry.ts';
 
@@ -67,6 +77,24 @@ const stdioTargetChanged = (
 const mcpRow = (app: App, id: string) =>
   app.db.get<McpRow>('SELECT * FROM mcp_servers WHERE id=?', id);
 
+/**
+ * A credential the user gave: bearer, env.* value, an OAuth sign-in or a client they entered. A client that
+ * Lotti registered by itself (kept after a cancelled sign-in) is none.
+ */
+function mcpHasCredential(app: App, id: string): boolean {
+  const o = oauthPrefix(id);
+  return app.secrets
+    .list(`mcp.${id}.`)
+    .some(
+      ({ name }) =>
+        name === `mcp.${id}.bearer` ||
+        name.startsWith(`mcp.${id}.env.`) ||
+        [`${o}access_token`, `${o}refresh_token`, `${o}client_manual`].includes(
+          name,
+        ),
+    );
+}
+
 /** What an mcp.update would change (only real changes), for the confirmation title. */
 function mcpChanges(
   cur: McpRow | undefined,
@@ -99,7 +127,9 @@ function accountHostChanges(
   return [...new Set([...Object.keys(cur), ...Object.keys(next)])]
     .filter((k) => HOST_KEY.test(k))
     .filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]))
-    .map((k) => `${k} ${next[k] === undefined ? '(removed)' : String(next[k])}`);
+    .map(
+      (k) => `${k} ${next[k] === undefined ? '(removed)' : String(next[k])}`,
+    );
 }
 
 const mcpFields = {
@@ -176,7 +206,10 @@ export const integrationOps: Operation[] = [
         .all<McpRow>('SELECT * FROM mcp_servers ORDER BY created_at')
         .map((r) => ({
           ...toMcp(r),
-          hasCredential: app.secrets.list(`mcp.${r.id}.`).length > 0,
+          // Counts an OAuth sign-in and an entered client too, never returns any secret.
+          hasCredential: mcpHasCredential(app, r.id),
+          signedIn: mcpSignedIn(app, r.id),
+          authRequired: r.status === 'error' && isAuthError(r.last_error),
         })),
   }),
   defineOp({
@@ -239,7 +272,7 @@ export const integrationOps: Operation[] = [
         cur &&
         ((i.url !== undefined && i.url !== cur.url) ||
           stdioTargetChanged(cur, i)) &&
-        app.secrets.list(`mcp.${cur.id}.`).length
+        mcpHasCredential(app, cur.id)
           ? ' (its saved credential is removed)'
           : '';
       return `Change MCP server "${cur?.name ?? i.id}": ${ch.join(', ') || 'no change'}${secrets}`;
@@ -247,9 +280,11 @@ export const integrationOps: Operation[] = [
     handler(i, { app }) {
       const cur = mcpRow(app, i.id);
       if (!cur) throw new Error('No such MCP server.');
-      // A saved bearer / env secret must never follow the server to a new address or command.
-      if (i.url !== undefined && i.url !== cur.url)
+      // A saved bearer / OAuth login / env secret must never follow the server to a new address or command.
+      if (i.url !== undefined && i.url !== cur.url) {
         app.secrets.delete(`mcp.${cur.id}.bearer`);
+        clearMcpOauth(app, cur.id);
+      }
       if (stdioTargetChanged(cur, i))
         for (const x of app.secrets.list(`mcp.${cur.id}.env.`))
           app.secrets.delete(x.name);
@@ -304,7 +339,11 @@ export const integrationOps: Operation[] = [
         i.id,
       );
       if (r.ok) refreshMcp(app);
-      return r;
+      return {
+        ...r,
+        authRequired: r.authRequired ?? false,
+        signedIn: mcpSignedIn(app, i.id),
+      };
     },
   }),
   defineOp({
@@ -352,7 +391,7 @@ export const integrationOps: Operation[] = [
     name: 'mcp.clear_credential',
     group: 'mcp',
     description:
-      'Delete every stored secret of an MCP server (bearer token and env.* values).',
+      'Delete every stored secret of an MCP server (bearer token, OAuth sign-in and env.* values): also signs out.',
     inputSchema: z.object({ id: z.string() }),
     risk: 'app_only',
     handler(i, { app }) {
@@ -361,6 +400,75 @@ export const integrationOps: Operation[] = [
       for (const n of names) app.secrets.delete(n);
       refreshMcp(app);
       return { id: i.id, removed: names.length, hasCredential: false };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_start',
+    group: 'mcp',
+    description:
+      'Start OAuth sign-in to an HTTP MCP server: discovers the authorization server, registers a client when the server allows it, returns {url, state, redirectUri, callbackScheme}. The app opens url in a web auth session; then call mcp.oauth_exchange with the code and state. Without a client to sign in with (no automatic registration, or it was refused) it returns {needsClient: true, redirectUri, reason}: register Lotti at the server with redirectUri, then mcp.oauth_set_client.',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'app_only',
+    async handler(i, { app }) {
+      const row = mcpRow(app, i.id);
+      if (!row) throw new Error('No such MCP server.');
+      return mcpOauthStart(app, toMcp(row));
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_exchange',
+    group: 'mcp',
+    description:
+      'Finish MCP sign-in: the app sends the code and state from the redirect; the backend stores the tokens (encrypted). Returns {id, signedIn}.',
+    inputSchema: z.object({
+      code: z.string().min(1),
+      state: z.string().min(1),
+    }),
+    risk: 'app_only',
+    async handler(i, { app }) {
+      const r = await mcpOauthExchange(app, i.code, i.state, (id: string) => {
+        const row = mcpRow(app, id);
+        return row ? toMcp(row) : undefined;
+      });
+      refreshMcp(app);
+      return { id: r.serverId, signedIn: true };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_set_client',
+    group: 'mcp',
+    description:
+      'Use a registered OAuth client for an MCP server that has no automatic client registration (clientId, optional clientSecret). Write-only.',
+    inputSchema: z.object({
+      id: z.string(),
+      clientId: z.string().max(512),
+      clientSecret: z.string().max(2048).optional(),
+    }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
+      const clientId = i.clientId.trim();
+      if (!clientId) throw new Error('Client ID is empty.');
+      setManualClient(app, i.id, clientId, i.clientSecret?.trim() || undefined);
+      return { id: i.id, configured: true };
+    },
+  }),
+  defineOp({
+    name: 'mcp.oauth_sign_out',
+    group: 'mcp',
+    description:
+      'Sign out of an MCP server: deletes only the OAuth tokens; the client registration, an entered client and a bearer token stay. The server then needs a sign-in.',
+    inputSchema: z.object({ id: z.string() }),
+    risk: 'app_only',
+    handler(i, { app }) {
+      if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
+      signOutMcpOauth(app, i.id);
+      refreshMcp(app);
+      return {
+        id: i.id,
+        signedIn: false,
+        hasCredential: mcpHasCredential(app, i.id),
+      };
     },
   }),
   defineOp({
@@ -423,7 +531,7 @@ export const integrationOps: Operation[] = [
     description:
       'Add an account entry (kind, label, non-secret config). Credentials go in via accounts.set_credential in the app.',
     inputSchema: z.object({
-      kind: z.enum(['google', 'icloud', 'imap', 'caldav']),
+      kind: z.enum(['google', 'icloud', 'imap', 'caldav', 'ics']),
       label: z.string().min(1),
       config: z.record(z.string(), z.unknown()).optional(),
     }),
@@ -457,7 +565,9 @@ export const integrationOps: Operation[] = [
     risk: 'tap',
     proposalTitle(i, app) {
       const cur = accountRow(app, i.id);
-      const hosts = i.config ? accountHostChanges(cur?.config ?? {}, i.config) : [];
+      const hosts = i.config
+        ? accountHostChanges(cur?.config ?? {}, i.config)
+        : [];
       const label =
         i.label !== undefined && i.label !== cur?.label
           ? [`label ${i.label}`]

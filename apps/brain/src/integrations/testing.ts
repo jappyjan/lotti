@@ -82,7 +82,7 @@ export async function connectGoogle(
 ): Promise<string> {
   await t.app.ops.invoke(
     'accounts.set_google_client',
-    { clientId: 'cid', clientSecret: 'csec' },
+    { clientId: 'cid', clientSecret: 'csec', redirectUri: 'lotti://oauth' },
     'app',
   );
   const u = (await t.app.ops.invoke(
