@@ -1,0 +1,31 @@
+# Wisp native firmware — pinned west workspace (decision W11).
+#
+# scripts/setup.sh copies this file into .wisp-cache/west/manifest/ (git-ignored) and runs
+# `west init -l` + `west update` there. Every revision is a commit SHA, so a setup today and a
+# setup next year fetch byte-identical trees. To move the pin: bump `revision` below, run
+# `pnpm nx run wisp-fw:setup`, rebuild, rerun `wisp-fw:test`, and note it in README.md.
+manifest:
+  version: '1.2'
+
+  remotes:
+    - name: ambiq
+      url-base: https://github.com/AmbiqMicro
+
+  projects:
+    - name: zephyr
+      remote: ambiq
+      repo-path: ambiqzephyr
+      # branch ambiq-stable, 2026-10-21 "manifest: point the Ambiq HAL at the public r..."
+      revision: 89c8a36fb2af42b8ce83a30ea8b5dcada9442ccc
+      import:
+        # Only what an Apollo510B build needs. The fork's own west.yml pins each of these by SHA.
+        name-allowlist:
+          - ambiqhal_ambiq
+          - cmsis
+          - cmsis_6
+          # Bluetooth host crypto (PSA). Off in M0; the rule 8 negative build in
+          # wisp-fw:test links a full BT image and needs it, as M6 will.
+          - mbedtls
+
+  self:
+    path: manifest

@@ -1,0 +1,5 @@
+board:
+  name: wisp_g2
+  full_name: Even Realities G2 temple (Wisp native)
+  socs:
+    - name: apollo510b

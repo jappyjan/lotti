@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: MIT
+
+config BOARD_WISP_G2
+	select SOC_APOLLO510B

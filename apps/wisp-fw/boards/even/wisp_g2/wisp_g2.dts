@@ -1,0 +1,184 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * wisp_g2 — one temple of the Even Realities G2, running Wisp natively.
+ *
+ * Template: the fork's apollo510b_evb (AmbiqMicro/ambiqzephyr, Apache-2.0). Facts and
+ * sources: docs/wisp/hardware.md. Milestone M0 enables only what boots and logs (UART1);
+ * every other G2 part is listed below as a disabled bus node with a TODO.
+ */
+
+/dts-v1/;
+#include <ambiq/ambiq_apollo510b.dtsi>
+#include "wisp_g2-pinctrl.dtsi"
+
+/ {
+	model = "Even Realities G2 temple (Wisp)";
+	compatible = "even,g2", "ambiq,apollo510b";
+
+	chosen {
+		zephyr,itcm = &itcm;
+		zephyr,dtcm = &dtcm;
+		zephyr,sram = &sram0;
+		zephyr,flash-controller = &flash;
+		zephyr,flash = &flash0;
+		/* 0x438000: where the Even bootloader hands off (docs/wisp/hardware.md). */
+		zephyr,code-partition = &wisp_partition;
+		zephyr,console = &uart1;
+		zephyr,shell-uart = &uart1;
+	};
+
+	/* Same split as the evb: 1.5 MiB cached SSRAM for the app ... */
+	sram0: memory@SSRAM_BASE_NAME {
+		compatible = "mmio-sram";
+		reg = <SSRAM_BASE_ADDR 0x180000>;
+	};
+
+	/* ... and 1.5 MiB uncached for DMA (MSPI display/NOR command queues, later). */
+	sram_no_cache: memory@20200000 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x20200000 0x180000>;
+		zephyr,memory-region = "SRAM_NO_CACHE";
+		zephyr,memory-attr = <DT_MEM_ARM(ATTR_MPU_RAM_NOCACHE)>;
+	};
+};
+
+/*
+ * MRAM. flash0 starts at 0x410000 (the Ambiq SBL at 0x400000–0x410000 is outside it), so
+ * partition offsets are relative to 0x410000. Everything except wisp_partition is stock and
+ * read-only for Wisp (docs/wisp/safety.md rule 1). The 32-byte EVEN preamble at 0x437FE0 is
+ * the last 32 bytes of even_bootloader's range; wisp-ota adds it, never the linker.
+ */
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		/* 0x410000–0x438000: Even bootloader (+ the main-app preamble at 0x437FE0). */
+		even_bootloader: partition@0 {
+			label = "even-bootloader";
+			reg = <0x00000000 0x28000>;
+			read-only;
+		};
+
+		/* 0x438000–0x7F8000: Wisp Boot + Wisp app. 0x7F8000 is the hard ceiling. */
+		wisp_partition: partition@28000 {
+			label = "wisp";
+			reg = <0x00028000 0x3c0000>;
+		};
+
+		/* 0x7F8000–0x800000: update-flag record (0x7FE000) and NV/bond area. Never written. */
+		even_nv: partition@3e8000 {
+			label = "even-nv";
+			reg = <0x003e8000 0x8000>;
+			read-only;
+		};
+	};
+};
+
+/* Debug/log UART. The stock firmware logs on UART1 too (g2emu). Pads: see pinctrl TODO. */
+&uart1 {
+	current-speed = <115200>;
+	pinctrl-0 = <&uart1_default>;
+	pinctrl-1 = <&uart1_sleep>;
+	pinctrl-names = "default", "sleep";
+	status = "okay";
+};
+
+&stimer0 {
+	/* TODO(G2 clocks): evb uses clk-source 3 (XTAL_32768 / LFRC). Unverified on the G2. */
+	clk-source = <3>;
+};
+
+/*
+ * Watchdog: stays off in M0. Wisp Boot owns it later (docs/wisp/safety.md, fallback-to-stock).
+ * Stock runs it at about 30 s.
+ */
+&wdt0 {
+	status = "disabled";
+};
+
+/* ---------------------------------------------------------------------------------------- */
+/* G2 peripherals, all disabled in M0. Source of every fact: docs/wisp/hardware.md.          */
+/* ---------------------------------------------------------------------------------------- */
+
+/*
+ * TODO(IMU): I2C4 — TDK ICM-45608 accel + gyro at 0x69; likely ICT1531x magnetometer behind
+ * the IMU's aux I2C at 0x1E. The fork has no ICM-45608 driver (small addition needed).
+ */
+&iom4 {
+	i2c4: i2c {
+		status = "disabled";
+	};
+};
+
+/*
+ * TODO(touch, wear): I2C5 — Infineon PSoC 4000T (CY8C4046FNI) at 0x0C, touchpad + proximity.
+ * Its firmware stays stock; Wisp never contains a PSoC image (safety rule 8).
+ */
+&iom5 {
+	i2c5: i2c {
+		status = "disabled";
+	};
+};
+
+/*
+ * TODO(BLE, milestone M6): IOM6 SPI — EM9305 BLE controller (ambiq,bt-hci-spi), Even's own
+ * EM9305 firmware. Stays disabled until the HAL's EM9305 update path is compiled out and
+ * skip_fw_update is forced (safety rule 8; checked by scripts/check_rule8.py). Do not copy
+ * the evb's bt-hci node here before that.
+ */
+&iom6 {
+	spi6: spi {
+		status = "disabled";
+	};
+};
+
+/*
+ * TODO(power): I2C7 — board A: nPM1300 PMIC at 0x6B; board B: BQ25180 charger at 0x6A +
+ * BQ27427 gauge at 0x55. Which board our units have is open. Ambient light: TI OPT3007
+ * (OPT3001-compatible) at 0x45, right temple only — bus unconfirmed, presumably this one.
+ */
+&iom7 {
+	i2c7: i2c {
+		status = "disabled";
+	};
+};
+
+/*
+ * TODO(display): MSPI0, quad SPI, 320 B/line — microLED 640×480 4-bit (JBD4010 or
+ * Hongshi A6N-G; variant and init sequence open).
+ */
+&mspi0 {
+	status = "disabled";
+};
+
+/*
+ * TODO(NOR): MX25U25643G 32 MiB on MSPI (instance unconfirmed): littlefs at 0x1400000
+ * (ota/s200_firmware_ota.bin staging, wisp/rescue.bin), FlashDB at 0x1FC0000.
+ */
+&mspi1 {
+	status = "disabled";
+};
+
+/* TODO(audio): PDM0 — extra mic path on the Apollo. */
+&pdm0 {
+	status = "disabled";
+};
+
+/* TODO(audio): I2S — GX8002 voice codec, 16 kHz 16-bit 2 ch out. Codec firmware stays stock. */
+&i2s0 {
+	status = "disabled";
+};
+
+/* TODO(display): NemaGFX GPU. */
+&gpu {
+	status = "disabled";
+};
+
+/*
+ * TODO(buzzer): PWM piezo on GPIO145 (no speaker). TODO(inter-temple link): UART over the
+ * frame flex (TinyFrame), instance and baud open. TODO(case): pogo UART 1 Mbaud (UART2 in
+ * stock, per g2emu).
+ */

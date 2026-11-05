@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: MIT
+#
+# Board defaults for wisp_g2. Derived from the fork's apollo510b_evb (Apache-2.0, Ambiq Micro).
+
+if BOARD_WISP_G2
+
+config SYS_CLOCK_HW_CYCLES_PER_SEC
+	default 32768 if AMBIQ_STIMER_TIMER
+	default 96000000 if CORTEX_M_SYSTICK
+
+# Safety rule 8 (docs/wisp/safety.md). The SoC default turns this on whenever an
+# ambiq,bt-hci-spi node is enabled; the evb's board.c then calls am_devices_em9305_init()
+# with skip_fw_update = false when CONFIG_BT is off, which reflashes the EM9305. wisp_g2
+# has no board.c and keeps the HCI node disabled, so this can't be selected; the default
+# is pinned to n anyway, and the app's build check fails if it is ever y.
+config SOC_APOLLO510B_EM9305_EXTREF_INIT
+	default n
+
+endif # BOARD_WISP_G2
