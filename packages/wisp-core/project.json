@@ -5,7 +5,11 @@
   "sourceRoot": "packages/wisp-core/src",
   "tags": ["lang:c", "wisp"],
   "namedInputs": {
-    "sources": ["{projectRoot}/CMakeLists.txt", "{projectRoot}/include/**/*", "{projectRoot}/src/**/*"]
+    "sources": [
+      "{projectRoot}/CMakeLists.txt",
+      "{projectRoot}/include/**/*",
+      "{projectRoot}/src/**/*"
+    ]
   },
   "targets": {
     "build": {
@@ -25,7 +29,12 @@
         "command": "tools/with-tools.sh cmake:cmake python3:python3 -- ctest --test-dir build --output-on-failure",
         "cwd": "packages/wisp-core"
       },
-      "inputs": ["sources", "{projectRoot}/tests/**/*", "{projectRoot}/tools/**/*", "{workspaceRoot}/packages/wisp-proto/vectors/**/*"],
+      "inputs": [
+        "sources",
+        "{projectRoot}/tests/**/*",
+        "{projectRoot}/tools/**/*",
+        "{workspaceRoot}/packages/wisp-proto/vectors/**/*"
+      ],
       "cache": true
     },
     "build-arm": {
