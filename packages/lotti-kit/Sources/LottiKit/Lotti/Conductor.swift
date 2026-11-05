@@ -284,7 +284,6 @@ public final class Conductor {
     /// Call when the glasses disconnect.
     public func glassesDisconnected() {
         backend?.presence(.glassesDisconnected)
-        restartWake()  // stops it: there is no glasses' mic now
     }
 
     /// Redraw the glasses' indicators after the inbox changed outside the backend's events

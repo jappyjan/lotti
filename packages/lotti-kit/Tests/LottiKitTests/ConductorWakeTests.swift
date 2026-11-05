@@ -172,6 +172,19 @@ struct ConductorWakeTests {
         try await eventually { conductor.mode == .listening }
     }
 
+    @Test func aCandidateConfirmedAfterTheRecorderStartedIsDropped() async throws {
+        let speech = GatedSpeech()
+        let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: classifier)
+        try await wakeOn(conductor)
+        sayHeyLotti()
+        try await eventually { speech.waiting }
+        conductor.wakePaused = true  // the recorder starts while the recognizer is still checking
+        speech.say(Transcript("Hey Lotti, what"))
+        try await eventually { conductor.wakeLast?.contains("dropped") == true }
+        #expect(conductor.mode == .off)
+        #expect(brain.asked.isEmpty)
+    }
+
     @Test func withoutAModelTheWakeWordSaysSo() async throws {
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: nil)
         conductor.setWakeWord(enabled: true)
@@ -499,4 +512,25 @@ final class RecordingSpeech: SpeechRecognizer {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+}
+
+/// Says what the test tells it to, when it tells it to (to change things while a candidate is checked).
+@MainActor
+final class GatedSpeech: SpeechRecognizer {
+    private var continuation: AsyncThrowingStream<Transcript, Error>.Continuation?
+    var waiting: Bool { continuation != nil }
+
+    func prepare() async {}
+    func transcribe(_ audio: AsyncStream<[Int16]>) -> AsyncThrowingStream<Transcript, Error> {
+        AsyncThrowingStream { continuation in
+            self.continuation = continuation
+            let task = Task { @MainActor in
+                for await _ in audio {}
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func say(_ transcript: Transcript) { continuation?.yield(transcript) }
 }

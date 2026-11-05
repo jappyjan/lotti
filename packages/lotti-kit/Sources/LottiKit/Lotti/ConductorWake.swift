@@ -285,8 +285,8 @@ extension Conductor {
         session.input.yield(chunk)
         session.samples += chunk.count
         guard session.confirmed else { return }
-        // The listen was ended from elsewhere (glasses taken off, a timer took the screen): drop it,
-        // or it would swallow the mic and keep the wake word deaf.
+        // The listen was ended from elsewhere (the glasses were taken off): drop it, or it would
+        // swallow the mic and keep the wake word deaf.
         guard mode == .listening else { return abortWakeSession(reason: "the listen screen went away") }
         session.endpointer.feed(samples: chunk.count, active: active)
         switch session.endpointer.outcome(hasCommand: !session.command.isEmpty) {
