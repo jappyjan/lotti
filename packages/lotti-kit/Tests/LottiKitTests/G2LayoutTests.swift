@@ -5,8 +5,12 @@ import Testing
 /// Golden bytes generated with even-g2-protocol's builders (`build_create_dashboard_page`,
 /// `build_rebuild_page`, `build_text_upgrade`, `build_imu_control`) for the same inputs.
 struct G2LayoutTests {
-    private let mainWithRail = G2TextBox.main("Hi", shape: .withRail(.rail))
-    private let rail = G2TextBox.rail("> Yes\nNo", style: .rail)
+    // The old side rail: only the golden bytes still use its geometry (the encoding is the same).
+    private let mainWithRail = G2TextBox.main("Hi", shape: .withRail)
+    private let rail = G2TextBox.sideRail("> Yes\nNo")
+    // What `GlassesFrame(main:rail:)` lays out: the choices under the sentence.
+    private let mainAbove = G2TextBox.main("Hi", shape: .choicesBelow)
+    private let choices = G2TextBox.choices("> Yes\nNo")
 
     @Test func createPageWithRail() {
         let payload = G2Payload.createPage(magic: 110, boxes: [mainWithRail, rail])
@@ -44,39 +48,39 @@ struct G2LayoutTests {
         #expect(hex(G2Payload.imuControl(magic: 115, enable: true, pace: 500)) == "08131073a20105080110f403")
     }
 
-    @Test func geometryFitsTheDisplay() {
-        for style in DisplayStyle.allCases {
-            let main = G2TextBox.main("x", shape: style == .choicesBelow ? .choicesBelow : .withRail(style), style: style)
-            let rail = G2TextBox.rail("x", style: style)
-            #expect(main.x == 0 && main.y == 0)
-            #expect(rail.y + rail.height <= G2Layout.height)
-            #expect(rail.x + rail.width <= G2Layout.width)
-            #expect(main.width + (style == .choicesBelow ? 0 : G2Layout.gap + rail.width) <= G2Layout.width)
-            #expect("main".utf8.count <= 14 && "rail".utf8.count <= 14)
-        }
+    @Test func choicesSitUnderTheSentence() {
+        let frame = GlassesFrame(main: "Hi", rail: "> Yes")
+        let main = frame.boxes[0], choices = frame.boxes[1]
+        #expect(main.x == 0 && main.y == 0 && main.width == G2Layout.width && main.height == G2Layout.choicesY)
+        #expect(choices.x == 0 && choices.y == G2Layout.choicesY && choices.width == G2Layout.width)
+        #expect(choices.y + choices.height == G2Layout.height)
+        #expect(GlassesFrame(main: "Hi").boxes[0].height == G2Layout.height)
     }
 
-    @Test func styleSwitchRebuildsTheGeometry() {
+    @Test func extraBoxesKeepClearOfTheIndicatorIDs() {
         var planner = G2PagePlanner()
-        _ = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
-        let wide = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo", style: .wideRail))
-        #expect(wide == [.rebuild([
-            .main("Hi", shape: .withRail(.wideRail), style: .wideRail),
-            .rail("> Yes\nNo", style: .wideRail),
-        ])])
-        let below = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo", style: .choicesBelow))
-        #expect(below == [.rebuild([
-            .main("Hi", shape: .choicesBelow, style: .choicesBelow),
-            .rail("> Yes\nNo", style: .choicesBelow),
-        ])])
+        let frame = GlassesFrame(boxes: [
+            FrameBox("main", x: 0, y: 29, width: 576, height: 87, text: "Hi"),
+            FrameBox("date", x: 0, y: 0, width: 504, height: 29, text: "Thu 5 Nov"),
+            FrameBox("card1", x: 0, y: 120, width: 284, height: 100, text: "Pasta"),
+            FrameBox("rail", x: 0, y: 230, width: 576, height: 58, text: "> Agenda"),
+        ])
+        guard case .create(let boxes, _) = planner.plan(frame).first else { Issue.record("no create"); return }
+        #expect(boxes.map(\.id) == [G2TextBox.mainID, 10, 11, G2TextBox.railID])
+        #expect(!boxes.map(\.id).contains(G2ImageBox.attentionID) && !boxes.map(\.id).contains(G2ImageBox.locationID))
+        #expect(boxes.map(\.capturesEvents) == [true, false, false, false])
+        var later = frame
+        later.boxes[1].text = "Fri 6 Nov"
+        #expect(planner.plan(later) == [.update(id: 10, name: "date", text: "Fri 6 Nov")])
+        later.boxes[2].height = 70
+        guard case .rebuild = planner.plan(later).first else { Issue.record("no rebuild"); return }
     }
 
-    @Test func choicesBelowStacksTheBoxes() {
-        let main = G2TextBox.main("Hi", shape: .choicesBelow, style: .choicesBelow)
-        let rail = G2TextBox.rail("> Yes", style: .choicesBelow)
-        #expect(main.width == G2Layout.width && main.height == G2Layout.choicesBelowMainHeight)
-        #expect(rail.x == 0 && rail.y == G2Layout.choicesBelowRailY)
-        #expect(rail.width == G2Layout.width && rail.height == G2Layout.choicesBelowRailHeight)
+    @Test func atMostEightTextBoxes() {
+        var planner = G2PagePlanner()
+        let frame = GlassesFrame(boxes: (1...10).map { FrameBox("b\($0)", x: 0, y: 0, width: 10, height: 10, text: "x") })
+        guard case .create(let boxes, _) = planner.plan(frame).first else { Issue.record("no create"); return }
+        #expect(boxes.count == G2Layout.maxTextBoxes)
     }
 
     // MARK: Planner
@@ -85,8 +89,8 @@ struct G2LayoutTests {
         var planner = G2PagePlanner()
         #expect(!planner.hasPage)
         let commands = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
-        #expect(commands == [.create([mainWithRail, rail])])
-        #expect(planner.shape == .withRail(.rail))
+        #expect(commands == [.create([mainAbove, choices])])
+        #expect(planner.shape?.map(\.name) == ["main", "rail"])
     }
 
     @Test func sameShapeOnlyUpdatesWhatChanged() {
@@ -103,7 +107,7 @@ struct G2LayoutTests {
         var planner = G2PagePlanner()
         _ = planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo"))
         #expect(planner.plan(GlassesFrame(main: "Hi")) == [.rebuild([.main("Hi", shape: .fullWidth)])])
-        #expect(planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo")) == [.rebuild([mainWithRail, rail])])
+        #expect(planner.plan(GlassesFrame(main: "Hi", rail: "> Yes\nNo")) == [.rebuild([mainAbove, choices])])
     }
 
     @Test func darkBlanksInPlace() {
@@ -240,5 +244,25 @@ struct HeadUpSettingsTests {
         #expect(config.upAngle == 28)
         #expect(config.downAngle == 20)
         #expect(config.axis == .x)
+    }
+}
+
+/// Containers written out by hand, to check the planner and the bytes against (shared by the tests).
+enum BoxShape { case fullWidth, withRail, choicesBelow }
+
+extension G2TextBox {
+    static func main(_ text: String, shape: BoxShape) -> G2TextBox {
+        G2TextBox(id: mainID, name: "main", x: 0, y: 0, width: shape == .withRail ? 384 : G2Layout.width,
+                  height: shape == .choicesBelow ? G2Layout.choicesY : G2Layout.height, capturesEvents: true, text: text)
+    }
+
+    /// The retired 176 px rail on the right.
+    static func sideRail(_ text: String) -> G2TextBox {
+        G2TextBox(id: railID, name: "rail", x: 400, y: 0, width: 176, height: G2Layout.height, capturesEvents: false, text: text)
+    }
+
+    static func choices(_ text: String) -> G2TextBox {
+        G2TextBox(id: railID, name: "rail", x: 0, y: G2Layout.choicesY, width: G2Layout.width,
+                  height: G2Layout.height - G2Layout.choicesY, capturesEvents: false, text: text)
     }
 }

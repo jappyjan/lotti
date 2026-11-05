@@ -92,6 +92,10 @@ public struct ToolText: Sendable {
             lines.append("Rain today: no")
         }
         if let t = w.tomorrow { lines.append("Tomorrow: \(t.condition), \(t.low) to \(t.high)°C") }
+        for day in w.days.dropFirst(2) {
+            lines.append(format(day.date, "EEEE") + ": \(day.condition), \(day.low) to \(day.high)°C"
+                         + (day.rainChance.map { ", chance of rain \($0) %" } ?? ""))
+        }
         return lines.joined(separator: "\n")
     }
 
