@@ -233,6 +233,7 @@ export const normalizeIcsUrl = (u: string) =>
 
 /** The secret link is a password: it must not appear in any message the app or the log can see. */
 function redactUrl(msg: string, url: string): string {
+  if (!url) return msg;
   let out = msg.split(url).join('[calendar link]');
   try {
     const u = new URL(url);
@@ -280,17 +281,16 @@ function networkReason(cause: Error | undefined): string {
 
 /** The feed text, cached 15 minutes per account (and per link: a new link is fetched at once). */
 export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
-  const raw = app.secrets.get(`account.${acc.id}.url`);
-  if (!raw)
+  const url = normalizeIcsUrl(app.secrets.get(`account.${acc.id}.url`) ?? '');
+  if (!url)
     throw new Error('This calendar has no link yet (set it in the app).');
-  const url = normalizeIcsUrl(raw);
   let m = icsCache.get(app);
   if (!m) icsCache.set(app, (m = new Map()));
   const hit = m.get(acc.id);
   if (hit && hit.url === url && app.clock.now() - hit.at < ICS_CACHE_MS)
     return hit.text;
   try {
-    if (!/^https?:\/\//i.test(url)) throw new Error('The link must be https.');
+    if (!/^https?:\/\//i.test(url)) throw new Error('The link must start with https:// or webcal://.');
     const res = await app.fetch(url, {
       headers: { accept: 'text/calendar, */*' },
       signal: AbortSignal.timeout(20_000),

@@ -421,6 +421,24 @@ test('ics account: unreachable host error is redacted', async () => {
   assert.ok(!chk.error.includes('SECRET'), chk.error);
 });
 
+test('ics account: a blank or non-http link gets one plain sentence', async () => {
+  const { op, id } = await icsApp(() => {
+    throw new Error('the feed must not be fetched');
+  });
+  for (const [value, want] of [
+    ['   ', /no link yet/],
+    ['not a url', /must start with https/],
+    ['ftp://x.test/a.ics?k=SECRET', /must start with https/],
+  ] as const) {
+    await op('accounts.set_credential', { id, key: 'url', value });
+    const chk = (await op('accounts.check', { id })).result;
+    assert.equal(chk.ok, false);
+    assert.match(chk.error, want);
+    assert.ok(!chk.error.includes('[calendar link]'), chk.error);
+    assert.ok(!chk.error.includes('SECRET'), chk.error);
+  }
+});
+
 test('ics account: read-only, never the write target', async () => {
   const { t, op, id } = await icsApp();
   await op('accounts.set_credential', { id, key: 'url', value: SECRET });
