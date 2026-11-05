@@ -378,6 +378,14 @@ test('meeting soon lead time is a setting (jobs.meeting_soon.lead_min)', async (
   );
   await t.app.scheduler.runNow(job.id);
   assert.deepEqual(windows, [10, 25]);
+  // 0, negative, fractions, text and huge values are refused (the job would fail or misbehave)
+  for (const value of [0, -5, 2.5, '15', 1e300])
+    assert.equal(
+      ((await t.app.ops.invoke('settings.set', { key: 'jobs.meeting_soon.lead_min', value }, 'agent')) as any).ok,
+      false,
+      String(value),
+    );
+  assert.equal(t.app.settings.get('jobs.meeting_soon.lead_min'), 25);
 });
 
 test('"run dreaming now" by voice: the agent sees dreaming_run_now (free, no tap)', async () => {

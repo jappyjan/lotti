@@ -214,11 +214,23 @@ export const coreOps = [
     inputSchema: z.object({ key: z.string(), value: z.unknown() }),
     risk: 'free',
     handler(i, { app }) {
-      if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
+      const def = SETTING_DEFS[i.key];
+      if (!def) throw new Error(`Unknown setting ${i.key}`);
       refuseProviderKey(i.key);
       if (app.settings.isSafety(i.key))
         throw new Error(
           `${i.key} is a safety setting: use settings.set_safety (needs confirmation).`,
+        );
+      if (
+        def.int &&
+        !(
+          Number.isInteger(i.value) &&
+          (i.value as number) >= def.int.min &&
+          (i.value as number) <= def.int.max
+        )
+      )
+        throw new Error(
+          `${i.key} must be a whole number from ${def.int.min} to ${def.int.max}.`,
         );
       const prev = app.settings.get(i.key);
       app.settings.set(i.key, i.value);

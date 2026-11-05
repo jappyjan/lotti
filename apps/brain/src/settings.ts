@@ -5,6 +5,8 @@ export interface SettingDef {
   description: string;
   /** Safety settings change what the agent may do: setting them is a `tap` op for the agent. */
   safety?: boolean;
+  /** A whole number in this range; settings.set refuses anything else. */
+  int?: { min: number; max: number };
 }
 
 export const SETTING_DEFS: Record<string, SettingDef> = {
@@ -153,6 +155,7 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'jobs.meeting_soon.lead_min': {
     default: 10,
     description: 'Meeting soon: minutes before an event it shows up',
+    int: { min: 1, max: 1440 },
   },
 };
 

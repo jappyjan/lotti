@@ -62,6 +62,8 @@ struct JobDetailView: View {
     @State private var schedule: ScheduleDraft
     @State private var enabled: Bool
     @State private var settingValue = ""
+    /// Only a lead time that was read can be edited and saved: a failed read must not block Save.
+    @State private var settingLoaded = false
     @State private var history: [JobRunInfo] = []
     @State private var runNote: String?
     @State private var running = false
@@ -88,6 +90,10 @@ struct JobDetailView: View {
                 if let job, let label = job.settingLabel, job.settingKey != nil {
                     LabeledContent("\(label) (\(job.settingUnit ?? ""))") {
                         TextField("10", text: $settingValue).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                            .disabled(!settingLoaded)
+                    }
+                    if !settingIsValid {
+                        Text("Use a whole number from 1 to 1440.").font(.footnote).foregroundStyle(.red)
                     }
                 }
             } header: {
@@ -148,8 +154,10 @@ struct JobDetailView: View {
         }
         .task {
             await loadHistory()
-            if let key = job?.settingKey, let value = try? await model.call("settings.get", ["key": .string(key)]) {
-                settingValue = value["value"]?.number.map { String(Int($0)) } ?? ""
+            if let key = job?.settingKey, let value = try? await model.call("settings.get", ["key": .string(key)]),
+               let minutes = value["value"]?.number {
+                settingValue = String(Int(minutes))
+                settingLoaded = true
             }
         }
     }
@@ -200,9 +208,10 @@ struct JobDetailView: View {
         }
     }
 
-    /// A job's own setting (the lead time) needs a whole number above 0, otherwise Save would quietly skip it.
+    /// A job's own setting (the lead time) needs a whole number from 1 to 1440 (the server's range),
+    /// otherwise Save would quietly skip it.
     private var settingIsValid: Bool {
-        job?.settingKey == nil || (Int(settingValue) ?? 0) > 0
+        job?.settingKey == nil || !settingLoaded || (1...1440).contains(Int(settingValue) ?? 0)
     }
 
     private func save() {
@@ -210,7 +219,7 @@ struct JobDetailView: View {
         if job?.isBuiltin != true { input["prompt"] = .string(prompt) }
         Task {
             await attempt($error) {
-                if let key = job?.settingKey, let minutes = Int(settingValue), minutes > 0 {
+                if let key = job?.settingKey, settingLoaded, let minutes = Int(settingValue), minutes > 0 {
                     _ = try await model.call("settings.set", ["key": .string(key), "value": .number(Double(minutes))])
                 }
                 if let job {

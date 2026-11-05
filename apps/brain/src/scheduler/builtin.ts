@@ -28,7 +28,7 @@ export const builtinJobs: BuiltinJob[] = [
     cron: '* * * * *',
     scheduleText: 'every minute',
     description:
-      'Looks at your calendar and puts events that start within the lead time into your inbox (once per event). Plain code, no AI.',
+      'Looks at your calendar and puts events that start within the lead time into your inbox (once per event).',
     ai: 'none',
     aiNote: 'No AI tokens: it only reads the calendar.',
     setting: {
