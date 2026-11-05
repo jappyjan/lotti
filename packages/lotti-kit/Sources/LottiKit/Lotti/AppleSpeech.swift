@@ -69,6 +69,10 @@ public final class AppleSpeechRecognizer: SpeechRecognizer {
         let converter = format == input ? nil : AVAudioConverter(from: input, to: format)
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
+        // "Lotti" is a rare name: tell the recognizer to expect it (the "Hey Lotti" confirm needs it).
+        let context = AnalysisContext()
+        context.contextualStrings[.general] = ["Lotti", "Hey Lotti", "Hallo Lotti"]
+        try? await analyzer.setContext(context)
         let (inputs, feed) = AsyncStream<AnalyzerInput>.makeStream()
         try await analyzer.start(inputSequence: inputs)
 
@@ -99,7 +103,8 @@ public final class AppleSpeechRecognizer: SpeechRecognizer {
         }
         feed.finish()
         print(String(format: "[Speech] audio ended after %.1f s", Double(samples) / 16_000))
-        if samples == 0 {
+        // Nothing heard, or nobody wants the result any more (a dropped wake candidate).
+        if samples == 0 || Task.isCancelled {
             await analyzer.cancelAndFinishNow()
         } else {
             try await analyzer.finalizeAndFinishThroughEndOfInput()

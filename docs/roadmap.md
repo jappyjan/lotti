@@ -26,6 +26,10 @@ Labels: `spike`, `ios`, `shared`, `design`, `docs`, plus feature labels `navigat
   - **`Documents/lotti.log`** on the phone, readable with `devicectl`, for checking runs afterwards.
   - Known gaps: the model chooser sometimes picks an unrelated tool when no rule matches; an occasional invented detail; the phone's iOS 27 model is only checked in real use (the eval runs on the Mac's model).
 
+- **Wake word "Hey Lotti"** (2026-11-03): say it with the glasses on and the phone in your pocket, no gesture. Energy gate, Create ML sound classifier and Apple speech confirm on the shared glasses mic; ends on 1.5 s of quiet. Setting in Settings → Glasses → Voice (default on), Debug section with score and recorder. See [architecture.md](architecture.md#wake-word).
+  - Checked on the phone and glasses (2026-11-03): 8 of 10 "Hey Lotti, wie wird das Wetter?" woke Lotti and were answered; about 11 minutes of talk nearby gave one classifier hit (0.82) that the speech confirm rejected, so no false wake. The first, synthetic-only model scored real glasses audio near 0; it was retrained with 30 recorded phrases and ~1.5 min of background.
+  - Checked again on the merged build with Lotti Brain (2026-11-05): 4 of 4 wakes confirmed (0.94–1.00) and answered through the backend (timer proposal, weather, time). About 45 minutes of talk and TV nearby gave ~20 classifier hits, all rejected by the speech confirm: no false wake, but many more hits than the first run. The glasses stop the mic stream now and then; the watchdog restarted it each time.
+  - Known gaps: few real recordings (more clips from Debug → Record training clips will help); the "phone locked" and background run were seen in the log but not measured over a day; battery is unmeasured (item 8); rejection targets (98%) are just missed on held-out clips (96.9% near misses, 96.8% other speech).
 - **Lotti Brain and the AI-first app** (2026-11-03): own backend (`apps/brain`: agent loop, DeepSeek/OpenAI/Anthropic/Codex/Claude providers, MCP client and admin MCP server, dynamic weather, location as a visible tool, calendar, mail, Bring!, shell, conversations, memory and dreaming, jobs, inbox, catch-up, APNs off by default); chat-first phone app with Settings for everything; wear detection and EvenHub image containers; attention and location indicators; Hermes removed. Needs real-device checks: wear event bytes, image containers, indicator placement, background WebSocket behaviour.
 
 ---
@@ -62,8 +66,7 @@ Rough order, to be re-sorted by what real use shows:
 5. **Navigation** `navigation`: drive the G2's built-in navigation screen (sid `0x08`, proto already decoded — [apk-recon](spikes/apk-recon.md)), MapKit routes, step tracking, rerouting. Replaces the last reason to open the Even app. **Built: arrow + text** (START, heartbeat, BASIC_INFO cards, rerouting, arrival, walk↔bike switch, exit handling; `NavigationSession` + `StepTracker` in LottiKit, `start_navigation` action in the app) **and map streaming to the Even app's format** (4 bpp BMP road network, LZ4/raw, fragmented `mini_map_msg`/`max_map_msg`; `NavMapBmp` + `NavMapRenderer`). Still open: confirming the maps live on the glasses, drawing the road network (needs a road source — the route alone renders for now), launching from the glasses' menu, the share-sheet entry point.
 6. **Memory** `brain`: built in Lotti Brain (auto memory, dreaming). Still open: per-person writing style, "why did you show me this?"
 7. **Structure when it hurts** `shared`: UI schema, renderer, web simulator, CI fix (CI looks for an npm/yarn lock file but the repo uses pnpm; fails on `main` too), prompt and eval harness on top of `packages/brain-eval`.
-8. **Wake word** `voice` (was S4): only if push-to-talk feels limiting.
-9. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
+8. **Battery and background measurements** (was S7, plus S3's leftovers): only when something drains or gets killed.
 
 ## Later / ideas
 

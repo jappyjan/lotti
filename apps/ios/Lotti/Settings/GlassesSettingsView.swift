@@ -5,6 +5,7 @@ import SwiftUI
 struct GlassesSettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(MascotSetting.key) private var mascotEnabled = MascotSetting.defaultValue
+    @AppStorage(Settings.wakeWordKey) private var wakeWord = Settings.wakeWordEnabled
     @State private var note: String?
     @State private var error: String?
 
@@ -16,6 +17,7 @@ struct GlassesSettingsView: View {
             connectionSection
             wearSection
             lookUpSection
+            voiceSection
             Section {
                 Toggle("Mascot", isOn: $mascotEnabled)
             } footer: {
@@ -59,7 +61,7 @@ struct GlassesSettingsView: View {
             Text("Connection")
         } footer: {
             Text(link.status.isConnected
-                 ? "Display off? Double tap, or look up (if switched on below), to open Today. A \"Catch-up\" choice appears there for 12 hours after Lotti sends one. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
+                 ? "Display off? Double tap, or look up (if switched on below), to open Today. A \"Catch-up\" choice appears there for 12 hours after Lotti sends one. To talk: double tap, then hold and speak (just hold while something is showing), or say \"Hey Lotti, …\" if it's on below. Scroll and tap to pick, double tap to go back."
                  : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
     }
@@ -99,6 +101,36 @@ struct GlassesSettingsView: View {
             Text("Head tracking")
         } footer: {
             Text("Wear the glasses, look straight ahead and press \"Set straight ahead\".")
+        }
+    }
+
+    @ViewBuilder private var voiceSection: some View {
+        Section {
+            Toggle("Listen for \"Hey Lotti\"", isOn: $wakeWord)
+                .onChange(of: wakeWord) { _, on in conductor.setWakeWord(enabled: on) }
+            if wakeWord {
+                StatusRow(title: "Hey Lotti", value: wakeText, good: wakeGood)
+            }
+        } header: {
+            Text("Voice")
+        } footer: {
+            Text("Say \"Hey Lotti, …\" with the glasses on, even with the phone locked and the display off. Uses the glasses' microphone while they're connected.")
+        }
+    }
+
+    private var wakeText: String {
+        switch conductor.wakeState {
+        case .off: link.status.isConnected ? "Off" : "Waiting for glasses"
+        case .listening: "Listening"
+        case .unavailable(let reason): reason
+        }
+    }
+
+    private var wakeGood: Bool? {
+        switch conductor.wakeState {
+        case .off: nil
+        case .listening: true
+        case .unavailable: false
         }
     }
 

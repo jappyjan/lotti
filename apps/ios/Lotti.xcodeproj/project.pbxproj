@@ -279,7 +279,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Lotti scans the QR code of your Lotti Brain to pair with it.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, navigation, and when you ask where you are or what is nearby.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens while you hold to talk.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens for \"Hey Lotti\" and while you hold to talk.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -310,7 +310,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "Lotti scans the QR code of your Lotti Brain to pair with it.";
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Lotti tells you what's next on your calendar.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Lotti uses your location for the weather, navigation, and when you ask where you are or what is nearby.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens while you hold to talk.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Lotti listens for \"Hey Lotti\" and while you hold to talk.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Lotti turns what you say into text, on this phone.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

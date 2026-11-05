@@ -33,13 +33,29 @@ public final class Conductor {
         /// The backend may research the web, so the timeout counts silence, not total time: any
         /// sign of life from it (status lines, tool calls) restarts the clock.
         public var remote: Duration
+        /// "Hey Lotti" must be confirmed by the speech recognizer within this long after the classifier fires.
+        public var wakeConfirm: Duration
+        /// A wake-started command ends after this much quiet.
+        public var wakeSilence: Duration
+        /// Nothing said after "Hey Lotti" for this long: the display goes off, quietly.
+        public var wakeNoCommand: Duration
+        /// A wake-started command is cut off after this long.
+        public var wakeCap: Duration
+        /// No microphone data for this long while wake word is on: restart the mic.
+        public var micWatchdog: Duration
+        /// Retries of a failed mic start back off from `micRetry`, doubling up to `micRetryMax`.
+        public var micRetry: Duration
+        public var micRetryMax: Duration
         /// The location icon stays this long after a location read ends.
         public var locationAfter: Duration
 
         public init(
             idle: Duration = .seconds(30), done: Duration = .seconds(2), answer: Duration = .seconds(25),
             finalTranscript: Duration = .seconds(3), conversation: Duration = .seconds(300),
-            remote: Duration = .seconds(120), locationAfter: Duration = .seconds(3)
+            remote: Duration = .seconds(120), locationAfter: Duration = .seconds(3),
+            wakeConfirm: Duration = .seconds(3), wakeSilence: Duration = .milliseconds(1500),
+            wakeNoCommand: Duration = .seconds(5), wakeCap: Duration = .seconds(15),
+            micWatchdog: Duration = .seconds(3), micRetry: Duration = .seconds(1), micRetryMax: Duration = .seconds(30)
         ) {
             self.idle = idle
             self.done = done
@@ -47,6 +63,13 @@ public final class Conductor {
             self.finalTranscript = finalTranscript
             self.conversation = conversation
             self.remote = remote
+            self.wakeConfirm = wakeConfirm
+            self.wakeSilence = wakeSilence
+            self.wakeNoCommand = wakeNoCommand
+            self.wakeCap = wakeCap
+            self.micWatchdog = micWatchdog
+            self.micRetry = micRetry
+            self.micRetryMax = micRetryMax
             self.locationAfter = locationAfter
         }
     }
@@ -66,11 +89,11 @@ public final class Conductor {
 
     /// What the glasses show right now; nil when the display is off. The phone mirrors it.
     public private(set) var screen: Screen?
-    public private(set) var mode: Mode = .off
+    public internal(set) var mode: Mode = .off
     /// The last thing you said, for the phone's log.
-    public private(set) var lastHeard: String?
+    public internal(set) var lastHeard: String?
     /// Where the last voice input came from ("glasses" / "phone"), for the status screen.
-    public private(set) var microphoneSource: String?
+    public internal(set) var microphoneSource: String?
     public private(set) var lastError: String?
     /// The backend's inbox. Pending items show as the attention indicator while the display is
     /// off, as a summary on the today view, and as a list behind it. Pushes never open a screen.
@@ -78,7 +101,7 @@ public final class Conductor {
     /// True while a location read runs and briefly after: the glasses show the location icon.
     public private(set) var locationActive = false
 
-    @ObservationIgnored private let link: any GlassesLink
+    @ObservationIgnored let link: any GlassesLink
     @ObservationIgnored private let brain: any Brain
     @ObservationIgnored private let remote: (any RemoteBrain)?
     @ObservationIgnored private let backend: BackendClient?
@@ -86,17 +109,17 @@ public final class Conductor {
     @ObservationIgnored private let summary: InboxSummary
     @ObservationIgnored private let toolbox: Toolbox
     @ObservationIgnored private let timers: (any Timers)?
-    @ObservationIgnored private let speech: any SpeechRecognizer
+    @ObservationIgnored let speech: any SpeechRecognizer
     @ObservationIgnored private let phoneMicrophone: (any Microphone)?
     @ObservationIgnored private let todayProvider: any TodayProvider
     @ObservationIgnored private let composer: TodayComposer
     @ObservationIgnored private var renderer: ScreenRenderer
-    @ObservationIgnored private let timing: Timing
+    @ObservationIgnored let timing: Timing
     @ObservationIgnored private let now: @Sendable () -> Date
 
-    @ObservationIgnored private var backStack: [Screen] = []
+    @ObservationIgnored var backStack: [Screen] = []
     @ObservationIgnored private var today: TodayInfo?
-    @ObservationIgnored private var timer: Task<Void, Never>?
+    @ObservationIgnored var timer: Task<Void, Never>?
     /// Redraws the today view when the minute changes (clock, timers, "in 5 min").
     @ObservationIgnored private var ticker: Task<Void, Never>?
     /// Lotti's timers on the phone, minus the ones you just stopped.
@@ -105,8 +128,8 @@ public final class Conductor {
     @ObservationIgnored private var stopping: Set<UUID> = []
     /// The timer the alert on the lens is for.
     @ObservationIgnored private var alertFor: UUID?
-    @ObservationIgnored private var listening: Task<String, Never>?
-    @ObservationIgnored private var thinking: Task<Void, Never>?
+    @ObservationIgnored var listening: Task<String, Never>?
+    @ObservationIgnored var thinking: Task<Void, Never>?
     @ObservationIgnored private var usingPhoneMic = false
     /// When Jan last asked anything: the offline brain's clock for `timing.conversation`.
     /// The backend has no such clock: it continues one conversation forever.
@@ -134,6 +157,26 @@ public final class Conductor {
     @ObservationIgnored private var lastGesturePresence: Date?
     @ObservationIgnored private var indicatorCache: (key: IndicatorKey, images: [G2ImageBox])?
 
+    /// The glasses' mic, shared by hold-to-talk, the wake word and the recorder.
+    @ObservationIgnored public let microphone: MicrophoneHub
+    @ObservationIgnored let wakeDetector: WakeWordDetector?
+    @ObservationIgnored var wakeGate = EnergyGate()
+    @ObservationIgnored var wakeTask: Task<Void, Never>?
+    @ObservationIgnored var wakeSession: WakeSession?
+    @ObservationIgnored var holdSubscription: MicrophoneHub.Subscription?
+    @ObservationIgnored var wakeEnabled = false
+    /// Set while the Debug recorder takes clips, so saying "Hey Lotti" for it doesn't wake Lotti.
+    @ObservationIgnored public var wakePaused = false
+    @ObservationIgnored var wakeStage2Seconds = 0.0
+    /// What the "Hey Lotti" listener is doing, for Settings → Glasses and Debug.
+    public internal(set) var wakeState: WakeState = .off
+    /// The newest candidate and how it ended ("0.91 confirmed: …", "0.85 rejected: …").
+    public internal(set) var wakeLast: String?
+    /// The newest classifier score, for Debug.
+    public internal(set) var wakeScore: Double?
+    /// Minutes the classifier and the speech confirm ran, to judge battery.
+    public internal(set) var wakeMinutes: (stage1: Double, stage2: Double) = (0, 0)
+
     private struct IndicatorKey: Equatable {
         var state: IndicatorState
         var attention: Bool
@@ -154,7 +197,7 @@ public final class Conductor {
         speech: any SpeechRecognizer, phoneMicrophone: (any Microphone)? = nil, today: any TodayProvider,
         composer: TodayComposer = TodayComposer(), renderer: ScreenRenderer = ScreenRenderer(),
         indicatorIcons: any IndicatorIconProvider = BuiltInIndicatorIcons(), inboxSummary: InboxSummary = .system,
-        timing: Timing = Timing(), now: @escaping @Sendable () -> Date = { Date() }
+        timing: Timing = Timing(), wakeDetector: WakeWordDetector? = nil, now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.link = link
         self.imuDemand = IMUDemand(link: link)
@@ -172,6 +215,8 @@ public final class Conductor {
         self.composer = composer
         self.renderer = renderer
         self.timing = timing
+        self.wakeDetector = wakeDetector
+        microphone = MicrophoneHub(link: link)
         self.now = now
         if let backend {
             let events = backend.events()
@@ -233,6 +278,7 @@ public final class Conductor {
         await syncHeadUpDemand()
         await imuDemand.reassert()
         draw()
+        restartWake()
     }
 
     /// Call when the glasses disconnect.
@@ -253,7 +299,9 @@ public final class Conductor {
         reportPresence(event)
         switch event.gesture {
         case .worn: showHeldCatchup()  // otherwise presence only; nothing to show
-        case .removed: if mode != .off { turnOff() }
+        case .removed:
+            if mode == .listening { cancelListening() }
+            if mode != .off { turnOff() }
         case .longPress:
             // Display off: only "double tap, then hold" talks (the double tap opens today first).
             guard mode != .off else { return log("hold ignored: display off, no double tap first") }
@@ -569,7 +617,7 @@ public final class Conductor {
         brain.endConversation()
     }
 
-    private func show(_ next: Screen, timeout: Bool = true) {
+    func show(_ next: Screen, timeout: Bool = true) {
         // A ringing timer goes first; what you'd have seen waits behind it (a "Done" line doesn't).
         if let ringer = ringing.first, ![.alert, .listening, .working].contains(mode),
            next.kind != .listening, next.kind != .working {
@@ -604,7 +652,7 @@ public final class Conductor {
     }
 
     /// An unanswered or timed-out screen goes dark; the conversation stays for a while.
-    private func goDark() {
+    func goDark() {
         timer?.cancel()
         ticker?.cancel()
         backStack = []
@@ -635,7 +683,7 @@ public final class Conductor {
     }
 
     /// Shows the oldest ringing timer, unless you're talking or Lotti is thinking.
-    private func showAlertIfDue() {
+    func showAlertIfDue() {
         guard let ringer = ringing.first, ![.alert, .listening, .working].contains(mode) else { return }
         if let current = screen, current.kind != .done { backStack.append(current) }
         showAlert(ringer)
@@ -719,8 +767,16 @@ public final class Conductor {
 
     private func startListening() {
         guard mode != .listening else { return }
+        abortWakeSession(reason: "hold-to-talk started")
         timer?.cancel()
         thinking?.cancel()
+        // A hold whose mic was still starting when you let go: drop it, so its subscription
+        // can't be left open (that would keep the glasses' mic on for good).
+        listening?.cancel()
+        if let subscription = holdSubscription {
+            holdSubscription = nil
+            Task { await microphone.unsubscribe(subscription) }
+        }
         backStack = []
         mode = .listening
         show(Screen(.listening, say("Ich höre…", "Listening…")), timeout: false)
@@ -732,7 +788,13 @@ public final class Conductor {
     private func listen() async -> String {
         let audio: AsyncStream<[Int16]>
         do {
-            audio = try await link.startMicrophone()
+            let subscription = try await microphone.subscribe()
+            if Task.isCancelled {
+                await microphone.unsubscribe(subscription)
+                return ""
+            }
+            holdSubscription = subscription
+            audio = subscription.stream
             usingPhoneMic = false
             microphoneSource = "glasses"
         } catch {
@@ -761,6 +823,7 @@ public final class Conductor {
     }
 
     private func stopListening() {
+        if let session = wakeSession, session.confirmed { return endWakeCommand(session) }
         guard let listening else { return }
         mode = .working
         show(Screen(.working, say("Denke nach…", "Let me think…")), timeout: false)
@@ -768,7 +831,7 @@ public final class Conductor {
             await stopMicrophone()
             // The transcript stream ends once the recognizer has the final result.
             let heard = await withTimeout(timing.finalTranscript) { await listening.value } ?? lastPartial
-            self.listening = nil
+            if self.listening == listening { self.listening = nil }  // not a newer hold's
             guard !Task.isCancelled, mode == .working else { return }
             lastHeard = heard
             if heard.isEmpty {
@@ -781,11 +844,12 @@ public final class Conductor {
     }
 
     /// The latest partial transcript, used if the final one doesn't arrive in time.
-    @ObservationIgnored private var lastPartial = ""
+    @ObservationIgnored var lastPartial = ""
     /// Set when you let go (or cancel) before the microphone finished starting.
     @ObservationIgnored private var micStopRequested = false
 
     private func cancelListening() {
+        abortWakeSession(reason: "cancelled")
         listening?.cancel()
         listening = nil
         Task { await stopMicrophone() }
@@ -793,13 +857,19 @@ public final class Conductor {
 
     private func stopMicrophone() async {
         micStopRequested = true
-        if usingPhoneMic { await phoneMicrophone?.stop() } else { await link.stopMicrophone() }
+        if usingPhoneMic {
+            await phoneMicrophone?.stop()
+        } else if let subscription = holdSubscription {
+            holdSubscription = nil
+            await microphone.unsubscribe(subscription)
+        }
     }
 
     // MARK: - Chat
 
     /// Ask Lotti something (from voice or a rail follow-up).
     public func ask(_ question: String) {
+        abortWakeSession(reason: "a question was asked")
         timer?.cancel()
         listening?.cancel()
         thinking?.cancel()
@@ -811,7 +881,7 @@ public final class Conductor {
 
     /// Routes a question (see `Router`): the backend answers whenever it can be reached, the
     /// offline brain otherwise (also when the backend drops while the question is out).
-    private func answer(_ question: String) async {
+    func answer(_ question: String) async {
         if let lastAsked, now().timeIntervalSince(lastAsked) > Double(timing.conversation.components.seconds) {
             endConversation()
         }
@@ -1008,7 +1078,7 @@ public final class Conductor {
     // MARK: - Language
 
     /// The glasses' own words follow the same language as the inbox summary.
-    private func say(_ german: String, _ english: String) -> String { summary.german ? german : english }
+    func say(_ german: String, _ english: String) -> String { summary.german ? german : english }
     private var tryAgain: String { say("Nochmal", "Try again") }
     private var notConnected: String { say("Lotti Brain ist nicht verbunden.", "Lotti Brain isn't connected.") }
 

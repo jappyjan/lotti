@@ -10,6 +10,63 @@ struct DebugView: View {
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
 
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var threshold = Settings.wakeThreshold
+    @State private var recorder: WakeWordRecorder?
+
+    private var wakeStateText: String {
+        switch conductor.wakeState {
+        case .off: "Off"
+        case .listening: "Listening"
+        case .unavailable(let reason): "Glasses mic unavailable (\(reason))"
+        }
+    }
+
+    @ViewBuilder private var wakeSection: some View {
+        Section {
+            LabeledContent("State", value: wakeStateText)
+            LabeledContent("Last score", value: conductor.wakeScore.map { String(format: "%.2f", $0) } ?? "–")
+            LabeledContent("Last candidate", value: conductor.wakeLast ?? "–")
+            LabeledContent("Ran", value: String(format: "%.1f min classifier, %.1f min speech",
+                                                conductor.wakeMinutes.stage1, conductor.wakeMinutes.stage2))
+            VStack(alignment: .leading) {
+                Text(String(format: "Threshold %.2f", threshold))
+                Slider(value: $threshold, in: 0.5...0.99, step: 0.01)
+                    .onChange(of: threshold) { _, value in
+                        Settings.wakeThreshold = value
+                        conductor.wakeThreshold = value
+                    }
+            }
+        } header: {
+            Text("Hey Lotti")
+        }
+
+        if let recorder {
+            Section {
+                Button("Record \"Hey Lotti\" (2 s)") { recorder.recordPhrase() }
+                    .disabled(recorder.activity != nil || !link.status.isConnected)
+                Button("Record 30 × \"Hey Lotti\" in a row") { recorder.recordSeries() }
+                    .disabled(recorder.activity != nil || !link.status.isConnected)
+                if case .series = recorder.activity {
+                    Button("Stop", role: .destructive) { recorder.stop() }
+                }
+                if recorder.activity == .background {
+                    Button("Stop background", role: .destructive) { recorder.stop() }
+                } else {
+                    Button("Record background") { recorder.startBackground() }
+                        .disabled(recorder.activity != nil || !link.status.isConnected)
+                }
+                if let busy = recorder.busyText { Text(busy).foregroundStyle(.secondary) }
+                if let error = recorder.error { Text(error).foregroundStyle(.red) }
+                LabeledContent("Saved", value: "\(recorder.counts["hey_lotti"] ?? 0) Hey Lotti, \(recorder.counts["background"] ?? 0) background")
+            } header: {
+                Text("Record training clips")
+            } footer: {
+                Text("From the glasses' mic (connect them first), saved in Documents/wakeword. \"Hey Lotti\" doesn't wake Lotti while recording; leaving this screen or locking the phone stops it. Copy them to packages/wake-word/data/user and retrain.")
+            }
+        }
+    }
+
     var body: some View {
         List {
             Section("On the glasses") {
@@ -53,6 +110,8 @@ struct DebugView: View {
                     Text(error).foregroundStyle(.red)
                 }
             }
+
+            wakeSection
 
             Section("On-device brain, last answer") {
                 if brain.trace.isEmpty { Text("Nothing asked yet.").foregroundStyle(.secondary) }
@@ -114,6 +173,11 @@ struct DebugView: View {
             }
         }
         .navigationTitle("Debug")
+        .onAppear { if recorder == nil { recorder = WakeWordRecorder(conductor: conductor) } }
+        // No recording you can't see (or stop).
+        .onDisappear { recorder?.stop() }
+        // Nor in the background or with the phone locked.
+        .onChange(of: scenePhase) { _, phase in if phase != .active { recorder?.stop() } }
     }
 
     /// The last map bitmap the glasses got, or a placeholder. Tap for the full-size image.

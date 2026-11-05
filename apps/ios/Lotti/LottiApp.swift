@@ -1,3 +1,4 @@
+import CoreML
 import LottiKit
 import SwiftUI
 import UIKit
@@ -53,7 +54,7 @@ struct LottiApp: App {
         let microphone = PhoneMicrophone()
         let conductor = Conductor(link: link, brain: offline, remote: BackendBrain(client: backend, channel: .glasses), backend: backend,
                                   toolbox: toolbox, timers: AlarmTimers(), speech: speech, phoneMicrophone: microphone,
-                                  today: today)
+                                  today: today, wakeDetector: Self.wakeDetector())
         let model = AppModel(link: link, conductor: conductor, backend: backend, deviceName: UIDevice.current.name,
                              appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1")
         let chat = ChatModel(backend: backend, offline: offline, toolbox: toolbox, speech: speech, microphone: microphone)
@@ -65,6 +66,16 @@ struct LottiApp: App {
         services = AppServices(speech: speech, brain: apple, navigation: navigation)
         _model = State(initialValue: model)
         _chat = State(initialValue: chat)
+    }
+
+    /// The "Hey Lotti" classifier from the bundled model, or nil if it isn't there.
+    private static func wakeDetector() -> WakeWordDetector? {
+        guard let url = Bundle.main.url(forResource: "HeyLotti", withExtension: "mlmodelc"),
+              let classifier = try? SoundAnalysisClassifier(contentsOf: url) else {
+            print("[Wake] HeyLotti model missing, wake word off")
+            return nil
+        }
+        return WakeWordDetector(classifier: classifier, threshold: Settings.wakeThreshold)
     }
 
     var body: some Scene {
@@ -83,6 +94,7 @@ struct LottiApp: App {
                 .task { await chat.run() }
                 .task { await PushRegistration.register() }
                 .task { await model.keepConnected() }
+                .task { model.conductor.setWakeWord(enabled: Settings.wakeWordEnabled) }
                 .task { await model.conductor.run() }
                 .task { await model.receiveInputs() }
                 .task { await model.runLaunchArguments() }
@@ -119,6 +131,21 @@ enum Settings {
     static var headUpEnabled: Bool {
         get { UserDefaults.standard.object(forKey: headUpEnabledKey) as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: headUpEnabledKey) }
+    }
+
+    static let wakeWordKey = "wakeWordEnabled"
+    static let wakeThresholdKey = "wakeThreshold"
+
+    /// Listen for "Hey Lotti" whenever the glasses are connected. On by default.
+    static var wakeWordEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: wakeWordKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: wakeWordKey) }
+    }
+
+    /// How sure the sound classifier must be to start checking a candidate (Debug).
+    static var wakeThreshold: Double {
+        get { UserDefaults.standard.object(forKey: wakeThresholdKey) as? Double ?? WakeWordDetector.defaultThreshold }
+        set { UserDefaults.standard.set(newValue, forKey: wakeThresholdKey) }
     }
 
     static let speechLanguageKey = "speechLanguage"

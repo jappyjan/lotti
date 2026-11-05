@@ -1,0 +1,31 @@
+{
+  "name": "wake-word",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/wake-word/Sources",
+  "implicitDependencies": ["lotti-kit"],
+  "tags": ["platform:macos", "lang:swift"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift build -c release", "cwd": "packages/wake-word" },
+      "inputs": ["{projectRoot}/Package.swift", "{projectRoot}/Sources/**/*", "^default"],
+      "cache": true
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift run -c release wake-word generate", "cwd": "packages/wake-word" },
+      "cache": false
+    },
+    "train": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift run -c release wake-word train", "cwd": "packages/wake-word" },
+      "cache": false
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "swift run -c release wake-word test", "cwd": "packages/wake-word" },
+      "cache": false
+    }
+  }
+}

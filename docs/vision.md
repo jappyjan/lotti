@@ -25,7 +25,7 @@ The stock Even app works like a phone squeezed onto glasses: menus, apps, featur
 
 1. **Glanceable AI UI.** The agent outputs a screen description in a schema. The phone renders it to the G2's 576×288 monochrome display.
 2. **Input that feels native.** Ring and touchpad gestures (tap, double tap, long press, scroll) map to the actions on the current screen.
-3. **Voice.** Push-to-talk (long press) and dictation in v1. "Hey Lotti" wake word if the battery cost is acceptable.
+3. **Voice.** Push-to-talk (long press) and dictation in v1, and the "Hey Lotti" wake word (built; its battery cost is still to be measured).
 4. **Phone as sensor hub.** Forward notifications, location and device state to the brain. The brain decides what to do with them.
 5. **Act on things.** Reply to messages (iMessage, WhatsApp, Signal, Telegram, Matrix), set reminders, and hand bigger tasks to Lotti Brain, the own backend. Messenger read/write comes later.
 6. **Navigation.** Turn-by-turn on the glasses, replacing the Even app's navigation.
