@@ -14,6 +14,7 @@ import type {
   CalendarSource,
 } from '../index.ts';
 import { CalDav, type DavCalendar, REPEATS_REFUSED } from './caldav.ts';
+import { expandFeed, type Feed, parseFeed } from './recur.ts';
 
 export interface CalendarInfo {
   id: string;
@@ -217,9 +218,230 @@ export function caldavBackend(app: App, acc: AccountRow): CalBackend {
   };
 }
 
+// ---- ICS subscription (secret link of a Google / Microsoft 365 calendar), read-only -------------------------
+
+const ICS_CACHE_MS = 15 * 60_000;
+/** A failed fetch is not retried for this long (meeting_soon asks every minute; a hung feed takes 20 s). */
+const ICS_FAIL_MS = 2 * 60_000;
+const MAX_FEED = 20_000_000;
+interface IcsEntry {
+  url: string;
+  at: number;
+  feed?: Feed;
+  /** Already redacted. */
+  error?: string;
+  /** The fetch in progress: concurrent callers share it. */
+  pending?: Promise<Feed>;
+}
+const icsCache = new WeakMap<App, Map<string, IcsEntry>>();
+
+/** `webcal://` is plain https; surrounding whitespace is ignored. */
+export const normalizeIcsUrl = (u: string) =>
+  u.trim().replace(/^webcals?:\/\//i, 'https://');
+
+const isLoopback = (host: string) =>
+  host === 'localhost' || host === '[::1]' || /^127\.\d+\.\d+\.\d+$/.test(host);
+
+/** Only https carries the secret link (plain http to this machine is allowed for development). */
+function secureUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return (
+      u.protocol === 'https:' ||
+      (u.protocol === 'http:' && isLoopback(u.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The secret link is a password: it must not appear in any message the app or the log can see. */
+function redactUrl(msg: string, url: string): string {
+  if (!url) return msg;
+  let out = msg.split(url).join('[calendar link]');
+  try {
+    const u = new URL(url);
+    for (const part of [u.pathname + u.search, u.search, u.pathname])
+      if (part.length > 3) out = out.split(part).join('[…]');
+  } catch {
+    /* not a URL: nothing else to hide */
+  }
+  return out;
+}
+
+/** The body as text, stopping as soon as more than `max` bytes arrive (a huge reply is never held in memory). */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const tooBig = () => new Error('The calendar feed is too big.');
+  if (Number(res.headers.get('content-length')) > max) throw tooBig();
+  if (!res.body) {
+    const text = await res.text();
+    if (text.length > max) throw tooBig();
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** One readable line for a network failure (no raw OpenSSL dumps). */
+function networkReason(cause: Error | undefined): string {
+  const msg = cause?.message ?? '';
+  if (/ssl|tls|certificate/i.test(msg))
+    return ' (secure connection failed: is the link https?)';
+  const line = msg.split('\n')[0]?.trim();
+  return line ? ` (${line})` : '';
+}
+
+async function fetchFeed(app: App, url: string): Promise<Feed> {
+  try {
+    if (!secureUrl(url))
+      throw new Error(
+        /^http:/i.test(url)
+          ? 'The link must start with https:// or webcal:// (plain http would send the secret link unencrypted).'
+          : 'The link must start with https:// or webcal://.',
+      );
+    // Redirects are followed by hand, so every hop is checked before the secret link goes there.
+    const signal = AbortSignal.timeout(20_000);
+    let at = url;
+    let res: Response;
+    for (let hop = 0; ; hop++) {
+      res = await app.fetch(at, {
+        headers: { accept: 'text/calendar, */*' },
+        redirect: 'manual',
+        signal,
+      });
+      const loc = res.headers.get('location');
+      if (res.status < 300 || res.status > 399 || !loc) break;
+      await res.body?.cancel().catch(() => undefined);
+      if (hop >= 5)
+        throw new Error('The calendar link redirected too many times.');
+      at = new URL(loc, at).href;
+      if (!secureUrl(at))
+        throw new Error(
+          'The calendar link redirected to a plain http address: refused.',
+        );
+    }
+    if (!res.ok)
+      throw new Error(`The calendar link answered HTTP ${res.status}.`);
+    const text = await readCapped(res, MAX_FEED);
+    if (!/BEGIN:VCALENDAR/i.test(text))
+      throw new Error('The link did not return a calendar (ICS) feed.');
+    return parseFeed(text);
+  } catch (e) {
+    const cause =
+      e instanceof Error ? (e.cause as Error | undefined) : undefined;
+    const why =
+      e instanceof Error && e.name === 'TimeoutError'
+        ? 'The calendar server did not answer in time.'
+        : e instanceof Error
+          ? e.message
+          : String(e);
+    throw new Error(
+      redactUrl(
+        why === 'fetch failed'
+          ? `Cannot reach the calendar server${networkReason(cause)}.`
+          : why,
+        url,
+      ),
+    );
+  }
+}
+
+/**
+ * The parsed feed, cached 15 minutes per account (and per link: a new link is fetched at once). Concurrent
+ * callers share one fetch; a failure is remembered for 2 minutes (`retryFailed`: try again at once).
+ */
+export async function icsFeed(
+  app: App,
+  acc: AccountRow,
+  opts: { retryFailed?: boolean } = {},
+): Promise<Feed> {
+  const url = normalizeIcsUrl(app.secrets.get(`account.${acc.id}.url`) ?? '');
+  if (!url)
+    throw new Error('This calendar has no link yet (set it in the app).');
+  let m = icsCache.get(app);
+  if (!m) icsCache.set(app, (m = new Map()));
+  const now = app.clock.now();
+  const hit = m.get(acc.id);
+  if (hit && hit.url !== url) m.delete(acc.id);
+  else if (hit?.pending) return hit.pending;
+  else if (hit?.feed && now - hit.at < ICS_CACHE_MS) return hit.feed;
+  else if (hit?.error && !opts.retryFailed && now - hit.at < ICS_FAIL_MS)
+    throw new Error(hit.error);
+  const entry: IcsEntry = { url, at: now };
+  const cache = m;
+  entry.pending = fetchFeed(app, url).then(
+    (feed) => {
+      if (cache.get(acc.id) === entry)
+        cache.set(acc.id, { url, at: app.clock.now(), feed });
+      return feed;
+    },
+    (e: unknown) => {
+      if (cache.get(acc.id) === entry)
+        cache.set(acc.id, {
+          url,
+          at: app.clock.now(),
+          error: e instanceof Error ? e.message : String(e),
+        });
+      throw e;
+    },
+  );
+  m.set(acc.id, entry);
+  return entry.pending;
+}
+
+/** Forget cached feeds of accounts that are gone (or switched off). */
+function pruneIcsCache(app: App, live: AccountRow[]) {
+  const m = icsCache.get(app);
+  if (!m) return;
+  const ids = new Set(live.map((a) => a.id));
+  for (const id of m.keys()) if (!ids.has(id)) m.delete(id);
+}
+
+export function icsBackend(app: App, acc: AccountRow): CalBackend {
+  return {
+    calendars: async () => {
+      await icsFeed(app, acc);
+      return [{ id: 'ics', name: acc.label }];
+    },
+    async events(_ids, from, to) {
+      return expandFeed(await icsFeed(app, acc), from, to, acc.label);
+    },
+    async create() {
+      throw new Error('ICS calendars are read-only.');
+    },
+    // Events carry no `calendarId`, so they get no delete ref; these refuse a hand-made one clearly.
+    async deletable() {
+      throw new Error(
+        'ICS calendars are read-only: delete it in the calendar itself.',
+      );
+    },
+    async delete() {
+      throw new Error(
+        'ICS calendars are read-only: delete it in the calendar itself.',
+      );
+    },
+  };
+}
+
 export type BackendFactory = (app: App, acc: AccountRow) => CalBackend;
 export const defaultBackend: BackendFactory = (app, acc) =>
-  acc.kind === 'google' ? googleBackend(app, acc) : caldavBackend(app, acc);
+  acc.kind === 'google'
+    ? googleBackend(app, acc)
+    : acc.kind === 'ics'
+      ? icsBackend(app, acc)
+      : caldavBackend(app, acc);
 
 /**
  * `account|calendar|event`: what the agent hands back to delete an event. Only `%` and `|` are escaped, so a
@@ -249,29 +471,41 @@ export class MergedCalendar implements CalendarSource {
 
   async events(from: number, to: number): Promise<CalendarEvent[]> {
     const accounts = accountsFor(this.app, 'calendar');
+    pruneIcsCache(this.app, accounts);
     const out: CalendarEvent[] = [];
     const errors: string[] = [];
     let okCount = 0;
-    for (const acc of accounts) {
-      try {
-        const evs = await this.backend(this.app, acc).events(
-          strList(acc.config.calendars),
-          from,
-          to,
-        );
-        out.push(
-          ...evs.map((e) =>
-            e.calendarId
-              ? { ...e, ref: eventRef(acc.id, e.calendarId, e.id) }
-              : e,
-          ),
-        );
-        touchSync(this.app, acc.id);
-        okCount++;
-      } catch (e) {
-        noteAccountError(this.app, acc.id, e);
-        errors.push(`${acc.label}: ${errText(e)}`);
+    // In parallel (one slow feed must not delay the rest); results are used in account order.
+    const results = await Promise.all(
+      accounts.map(async (acc) => {
+        try {
+          const evs = await this.backend(this.app, acc).events(
+            strList(acc.config.calendars),
+            from,
+            to,
+          );
+          return { acc, evs };
+        } catch (error) {
+          return { acc, error };
+        }
+      }),
+    );
+    for (const r of results) {
+      const { acc } = r;
+      if ('error' in r) {
+        noteAccountError(this.app, acc.id, r.error);
+        errors.push(`${acc.label}: ${errText(r.error)}`);
+        continue;
       }
+      out.push(
+        ...r.evs.map((e) =>
+          e.calendarId
+            ? { ...e, ref: eventRef(acc.id, e.calendarId, e.id) }
+            : e,
+        ),
+      );
+      touchSync(this.app, acc.id);
+      okCount++;
     }
     if (errors.length && !okCount) throw new Error(errors.join('; '));
     if (errors.length)
@@ -303,12 +537,26 @@ export class MergedCalendar implements CalendarSource {
         ok: false,
         text: 'The event needs a title and valid start and end.',
       };
-    const accounts = accountsFor(this.app, 'calendar');
+    const all = accountsFor(this.app, 'calendar');
+    const asked = all.find((a) => a.id === args.accountId);
+    if (asked?.kind === 'ics')
+      return {
+        ok: false,
+        text: `${asked.label} is read-only (ICS subscription).`,
+      };
+    // Subscriptions are never a write target.
+    const accounts = all.filter((a) => a.kind !== 'ics');
     const acc =
-      accounts.find((a) => a.id === args.accountId) ??
+      asked ??
       accounts.find((a) => a.config.writeDefault === true) ??
       accounts[0];
-    if (!acc) return { ok: false, text: 'No calendar is connected yet.' };
+    if (!acc)
+      return {
+        ok: false,
+        text: all.length
+          ? 'Only read-only calendars are connected: add a Google or CalDAV calendar to create events.'
+          : 'No calendar is connected yet.',
+      };
     try {
       const selected = strList(acc.config.calendars);
       await this.backend(this.app, acc).create(selected[0], {

@@ -8,6 +8,7 @@ import type { AddressInfo } from 'node:net';
 import type { App } from '../app.ts';
 import { bearerOf, attachWebSocket, closeWebSockets } from './ws.ts';
 import { handleMcp } from './mcp.ts';
+import { callbackBounce } from '../integrations/oauth/common.ts';
 
 const MAX_BODY = 2_000_000;
 
@@ -109,6 +110,24 @@ async function route(
 
   if (path === '/health' && method === 'GET')
     return send(res, 200, { ok: true });
+
+  // OAuth redirect target for providers that want an https URL. No auth: the browser has none. It only
+  // bounces to the app's fixed scheme with the allow-listed parameters (the code is useless without
+  // the server-side PKCE verifier and single-use state).
+  if (path === '/oauth/callback' && method === 'GET') {
+    const target = callbackBounce(url.searchParams);
+    if (!target) throw new HttpError(400, 'Missing state');
+    const esc = target.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    res.writeHead(302, {
+      location: target,
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+    });
+    res.end(
+      `<!doctype html><meta charset="utf-8"><title>Lotti</title><p>Back to Lotti: <a href="${esc}">open the app</a></p>`,
+    );
+    return;
+  }
 
   if (path === '/api/v1/pair' && method === 'POST') {
     const ip = req.socket.remoteAddress ?? '?';

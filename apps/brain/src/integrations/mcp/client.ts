@@ -9,6 +9,15 @@ import { proposeAction } from '../../tools/proposals.ts';
 import type { ToolDef } from '../../tools/registry.ts';
 import { clip } from '../../util/text.ts';
 import type { McpClient, McpServerConfig } from '../index.ts';
+import { publicUrl, reachWhy, sentence } from '../oauth/common.ts';
+import {
+  BEARER_REFUSED,
+  McpAuthError,
+  SIGN_IN_AGAIN,
+  isAuthError,
+  mcpAccessToken,
+  mcpSignedIn,
+} from './oauth.ts';
 
 const PROTOCOL = '2025-03-26';
 const TIMEOUT_MS = 30_000;
@@ -123,33 +132,50 @@ class HttpSession implements Session {
     private url: string,
     private bearer: string | undefined,
     private fetchFn: typeof fetch,
+    /** OAuth: the current token, or a freshly refreshed one after a 401. Undefined = no OAuth sign-in. */
+    private oauth?: (force: boolean) => Promise<string | undefined>,
   ) {}
 
-  private async post(body: unknown, expectId?: number): Promise<any> {
-    const res = await this.fetchFn(this.url, {
+  private async send(body: unknown, token: string | undefined) {
+    return this.fetchFn(this.url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': PROTOCOL,
         ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {}),
-        ...(this.bearer ? { authorization: `Bearer ${this.bearer}` } : {}),
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     }).catch((e: unknown) => {
-      const why =
-        e instanceof Error
-          ? ((e.cause as Error | undefined)?.message ?? e.message)
-          : String(e);
-      throw new Error(`Cannot reach the MCP server at ${this.url}: ${why}`);
-    });
-    this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
-    if (res.status === 401 || res.status === 403)
       throw new Error(
-        'MCP server refused the login: set the bearer token in the app.',
+        sentence(
+          `Cannot reach the MCP server at ${publicUrl(this.url)}: ${reachWhy(e)}`,
+        ),
       );
-    if (!res.ok) throw new Error(`MCP server answered HTTP ${res.status}`);
+    });
+  }
+
+  private async post(body: unknown, expectId?: number): Promise<any> {
+    // An OAuth token wins over a manual bearer.
+    const first = (await this.oauth?.(false)) ?? this.bearer;
+    let res = await this.send(body, first);
+    if (res.status === 401 && this.oauth) {
+      // Refresh once and retry (the token may have been revoked or expired early).
+      const fresh = await this.oauth(true);
+      if (fresh) res = await this.send(body, fresh);
+    }
+    this.sessionId = res.headers.get('mcp-session-id') ?? this.sessionId;
+    if (this.oauth && res.status === 401) throw new McpAuthError(SIGN_IN_AGAIN);
+    // With OAuth a 403 means "signed in, but not allowed" (e.g. insufficient_scope): a new sign-in will not help.
+    if (this.oauth && res.status === 403)
+      throw new Error(
+        'The MCP server refused access (HTTP 403): the signed-in account lacks permission.',
+      );
+    if (res.status === 401 || res.status === 403)
+      throw new McpAuthError(BEARER_REFUSED);
+    if (!res.ok) throw new Error(`MCP server answered HTTP ${res.status}.`);
     if (expectId === undefined) return undefined;
     const text = await res.text();
     const msgs: any[] = /event-stream/i.test(
@@ -167,7 +193,15 @@ class HttpSession implements Session {
             return [];
           }
         })
-      : [JSON.parse(text)].flat();
+      : (() => {
+          try {
+            return [JSON.parse(text)].flat();
+          } catch {
+            throw new Error(
+              'The server did not answer like an MCP server (the reply is not JSON).',
+            );
+          }
+        })();
     const m = msgs.find((x) => x.id === expectId);
     if (!m) throw new Error('MCP server sent no response.');
     if (m.error) throw new Error(m.error.message ?? 'MCP error');
@@ -211,6 +245,9 @@ export class McpClientImpl implements McpClient {
             server.url ?? '',
             this.app.secrets.get(`mcp.${server.id}.bearer`),
             (...a) => this.app.fetch(...a),
+            mcpSignedIn(this.app, server.id)
+              ? (force) => mcpAccessToken(this.app, server, force)
+              : undefined,
           )
         : new StdioSession(
             server.command ?? '',
@@ -274,7 +311,8 @@ export class McpClientImpl implements McpClient {
         tools: (await this.listTools(server)).map((t) => t.name),
       };
     } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      const error = e instanceof Error ? e.message : String(e);
+      return { ok: false, error, authRequired: e instanceof McpAuthError };
     }
   }
 
@@ -303,10 +341,10 @@ export class McpClientImpl implements McpClient {
    * collected first and swapped in at once (tools never vanish while a slow server answers);
    * overlapping refreshes run one after the other.
    */
-  refresh(): Promise<void> {
+  refresh(timed = false): Promise<void> {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    const run = this.refreshing.then(() => this.doRefresh());
+    const run = this.refreshing.then(() => this.doRefresh(timed));
     this.refreshing = run.catch(() => undefined);
     return run;
   }
@@ -326,18 +364,27 @@ export class McpClientImpl implements McpClient {
     this.retries++;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      void this.refresh().catch(() => undefined);
+      void this.refresh(true).catch(() => undefined);
     }, delay);
     this.retryTimer.unref();
   }
 
-  private async doRefresh(): Promise<void> {
+  private lastError(id: string): string | null | undefined {
+    return this.app.db.get<{ last_error: string | null }>(
+      'SELECT last_error FROM mcp_servers WHERE id=?',
+      id,
+    )?.last_error;
+  }
+
+  /** `timed`: the backoff timer fired. Servers that wait for a sign-in are left alone then (only the user brings them back). */
+  private async doRefresh(timed = false): Promise<void> {
     let failed = 0;
     const staged: {
       server: McpServerConfig;
       tools: { name: string; description?: string; inputSchema?: unknown }[];
     }[] = [];
     for (const server of loadMcpServers(this.app).filter((s) => s.enabled)) {
+      if (timed && isAuthError(this.lastError(server.id))) continue;
       try {
         const tools = await this.listTools(server);
         this.app.db.run(
@@ -346,7 +393,8 @@ export class McpClientImpl implements McpClient {
         );
         staged.push({ server, tools });
       } catch (e) {
-        failed++;
+        // A server that needs a (new) sign-in only comes back when the user signs in: no timed retry.
+        if (!(e instanceof McpAuthError)) failed++;
         this.app.log.warn(`MCP server ${server.name} unavailable`, String(e));
         this.app.db.run(
           "UPDATE mcp_servers SET status='error', last_error=? WHERE id=?",

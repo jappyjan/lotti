@@ -109,9 +109,13 @@ export interface McpServerConfig {
 export interface McpClient {
   /** Re-read the configured servers and (re)register their tools in the tool registry. */
   refresh?(): Promise<void>;
-  test(
-    server: McpServerConfig,
-  ): Promise<{ ok: boolean; tools?: string[]; error?: string }>;
+  test(server: McpServerConfig): Promise<{
+    ok: boolean;
+    tools?: string[];
+    error?: string;
+    /** The server wants a (new) sign-in. */
+    authRequired?: boolean;
+  }>;
   listTools(
     server: McpServerConfig,
   ): Promise<{ name: string; description?: string; inputSchema?: unknown }[]>;
@@ -138,7 +142,13 @@ export interface AccountConnector {
   check(
     account: AccountRow,
     app: App,
-  ): Promise<{ ok: boolean; status: string; error?: string }>;
+  ): Promise<{
+    ok: boolean;
+    status: string;
+    error?: string;
+    /** Short result for the app, e.g. "12 events". */
+    detail?: string;
+  }>;
 }
 
 /** Bring! shopping lists. `bring.*` ops delegate here; register matching tools if you like. */

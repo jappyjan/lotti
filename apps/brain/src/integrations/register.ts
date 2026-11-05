@@ -2,7 +2,7 @@ import type { App } from '../app.ts';
 import { bringConnector, BringHttp } from './bring/index.ts';
 import { calendarEventsTool } from './calendar/tool.ts';
 import { MergedCalendar } from './calendar/source.ts';
-import { connectorKinds, makeConnector } from './connectors.ts';
+import { connectorKinds, icsConnector, makeConnector } from './connectors.ts';
 import { McpClientImpl } from './mcp/client.ts';
 import { MergedMail } from './mail/source.ts';
 import { mailReadTool, mailSearchTool } from './mail/tools.ts';
@@ -18,6 +18,7 @@ export function registerIntegrations(app: App): void {
   i.bring = new BringHttp(app);
   i.connectors.set('bring', bringConnector);
   for (const k of connectorKinds) i.connectors.set(k, makeConnector(k));
+  i.connectors.set('ics', icsConnector);
 
   // The `create_calendar_event` server action (tools/proposals.ts) runs i.calendar.createEvent.
   i.calendar = new MergedCalendar(app);
