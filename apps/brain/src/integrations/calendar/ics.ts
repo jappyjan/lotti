@@ -72,8 +72,13 @@ function parseDate(
 export function parseEvents(ics: string, calendar?: string): CalendarEvent[] {
   const out: CalendarEvent[] = [];
   let cur: Record<string, { v: string; p: string }> | undefined;
+  // Inside a VEVENT's own components (VALARM): their UID / SUMMARY are not the event's (iCloud alarms have both).
+  let nested = 0;
   for (const line of unfold(ics)) {
-    if (line === 'BEGIN:VEVENT') cur = {};
+    if (line === 'BEGIN:VEVENT') ((cur = {}), (nested = 0));
+    else if (cur && /^BEGIN:/i.test(line)) nested++;
+    else if (cur && nested && /^END:/i.test(line)) nested--;
+    else if (nested) continue;
     else if (line === 'END:VEVENT' && cur) {
       const s = cur.DTSTART && parseDate(cur.DTSTART.v, cur.DTSTART.p);
       if (s && cur.STATUS?.v !== 'CANCELLED') {
@@ -94,7 +99,7 @@ export function parseEvents(ics: string, calendar?: string): CalendarEvent[] {
             ? { location: unescapeText(cur.LOCATION.v) }
             : {}),
           ...(s.allDay ? { allDay: true } : {}),
-          ...(rid || cur.RRULE ? { recurring: true } : {}),
+          ...(rid || cur.RRULE || cur.RDATE ? { recurring: true } : {}),
           ...(calendar ? { calendar } : {}),
         });
       }
@@ -108,6 +113,30 @@ export function parseEvents(ics: string, calendar?: string): CalendarEvent[] {
     }
   }
   return out;
+}
+
+/**
+ * The UIDs in a calendar resource, and whether it is a series: a repeat rule, a moved occurrence or several
+ * VEVENTs. Only VEVENT lines count: a VTIMEZONE's daylight-saving RRULE does not make an event repeat.
+ */
+export function seriesInfo(ics: string): { uids: string[]; repeats: boolean } {
+  const uids: string[] = [];
+  let events = 0;
+  let repeats = false;
+  let inEvent = false;
+  let nested = 0;
+  for (const line of unfold(ics)) {
+    if (line === 'BEGIN:VEVENT') ((inEvent = true), (nested = 0), events++);
+    else if (inEvent && /^BEGIN:/i.test(line)) nested++;
+    else if (inEvent && nested && /^END:/i.test(line)) nested--;
+    else if (nested) continue;
+    else if (line === 'END:VEVENT') inEvent = false;
+    else if (inEvent && /^(RRULE|RDATE|RECURRENCE-ID)[:;]/i.test(line))
+      repeats = true;
+    else if (inEvent && /^UID[:;]/i.test(line))
+      uids.push(line.replace(/^[^:]*:/, '').trim());
+  }
+  return { uids, repeats: repeats || events > 1 };
 }
 
 function parseDuration(d: string): number | undefined {

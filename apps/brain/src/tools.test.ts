@@ -389,7 +389,22 @@ test('phone action proposals use exactly the phone tool schemas (apps/ios/Lotti/
 });
 
 test('confirmation titles name what runs: mail recipient + body, calendar time + attendees', async () => {
-  const t = makeApp();
+  const t = makeApp({
+    integrations: {
+      calendar: {
+        events: async () => [],
+        deletable: async () => ({
+          ok: true,
+          event: {
+            id: 'c',
+            title: 'Standup',
+            start: Date.parse('2026-11-04T10:00:00+01:00'),
+            end: Date.parse('2026-11-04T10:30:00+01:00'),
+          },
+        }),
+      },
+    },
+  });
   await run(t, 'send_mail_reply', {
     mailId: 'm1',
     to: 'boss@example.com',
@@ -407,7 +422,7 @@ test('confirmation titles name what runs: mail recipient + body, calendar time +
   );
   await t.app.tools.call(
     'delete_calendar_event',
-    { eventRef: 'a|b|c', title: 'Standup', start: '2026-11-04T10:00:00+01:00' },
+    { eventRef: 'a|b|c' },
     { app: t.app, run: newRun({ utcOffsetMin: 60, locale: 'de' }) },
   );
   const titles = t.app.db
@@ -422,7 +437,39 @@ test('confirmation titles name what runs: mail recipient + body, calendar time +
     'Add "Zahnarzt" · Wed 4 Nov 10:00–11:00 with a@example.com',
   );
   assert.ok(!/\d{4}-\d\d-\d\dT/.test(titles[1]!), 'no raw ISO timestamps');
-  assert.match(titles[2]!, /^Delete "Standup" · .*10:00$/);
+  assert.equal(titles[2], 'Delete "Standup" · Mi., 4. Nov. 10:00–10:30');
+  // an event after the clocks change is shown at its own offset, not today's
+  await t.app.tools.call(
+    'create_calendar_event',
+    {
+      title: 'Ostern',
+      start: '2027-04-01T14:00:00+02:00',
+      end: '2027-04-01T15:00:00+02:00',
+    },
+    { app: t.app, run: newRun({ utcOffsetMin: 60 }) },
+  );
+  assert.equal(
+    t.app.db.all<{ title: string }>(
+      'SELECT title FROM actions ORDER BY rowid DESC LIMIT 1',
+    )[0]!.title,
+    'Add "Ostern" · Thu 1 Apr 14:00–15:00',
+  );
+  // "Z" is UTC, not where the user is: shown at the phone's offset
+  await t.app.tools.call(
+    'create_calendar_event',
+    {
+      title: 'Call',
+      start: '2026-11-04T13:00:00Z',
+      end: '2026-11-04T13:30:00Z',
+    },
+    { app: t.app, run: newRun({ utcOffsetMin: 60 }) },
+  );
+  assert.equal(
+    t.app.db.all<{ title: string }>(
+      'SELECT title FROM actions ORDER BY rowid DESC LIMIT 1',
+    )[0]!.title,
+    'Add "Call" · Wed 4 Nov 14:00–14:30',
+  );
   await run(t, 'send_mail_reply', { mailId: 'm1', body: 'x'.repeat(500) });
   const long = t.app.db.all<{ title: string }>(
     'SELECT title FROM actions ORDER BY rowid DESC LIMIT 1',

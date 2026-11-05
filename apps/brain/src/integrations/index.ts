@@ -35,6 +35,10 @@ export interface CalendarSource {
   next?(from: number): Promise<CalendarEvent | undefined>;
   /** Server action `create_calendar_event` runs this after `perform`. */
   createEvent?(args: Record<string, unknown>): Promise<ActionOutcome>;
+  /** The event behind a `ref`, read from the service when a delete is proposed; or why it can't be deleted. */
+  deletable?(
+    ref: unknown,
+  ): Promise<{ ok: true; event: CalendarEvent } | { ok: false; text: string }>;
   /** Server action `delete_calendar_event` runs this after `perform`. */
   deleteEvent?(args: Record<string, unknown>): Promise<ActionOutcome>;
 }

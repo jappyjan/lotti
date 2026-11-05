@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { App } from '../app.ts';
 import type { ProposedAction } from '../actions.ts';
-import { shortWhen } from '../util/clock.ts';
+import { isoLocal, parseOffsetMin, shortWhen } from '../util/clock.ts';
 import { clip } from '../util/text.ts';
 import type { ToolContext, ToolDef } from './registry.ts';
 
@@ -63,19 +63,23 @@ const deleteEvent = z.object({
   eventRef: z
     .string()
     .describe('The {id: …} of the event, as listed by calendar_events'),
-  title: z.string().min(1).describe('Title of the event, as listed'),
-  start: z
-    .string()
-    .optional()
-    .describe('ISO 8601 start of the event, as listed'),
 });
 
-/** "Tue 3 Nov 14:30–15:30" from ISO strings, in the phone's zone; the raw text when it does not parse. */
+/**
+ * "Tue 3 Nov 14:30–15:30" from ISO strings, at the start's own written offset ("+02:00" for a date after
+ * the clocks change), else the phone's ("Z" is UTC, not a place); '' when the start does not parse.
+ */
 const when = (startIso: unknown, endIso: unknown, ctx: ToolContext): string => {
   const s = Date.parse(String(startIso));
   if (Number.isNaN(s)) return '';
   const e = endIso === undefined ? null : Date.parse(String(endIso));
-  return shortWhen(s, e, ctx.run.locale, ctx.run.utcOffsetMin);
+  return shortWhen(
+    s,
+    e,
+    ctx.run.locale,
+    (/Z$/i.test(String(startIso)) ? null : parseOffsetMin(String(startIso))) ??
+      ctx.run.utcOffsetMin,
+  );
 };
 
 const tool = (
@@ -142,15 +146,43 @@ export const proposalTools: ToolDef[] = [
     title: (a, ctx) =>
       `Add "${a.title}" · ${when(a.start, a.end, ctx) || `${a.start}–${a.end}`}${a.attendees?.length ? ' with ' + a.attendees.join(', ') : ''}`,
   }),
-  tool({
+  {
     name: 'delete_calendar_event',
     description:
-      'Propose deleting one calendar event (use the {id: …} from calendar_events as eventRef). For a repeating Google event only that one occurrence is deleted; repeating CalDAV events cannot be deleted. There is no undo.',
+      'Propose deleting one calendar event (use the {id: …} from calendar_events as eventRef). For a repeating Google event only that one occurrence is deleted; repeating CalDAV events cannot be deleted. There is no undo. Only PROPOSES: the user must tap to confirm, then it runs.',
     inputSchema: deleteEvent,
-    target: 'server',
-    title: (a, ctx) =>
-      `Delete "${a.title}"${a.start ? ' · ' + (when(a.start, undefined, ctx) || a.start) : ''}`,
-  }),
+    kind: 'server',
+    needsConfirmation: true,
+    status: { de: 'Schaue in den Kalender …', en: 'Checking the calendar …' },
+    // The card shows the event as the calendar has it, not as the model wrote it: what you confirm is what goes.
+    async handler(args, ctx) {
+      const cal = ctx.app.integrations.calendar;
+      if (!cal?.deletable) return 'No calendar is connected yet.';
+      const found = await cal.deletable(args.eventRef);
+      if (!found.ok) return found.text;
+      const e = found.event;
+      // All-day events are local midnights on the server: shown without the phone offset, date only.
+      const at = e.allDay
+        ? shortWhen(e.start, null, ctx.run.locale).slice(0, -6)
+        : shortWhen(e.start, e.end, ctx.run.locale, ctx.run.utcOffsetMin);
+      return proposeAction(ctx, {
+        title: clip(`Delete "${e.title}" · ${at}`, 140),
+        target: 'server',
+        tool: 'delete_calendar_event',
+        args: {
+          eventRef: args.eventRef,
+          title: e.title,
+          // All-day: the date itself (server-local), so no zone shifts it to the day before.
+          start: e.allDay
+            ? isoLocal(e.start).slice(0, 10)
+            : new Date(e.start).toISOString(),
+          end: new Date(e.end).toISOString(),
+          ...(e.allDay ? { allDay: true } : {}),
+          ...(e.recurring ? { occurrence: true } : {}),
+        },
+      });
+    },
+  },
 ];
 
 /** Server-side execution of the server actions: delegated to the integrations (stubs say "not connected"). */
