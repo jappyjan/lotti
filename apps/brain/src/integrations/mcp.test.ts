@@ -445,6 +445,50 @@ test('a server that was down at boot is retried, and the model is told while it 
   }
 });
 
+test('mcp: a down server keeps its backoff, but never drags a sign-in server along', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mock-mcp-'));
+  const t = makeApp({
+    fetch: async () => new Response('', { status: 401 }),
+  });
+  registerIntegrations(t.app);
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'Locked', transport: 'http', url: 'https://mcp.example/rpc' },
+      'app',
+    );
+    await t.app.ops.invoke(
+      'mcp.add',
+      {
+        name: 'Down',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [join(dir, 'missing.mjs')],
+      },
+      'app',
+    );
+    await settle(t);
+    const calls = t.fetchCalls.length;
+    writeFileSync(join(dir, 'missing.mjs'), SERVER); // the down server comes up
+    mock.timers.tick(30_000); // the backoff timer fires
+    // The child process needs real time; setTimeout is mocked, so poll with setImmediate.
+    for (
+      const end = Date.now() + 5000;
+      Date.now() < end && !t.app.tools.get('mcp__Down__echo');
+    )
+      await new Promise((r) => setImmediate(r));
+    assert.ok(t.app.tools.get('mcp__Down__echo'), 'the retry brought it up');
+    assert.equal(
+      t.fetchCalls.length,
+      calls,
+      'the timer must not probe the server that waits for a sign-in',
+    );
+  } finally {
+    mock.timers.reset();
+  }
+});
+
 test('mcp: a server that needs a sign-in is not retried on a timer', async () => {
   const t = makeApp({
     fetch: async () => new Response('', { status: 401 }),

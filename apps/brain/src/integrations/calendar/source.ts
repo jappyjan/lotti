@@ -290,7 +290,8 @@ export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
   if (hit && hit.url === url && app.clock.now() - hit.at < ICS_CACHE_MS)
     return hit.text;
   try {
-    if (!/^https?:\/\//i.test(url)) throw new Error('The link must start with https:// or webcal://.');
+    if (!/^https?:\/\//i.test(url))
+      throw new Error('The link must start with https:// or webcal://.');
     const res = await app.fetch(url, {
       headers: { accept: 'text/calendar, */*' },
       signal: AbortSignal.timeout(20_000),
@@ -305,7 +306,12 @@ export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
   } catch (e) {
     const cause =
       e instanceof Error ? (e.cause as Error | undefined) : undefined;
-    const why = e instanceof Error ? e.message : String(e);
+    const why =
+      e instanceof Error && e.name === 'TimeoutError'
+        ? 'The calendar server did not answer in time.'
+        : e instanceof Error
+          ? e.message
+          : String(e);
     throw new Error(
       redactUrl(
         why === 'fetch failed'

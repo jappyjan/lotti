@@ -340,10 +340,10 @@ export class McpClientImpl implements McpClient {
    * collected first and swapped in at once (tools never vanish while a slow server answers);
    * overlapping refreshes run one after the other.
    */
-  refresh(): Promise<void> {
+  refresh(timed = false): Promise<void> {
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    const run = this.refreshing.then(() => this.doRefresh());
+    const run = this.refreshing.then(() => this.doRefresh(timed));
     this.refreshing = run.catch(() => undefined);
     return run;
   }
@@ -363,18 +363,27 @@ export class McpClientImpl implements McpClient {
     this.retries++;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
-      void this.refresh().catch(() => undefined);
+      void this.refresh(true).catch(() => undefined);
     }, delay);
     this.retryTimer.unref();
   }
 
-  private async doRefresh(): Promise<void> {
+  private lastError(id: string): string | null | undefined {
+    return this.app.db.get<{ last_error: string | null }>(
+      'SELECT last_error FROM mcp_servers WHERE id=?',
+      id,
+    )?.last_error;
+  }
+
+  /** `timed`: the backoff timer fired. Servers that wait for a sign-in are left alone then (only the user brings them back). */
+  private async doRefresh(timed = false): Promise<void> {
     let failed = 0;
     const staged: {
       server: McpServerConfig;
       tools: { name: string; description?: string; inputSchema?: unknown }[];
     }[] = [];
     for (const server of loadMcpServers(this.app).filter((s) => s.enabled)) {
+      if (timed && isAuthError(this.lastError(server.id))) continue;
       try {
         const tools = await this.listTools(server);
         this.app.db.run(

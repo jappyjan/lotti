@@ -439,6 +439,19 @@ test('ics account: a blank or non-http link gets one plain sentence', async () =
   }
 });
 
+test('ics account: a feed that never answers says so in plain words', async () => {
+  const { op, id } = await icsApp(() => {
+    throw new DOMException(
+      'The operation was aborted due to timeout',
+      'TimeoutError',
+    );
+  });
+  await op('accounts.set_credential', { id, key: 'url', value: SECRET });
+  const chk = (await op('accounts.check', { id })).result;
+  assert.equal(chk.ok, false);
+  assert.equal(chk.error, 'The calendar server did not answer in time.');
+});
+
 test('ics account: read-only, never the write target', async () => {
   const { t, op, id } = await icsApp();
   await op('accounts.set_credential', { id, key: 'url', value: SECRET });
