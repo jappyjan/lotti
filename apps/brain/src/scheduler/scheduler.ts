@@ -44,20 +44,20 @@ const toJob = (r: Row): Job => {
       ? builtinJobs.find((x) => x.key === r.builtin_key)
       : undefined;
   return {
-  id: r.id,
-  name: r.name,
-  kind: r.kind,
-  builtinKey: r.builtin_key,
-  prompt: r.prompt,
-  cron: r.cron,
-  scheduleText: r.schedule_text,
-  enabled: !!r.enabled,
-  nextRunAt: r.next_run_at ? isoLocal(r.next_run_at) : null,
-  lastRunAt: r.last_run_at ? isoLocal(r.last_run_at) : null,
-  description: b?.description ?? null,
-  ai: b?.ai ?? 'always',
-  aiNote: b?.aiNote ?? 'Spends AI tokens on every run.',
-  setting: b?.setting ?? null,
+    id: r.id,
+    name: r.name,
+    kind: r.kind,
+    builtinKey: r.builtin_key,
+    prompt: r.prompt,
+    cron: r.cron,
+    scheduleText: r.schedule_text,
+    enabled: !!r.enabled,
+    nextRunAt: r.next_run_at ? isoLocal(r.next_run_at) : null,
+    lastRunAt: r.last_run_at ? isoLocal(r.last_run_at) : null,
+    description: b?.description ?? null,
+    ai: b?.ai ?? 'always',
+    aiNote: b?.aiNote ?? 'Spends AI tokens on every run.',
+    setting: b?.setting ?? null,
   };
 };
 

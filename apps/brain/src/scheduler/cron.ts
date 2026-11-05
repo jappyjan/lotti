@@ -144,7 +144,8 @@ export function friendlyToCron(text: string): string | null {
   if (m) return `*/${Number(m[1])} * * * *`;
   m = /^(?:every|alle)\s+(\d+)\s*(?:h|hours?|stunden?)$/.exec(t);
   if (m) return `0 */${Number(m[1])} * * *`;
-  if (/^(every minute|minutely|jede minute|minütlich)$/.test(t)) return '* * * * *';
+  if (/^(every minute|minutely|jede minute|minütlich)$/.test(t))
+    return '* * * * *';
   if (/^(hourly|stündlich|every hour|jede stunde)$/.test(t)) return '0 * * * *';
   const at = /(?:at|um)\s+(.+)$/.exec(t);
   const time = at ? timeOf(at[1]!) : null;

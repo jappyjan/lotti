@@ -175,7 +175,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 - `location` is a phone tool the agent may call any time. Every read emits `location_access`, shows a small location icon on the glasses and is logged in the app.
 - Calendar (Google, iCloud/CalDAV, generic), mail (Gmail, iCloud/IMAP, generic), `web_fetch`, web search with a key, `shell` (workspace cwd, timeout, output cap, no secrets in env, non-root, logged).
 - Bring! (unofficial API, isolated in one client): adds and removes run at once with a "Done" line and **Undo**.
-- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
+- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event`, `delete_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
 - MCP client: stdio and streamable HTTP servers, added and tested in the app, with per-tool confirmation switches.
 
 **Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces the old turns in the model's context; the turns themselves are kept, flagged `compacted`, so the history stays complete and searchable); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.

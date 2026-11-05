@@ -90,7 +90,7 @@ struct DebugView: View {
 
             if link.status.isConnected {
                 Section("Try") {
-                    Button("Show today view") { conductor.handle(InputEvent(.tap, from: .unknown)) }
+                    Button("Show today view") { conductor.handle(InputEvent(.doubleTap, from: .unknown)) }
                     Button("Ask \"What's on today?\"") { conductor.ask("What's on today?") }
                     Button("Ask \"Timer for 10 minutes\"") { conductor.ask("Set a timer for 10 minutes") }
                 }
