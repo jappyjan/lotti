@@ -545,3 +545,32 @@ test('errText: readable reasons for fetch and IMAP failures', async () => {
   );
   assert.equal(errText(new Error('plain')), 'plain');
 });
+
+test('unread leaves out mail you sent yourself', async () => {
+  const { t } = await imapApp();
+  const at = new Date(2026, 10, 3, 7, 50).getTime();
+  const msg = (id: string, from: string) => ({
+    id,
+    from,
+    subject: id,
+    snippet: '',
+    receivedAt: at,
+    unread: true,
+  });
+  const mail = new MergedMail(t.app, () => ({
+    unread: async () => [
+      msg('mine', 'Jan <JAN@icloud.com>'),
+      msg('bare', 'jan@icloud.com'),
+      msg('other', 'Chef <chef@firma.de>'),
+    ],
+    search: async () => [],
+    read: async () => {
+      throw new Error('unused');
+    },
+    reply: async () => ({ to: '', subject: '' }),
+  }));
+  assert.deepEqual(
+    (await mail.unread(at - 600_000)).map((m) => m.subject),
+    ['other'],
+  );
+});

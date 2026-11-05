@@ -70,7 +70,7 @@ struct G2LayoutTests {
         #expect(!boxes.map(\.id).contains(G2ImageBox.attentionID) && !boxes.map(\.id).contains(G2ImageBox.locationID))
         // Only the blank input box takes the events: the firmware bounces the container that gets a scroll.
         #expect(boxes.map(\.capturesEvents) == [false, false, false, false, true])
-        #expect(boxes.last?.text == "\n")
+        #expect(boxes.last?.text == " ")
         var later = frame
         later.boxes[1].text = "Fri 6 Nov"
         #expect(planner.plan(later) == [.update(id: 10, name: "date", text: "Fri 6 Nov")])

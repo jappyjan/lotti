@@ -36,6 +36,19 @@ export type MailBackendFactory = (app: App, acc: AccountRow) => MailBackend;
 export const defaultMailBackend: MailBackendFactory = (app, acc) =>
   acc.kind === 'google' ? gmailBackend(app, acc) : imapBackend(app, acc);
 
+/** The account's own addresses, lower case: its email and a username that is one. */
+export function ownAddresses(acc: AccountRow): Set<string> {
+  return new Set(
+    [acc.config.email, acc.config.username]
+      .filter((x): x is string => typeof x === 'string' && x.includes('@'))
+      .map((x) => x.trim().toLowerCase()),
+  );
+}
+
+/** "Jan <jan@x.de>" → "jan@x.de". */
+export const addressOf = (from: string): string =>
+  (/<([^>]+)>/.exec(from)?.[1] ?? from).trim().toLowerCase();
+
 export class MergedMail implements MailSource {
   constructor(
     private app: App,
@@ -64,10 +77,16 @@ export class MergedMail implements MailSource {
     return out;
   }
 
+  /** New mail from others: what you sent yourself (Sent, replies to all, a copy to you) is left out. */
   async unread(since: number): Promise<MailMessage[]> {
-    return (await this.each((_a, b) => b.unread(since))).sort(
-      (x, y) => y.receivedAt - x.receivedAt,
-    );
+    return (
+      await this.each(async (acc, b) => {
+        const own = ownAddresses(acc);
+        return (await b.unread(since)).filter(
+          (m) => !own.has(addressOf(m.from)),
+        );
+      })
+    ).sort((x, y) => y.receivedAt - x.receivedAt);
   }
 
   async search(query: string, limit = 10): Promise<MailMessage[]> {
