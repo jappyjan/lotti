@@ -117,6 +117,6 @@ All Nx projects, runnable with `pnpm nx run-many -t build test` on Linux (t3-wor
 
 ## Work coordination
 
-Work runs in parallel T3 threads, each in its own worktree on **t3-worker** (Linux, mostly idle) and each on a branch stacked on `t3/7baf4f0a` (this document). Only the **MacBook Air** can deploy to the iPhone; it is used only for iOS/Swift work and on-device BLE tests. Threads coordinate through this repository: the protocol file is the contract, golden vectors are the shared truth, and each thread updates the milestone table when it lands.
+Work runs in parallel T3 threads, each in its own worktree on **t3-worker** (Linux, mostly idle) and each on a branch stacked on `t3/custom-g2-firmware` (this document, PR #43). Only the **MacBook Air** can deploy to the iPhone; it is used only for iOS/Swift work and on-device BLE tests. Threads coordinate through this repository: the protocol file is the contract, golden vectors are the shared truth, and each thread updates the milestone table when it lands.
 
 Threads never flash glasses. Flashing is a manual step with Jan's go, following [safety.md](safety.md).
