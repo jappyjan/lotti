@@ -320,3 +320,24 @@ test('refresh keeps the old tools until the new set is ready (no "unknown tool" 
   await p;
   assert.ok(t.app.tools.get('mcp__slow__echo'));
 });
+
+test('mcp http: a non-MCP reply gives a readable error without echoing the body', async () => {
+  const t = makeApp({
+    fetch: async () =>
+      new Response('BEGIN:VCALENDAR secret-body', {
+        status: 200,
+        headers: { 'content-type': 'text/calendar' },
+      }),
+  });
+  registerIntegrations(t.app);
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'ics', transport: 'http', url: 'https://mcp.example/cal.ics' },
+      'app',
+    )) as any
+  ).result.id;
+  const r = (await t.app.ops.invoke('mcp.test', { id }, 'app')) as any;
+  assert.match(r.result.error, /did not answer like an MCP server/);
+  assert.ok(!r.result.error.includes('secret-body'));
+});

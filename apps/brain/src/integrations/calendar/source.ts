@@ -197,6 +197,40 @@ function redactUrl(msg: string, url: string): string {
   return out;
 }
 
+/** The body as text, stopping as soon as more than `max` bytes arrive (a huge reply is never held in memory). */
+async function readCapped(res: Response, max: number): Promise<string> {
+  const tooBig = () => new Error('The calendar feed is too big.');
+  if (Number(res.headers.get('content-length')) > max) throw tooBig();
+  if (!res.body) {
+    const text = await res.text();
+    if (text.length > max) throw tooBig();
+    return text;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel().catch(() => undefined);
+      throw tooBig();
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+/** One readable line for a network failure (no raw OpenSSL dumps). */
+function networkReason(cause: Error | undefined): string {
+  const msg = cause?.message ?? '';
+  if (/ssl|tls|certificate/i.test(msg))
+    return ' (secure connection failed: is the link https?)';
+  const line = msg.split('\n')[0]?.trim();
+  return line ? ` (${line})` : '';
+}
+
 /** The feed text, cached 15 minutes per account (and per link: a new link is fetched at once). */
 export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
   const raw = app.secrets.get(`account.${acc.id}.url`);
@@ -216,9 +250,7 @@ export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
     });
     if (!res.ok)
       throw new Error(`The calendar link answered HTTP ${res.status}.`);
-    const text = await res.text();
-    if (text.length > MAX_FEED)
-      throw new Error('The calendar feed is too big.');
+    const text = await readCapped(res, MAX_FEED);
     if (!/BEGIN:VCALENDAR/i.test(text))
       throw new Error('The link did not return a calendar (ICS) feed.');
     m.set(acc.id, { url, at: app.clock.now(), text });
@@ -230,7 +262,7 @@ export async function icsFeed(app: App, acc: AccountRow): Promise<string> {
     throw new Error(
       redactUrl(
         why === 'fetch failed'
-          ? `Cannot reach the calendar server${cause?.message ? ` (${cause.message})` : ''}.`
+          ? `Cannot reach the calendar server${networkReason(cause)}.`
           : why,
         url,
       ),

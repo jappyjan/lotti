@@ -411,3 +411,58 @@ test('ics account: read-only, never the write target', async () => {
     /read-only/,
   );
 });
+
+test('ics account: an oversized feed is refused while streaming, TLS failures stay readable', async () => {
+  // Declared too big: refused from the header alone.
+  const a = await icsApp(
+    () =>
+      new Response('BEGIN:VCALENDAR', {
+        headers: { 'content-length': String(21_000_000) },
+      }),
+  );
+  await a.op('accounts.set_credential', {
+    id: a.id,
+    key: 'url',
+    value: SECRET,
+  });
+  const big = (await a.op('accounts.check', { id: a.id })).result;
+  assert.match(big.error, /too big/);
+
+  // No length header: the stream is cut off after the cap, the rest is never read.
+  let pulled = 0;
+  const chunk = new Uint8Array(1_000_000);
+  const stream = new ReadableStream<Uint8Array>({
+    pull(c) {
+      pulled++;
+      c.enqueue(chunk);
+    },
+  });
+  const b = await icsApp(() => new Response(stream));
+  await b.op('accounts.set_credential', {
+    id: b.id,
+    key: 'url',
+    value: SECRET,
+  });
+  assert.match(
+    (await b.op('accounts.check', { id: b.id })).result.error,
+    /too big/,
+  );
+  assert.ok(pulled < 40, `read ${pulled} chunks`);
+
+  // Raw OpenSSL text is replaced by one readable sentence, still without the link.
+  const c = await icsApp(() => {
+    throw Object.assign(new TypeError('fetch failed'), {
+      cause: new Error(
+        '80E1:error:0A00010B:SSL routines:wrong version number\n',
+      ),
+    });
+  });
+  await c.op('accounts.set_credential', {
+    id: c.id,
+    key: 'url',
+    value: SECRET,
+  });
+  const tls = (await c.op('accounts.check', { id: c.id })).result.error;
+  assert.match(tls, /secure connection failed/);
+  assert.ok(!/openssl|\n/i.test(tls), tls);
+});

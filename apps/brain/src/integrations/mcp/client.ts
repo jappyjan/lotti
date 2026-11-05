@@ -189,7 +189,15 @@ class HttpSession implements Session {
             return [];
           }
         })
-      : [JSON.parse(text)].flat();
+      : (() => {
+          try {
+            return [JSON.parse(text)].flat();
+          } catch {
+            throw new Error(
+              'The server did not answer like an MCP server (the reply is not JSON).',
+            );
+          }
+        })();
     const m = msgs.find((x) => x.id === expectId);
     if (!m) throw new Error('MCP server sent no response.');
     if (m.error) throw new Error(m.error.message ?? 'MCP error');
