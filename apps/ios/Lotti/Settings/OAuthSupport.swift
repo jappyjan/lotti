@@ -14,7 +14,8 @@ struct OAuthCallback: Equatable {
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         code = value("code")
         state = value("state")
-        error = value("error_description") ?? value("error")
+        // The description when there is one, else the bare code ("access_denied" reads as "access denied").
+        error = value("error_description") ?? value("error")?.replacingOccurrences(of: "_", with: " ")
         if code == nil && error == nil { return nil }
     }
 }

@@ -8,7 +8,7 @@ struct McpView: View {
     @State private var adding = false
 
     var body: some View {
-        Loaded(load: { model in try await model.call("mcp.list").items.compactMap(McpServer.init) }) { servers, reload in
+        Loaded(load: Self.load) { servers, reload in
             List {
                 Section {
                     if servers.isEmpty { Text("No MCP servers.").foregroundStyle(.secondary) }
@@ -30,6 +30,20 @@ struct McpView: View {
             }
         }
         .navigationTitle("MCP servers")
+    }
+}
+
+extension McpView {
+    /// The servers. One that was just added has no status until the brain's first connection check
+    /// finishes, so ask again shortly (at most three more times) instead of showing "On".
+    @MainActor static func load(_ model: AppModel) async throws -> [McpServer] {
+        func fetch() async throws -> [McpServer] { try await model.call("mcp.list").items.compactMap(McpServer.init) }
+        var servers = try await fetch()
+        for _ in 0..<3 where servers.contains(where: { $0.enabled && $0.status == nil }) {
+            try? await Task.sleep(for: .seconds(1.5))
+            servers = try await fetch()
+        }
+        return servers
     }
 }
 

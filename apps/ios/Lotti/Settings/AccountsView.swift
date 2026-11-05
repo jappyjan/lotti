@@ -83,6 +83,9 @@ enum AccountKind: String, Identifiable, CaseIterable {
         }
     }
 
+    /// The account's name when the user leaves the name empty ("Add ICS calendar" is an action, not a name).
+    var defaultName: String { self == .ics ? "ICS calendar" : title }
+
     var icon: String {
         switch self {
         case .google: "g.circle"
@@ -177,11 +180,12 @@ struct AddAccountView: View {
     @State private var error: String?
     @State private var saving = false
     @State private var checked: String?
+    @State private var checkFailed = false
 
     var body: some View {
         Form {
             Section {
-                TextField("Name", text: $label, prompt: Text(kind.title))
+                TextField("Name", text: $label, prompt: Text(kind.defaultName))
                 if kind == .ics {
                     SecretField(title: "Secret calendar link", text: $password)
                 } else {
@@ -213,7 +217,7 @@ struct AddAccountView: View {
             }
         }
         .errorAlert($error)
-        .alert("Calendar added", isPresented: Binding(get: { checked != nil }, set: { if !$0 { checked = nil; dismiss() } })) {
+        .alert(checkFailed ? "Added, but the link does not work" : "Calendar added", isPresented: Binding(get: { checked != nil }, set: { if !$0 { checked = nil; dismiss() } })) {
             Button("OK") {}
         } message: {
             Text(checked ?? "")
@@ -237,7 +241,7 @@ struct AddAccountView: View {
         Task {
             defer { saving = false }
             await attempt($error) {
-                let added = try await model.call("accounts.add", ["kind": .string(kind.rawValue), "label": .string(label.isEmpty ? kind.title : label),
+                let added = try await model.call("accounts.add", ["kind": .string(kind.rawValue), "label": .string(label.isEmpty ? kind.defaultName : label),
                                                                   "config": .object(config)])
                 guard let id = added.text("id") else { throw BackendError.badResponse }
                 _ = try await model.call("accounts.set_credential", ["id": .string(id), "key": .string(kind == .ics ? "url" : "password"), "value": .string(password)])
@@ -245,6 +249,7 @@ struct AddAccountView: View {
                 await done()
                 if kind == .ics {
                     // "N events" when the link works, else why not (the account stays, fix the link in its details).
+                    checkFailed = result?.text("detail") == nil
                     checked = result?.text("detail") ?? result?.text("error") ?? "Added."
                 } else {
                     dismiss()

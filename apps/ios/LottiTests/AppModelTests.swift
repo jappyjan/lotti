@@ -185,7 +185,8 @@ struct BackendStoreTests {
     @Test func readsTheOAuthReturn() throws {
         let ok = try #require(OAuthCallback(URL(string: "lotti://oauth?code=c1&state=s1")!))
         #expect(ok.code == "c1" && ok.state == "s1" && ok.error == nil)
-        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied")!)?.error == "access_denied")
+        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied")!)?.error == "access denied")
+        #expect(OAuthCallback(URL(string: "lotti://oauth?error=access_denied&error_description=No%20thanks")!)?.error == "No thanks")
         #expect(OAuthCallback(URL(string: "lotti://oauth")!) == nil)
     }
 
@@ -222,6 +223,9 @@ struct BackendStoreTests {
     @Test func offersIcsCalendars() {
         #expect(AccountKind.allCases.contains(.ics))
         #expect(AccountKind.ics.title == "Add ICS calendar")
+        // An account left unnamed is not called after the action that created it.
+        #expect(AccountKind.ics.defaultName == "ICS calendar")
+        #expect(AccountKind.imap.defaultName == AccountKind.imap.title)
     }
 
     @Test func readsACodexDeviceLogin() throws {
