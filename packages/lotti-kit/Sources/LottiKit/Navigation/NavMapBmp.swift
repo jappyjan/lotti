@@ -43,6 +43,26 @@ public enum NavMapBmp {
         return Self.compressed(bmp)
     }
 
+    /// A 1-bit picture for an image container: a 16-step gray palette (index = brightness) with
+    /// lit pixels at 15, so they're as bright as text. The map palette's green came out dimmer
+    /// than the text next to it (seen 2026-11-05).
+    public static func encode(_ bitmap: MonoBitmap) -> (data: [UInt8], mode: Compression)? {
+        guard bitmap.width > 0, bitmap.height > 0 else { return nil }
+        return compressed(grayFile(bitmap))
+    }
+
+    /// The uncompressed BMP for `encode(_:)`.
+    static func grayFile(_ bitmap: MonoBitmap) -> [UInt8] {
+        var bmp = file(pixels: bitmap.pixels.map { $0 ? 15 : 0 }, width: bitmap.width, height: bitmap.height)
+        putLE32(&bmp, 46, 16)
+        putLE32(&bmp, 50, 16)
+        for level in 0..<16 {
+            let v = UInt32(level * 17)
+            putLE32(&bmp, 54 + level * 4, v | v << 8 | v << 16)
+        }
+        return bmp
+    }
+
     /// The app's `_classifyPaletteIndex`: alpha or brightness too low → off; saturated green
     /// (hue 70–170°) → road; saturated red (hue < 25° or ≥ 335°) → route; anything else off.
     static func classify(r: UInt8, g: UInt8, b: UInt8, a: UInt8) -> UInt8 {

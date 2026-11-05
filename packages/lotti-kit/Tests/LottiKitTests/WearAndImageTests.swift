@@ -109,12 +109,17 @@ struct ImageContainerTests {
         #expect(Set(messages.map { ProtoReader.varintFields($0)[2] }).count == 3)  // one magic each
     }
 
-    @Test func aBitmapEncodesLikeTheNavMaps() throws {
+    @Test func aBitmapEncodesAsFullBrightGray() throws {
         let bitmap = BuiltInIndicatorIcons().icon(.mail)!
         let box = try #require(G2ImageBox(id: 3, name: "attention", x: 1, y: 2, bitmap: bitmap))
-        let expected = try #require(NavMapBmp.encode(rgba: bitmap.rgba(), width: 24, height: 24))
+        let expected = try #require(NavMapBmp.encode(bitmap))
         #expect(box.data == expected.data && box.compression == expected.mode)
         #expect(box.width == 24 && box.height == 24)
+        // Raw form: 16 gray palette entries, the last one white; lit pixels use it.
+        let bmp = NavMapBmp.grayFile(MonoBitmap(width: 2, height: 2, pixels: [true, true, true, true]))
+        #expect(bmp[46] == 16)
+        #expect(Array(bmp[(54 + 15 * 4)..<(54 + 15 * 4 + 3)]) == [255, 255, 255])
+        #expect(bmp[118] == 0xFF)
     }
 
     // MARK: Planner

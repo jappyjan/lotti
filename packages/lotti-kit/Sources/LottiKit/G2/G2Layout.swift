@@ -38,7 +38,6 @@ public struct G2TextBox: Equatable, Sendable {
     public var text: String
 
     public static let mainID = 1
-    public static let railID = 2
     /// Header and card boxes start here: the indicator images own ids 3 and 4.
     public static let firstExtraID = 10
 
@@ -53,22 +52,21 @@ public struct G2TextBox: Equatable, Sendable {
         self.text = text
     }
 
-    /// The containers for a frame. The main box is id 1 and takes the events, the choices block
-    /// (`rail`) is id 2, everything else counts up from `firstExtraID`.
+    /// The text containers for a frame. The main box is id 1, everything else counts up from
+    /// `firstExtraID`. The main box takes the events unless the frame has a list of choices
+    /// (`G2ListBox`), which then takes them.
     static func boxes(for frame: GlassesFrame) -> [G2TextBox] {
         var next = firstExtraID
         return frame.boxes.prefix(G2Layout.maxTextBoxes).enumerated().map { index, box in
             let id: Int
             if index == 0 {
                 id = mainID
-            } else if box.name == "rail" {
-                id = railID
             } else {
                 id = next
                 next += 1
             }
             return G2TextBox(id: id, name: String(box.name.prefix(14)), x: box.x, y: box.y, width: box.width,
-                             height: box.height, capturesEvents: index == 0,
+                             height: box.height, capturesEvents: index == 0 && frame.list == nil,
                              text: box.text.isEmpty ? G2Layout.blank : box.text)
         }
     }
@@ -78,6 +76,37 @@ public struct G2TextBox: Equatable, Sendable {
         var shape = self
         shape.text = ""
         return shape
+    }
+}
+
+/// The list of choices: the firmware's own list container (`ListContainerProperty`). The glasses
+/// draw a border around the selected item, move it when you scroll (no redraw, nothing bounces)
+/// and report a pick with the item's index. It takes the events.
+public struct G2ListBox: Equatable, Sendable {
+    public var id: Int
+    public var name: String
+    public var x: Int
+    public var y: Int
+    public var width: Int
+    public var height: Int
+    public var items: [String]
+
+    /// Text containers use 1 and 10+, the indicators 3 and 4.
+    public static let id = 2
+
+    public init(id: Int = Self.id, name: String, x: Int, y: Int, width: Int, height: Int, items: [String]) {
+        self.id = id
+        self.name = name
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.items = items
+    }
+
+    init(_ list: FrameList) {
+        self.init(name: String(list.name.prefix(14)), x: list.x, y: list.y, width: list.width, height: list.height,
+                  items: list.items)
     }
 }
 
@@ -115,9 +144,9 @@ public struct G2ImageBox: Equatable, Sendable {
         self.compression = compression
     }
 
-    /// Encodes a monochrome bitmap (lit pixels green, the rest off) as a container at (x, y).
+    /// Encodes a monochrome bitmap (lit pixels full brightness, the rest off) as a container at (x, y).
     public init?(id: Int, name: String, x: Int, y: Int, bitmap: MonoBitmap) {
-        guard let encoded = NavMapBmp.encode(rgba: bitmap.rgba(), width: bitmap.width, height: bitmap.height) else { return nil }
+        guard let encoded = NavMapBmp.encode(bitmap) else { return nil }
         self.init(id: id, name: name, x: x, y: y, width: bitmap.width, height: bitmap.height,
                   data: encoded.data, compression: encoded.mode)
     }
@@ -136,8 +165,8 @@ public struct G2ImageBox: Equatable, Sendable {
 /// - Other containers, or the page state is unknown after a failure: Cmd 7 RebuildPage.
 public struct G2PagePlanner: Equatable, Sendable {
     public enum Command: Equatable, Sendable {
-        case create([G2TextBox], images: [G2ImageBox] = [])
-        case rebuild([G2TextBox], images: [G2ImageBox] = [])
+        case create([G2TextBox], list: G2ListBox? = nil, images: [G2ImageBox] = [])
+        case rebuild([G2TextBox], list: G2ListBox? = nil, images: [G2ImageBox] = [])
         case update(id: Int, name: String, text: String)
         /// Upload an image container's pixels. Always follows the create or rebuild that made the
         /// container, or comes alone when only the pixels changed.
@@ -147,7 +176,8 @@ public struct G2PagePlanner: Equatable, Sendable {
     private enum State: Equatable, Sendable {
         /// No page yet this session.
         case none
-        case live(shape: [G2TextBox], texts: [Int: String], images: [G2ImageBox])
+        /// The list goes in whole: changing its items needs a rebuild.
+        case live(shape: [G2TextBox], list: G2ListBox?, texts: [Int: String], images: [G2ImageBox])
         /// A page exists, but we don't know what it shows (a send failed).
         case unknown
     }
@@ -161,7 +191,7 @@ public struct G2PagePlanner: Equatable, Sendable {
 
     /// The text containers on the page now, without their text.
     public var shape: [G2TextBox]? {
-        if case .live(let shape, _, _) = state { return shape }
+        if case .live(let shape, _, _, _) = state { return shape }
         return nil
     }
 
@@ -172,21 +202,22 @@ public struct G2PagePlanner: Equatable, Sendable {
         let shape = boxes.map(\.geometry)
         let texts = Dictionary(uniqueKeysWithValues: boxes.map { ($0.id, $0.text) })
 
+        let list = frame.list.map(G2ListBox.init)
         let images = frame.images
         let commands: [Command]
         switch state {
         case .none:
-            commands = [.create(boxes, images: images)] + images.map { .uploadImage($0) }
-        case .live(let current, let shown, let shownImages)
-            where current == shape && Self.sameImageGeometry(shownImages, images):
+            commands = [.create(boxes, list: list, images: images)] + images.map { .uploadImage($0) }
+        case .live(let current, let shownList, let shown, let shownImages)
+            where current == shape && shownList == list && Self.sameImageGeometry(shownImages, images):
             commands = boxes.filter { shown[$0.id] != $0.text }
                 .map { .update(id: $0.id, name: $0.name, text: $0.text) }
                 + images.filter { image in shownImages.first { $0.id == image.id }?.data != image.data }
                 .map { .uploadImage($0) }
         case .live, .unknown:
-            commands = [.rebuild(boxes, images: images)] + images.map { .uploadImage($0) }
+            commands = [.rebuild(boxes, list: list, images: images)] + images.map { .uploadImage($0) }
         }
-        state = .live(shape: shape, texts: texts, images: images)
+        state = .live(shape: shape, list: list, texts: texts, images: images)
         return commands
     }
 

@@ -82,42 +82,63 @@ public struct FrameBox: Equatable, Sendable {
     }
 }
 
-/// What the display shows: text boxes, already laid out by `ScreenRenderer`; the link only draws
-/// them. The first box is the main one (Lotti's sentence; it takes the touch events); `rail` is
-/// the block of choices under it. Black is invisible on the lens, so `.dark` (empty text) turns
-/// the display off without ending the session.
+/// The choices, as the firmware's own list: the glasses draw the selection, move it when you
+/// scroll and say which item you picked. Nothing is redrawn while you scroll.
+public struct FrameList: Equatable, Sendable {
+    public var name: String
+    public var x: Int
+    public var y: Int
+    public var width: Int
+    public var height: Int
+    public var items: [String]
+
+    public init(_ name: String = "rail", x: Int, y: Int, width: Int, height: Int, items: [String]) {
+        self.name = name
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.items = items
+    }
+}
+
+/// What the display shows: text boxes and the list of choices, already laid out by
+/// `ScreenRenderer`; the link only draws them. The first box is the main one (Lotti's sentence);
+/// `list` holds the choices under it and takes the touch events (without choices the main box
+/// takes them). Black is invisible on the lens, so `.dark` (empty text) turns the display off
+/// without ending the session.
 public struct GlassesFrame: Equatable, Sendable {
     public var boxes: [FrameBox]
+    public var list: FrameList?
     /// Small image containers (the attention and location indicators) drawn over the page.
     /// They don't count for `isDark`: a dark frame with an indicator is the "display off" state.
     public var images: [G2ImageBox]
 
-    public init(boxes: [FrameBox], images: [G2ImageBox] = []) {
+    public init(boxes: [FrameBox], list: FrameList? = nil, images: [G2ImageBox] = []) {
         self.boxes = boxes
+        self.list = list.flatMap { $0.items.isEmpty ? nil : $0 }
         self.images = images
     }
 
-    /// Lotti's text across the display, with the choices block underneath if there is one.
-    public init(main: String, rail: String? = nil, images: [G2ImageBox] = []) {
-        var boxes = [FrameBox("main", x: 0, y: 0, width: G2Layout.width,
-                              height: rail == nil ? G2Layout.height : G2Layout.choicesY, text: main)]
-        if let rail {
-            boxes.append(FrameBox("rail", x: 0, y: G2Layout.choicesY, width: G2Layout.width,
-                                  height: G2Layout.height - G2Layout.choicesY, text: rail))
-        }
-        self.init(boxes: boxes, images: images)
+    /// Lotti's text across the display, with the choices underneath if there are any.
+    public init(main: String, choices: [String] = [], images: [G2ImageBox] = []) {
+        let boxes = [FrameBox("main", x: 0, y: 0, width: G2Layout.width,
+                              height: choices.isEmpty ? G2Layout.height : G2Layout.choicesY, text: main)]
+        let list = FrameList(x: 0, y: G2Layout.choicesY, width: G2Layout.width,
+                             height: G2Layout.height - G2Layout.choicesY, items: choices)
+        self.init(boxes: boxes, list: list, images: images)
     }
 
     public static let dark = GlassesFrame(main: "")
-    public var isDark: Bool { boxes.allSatisfy(\.text.isEmpty) }
+    public var isDark: Bool { boxes.allSatisfy(\.text.isEmpty) && list == nil }
 
     /// The main box's text.
     public var main: String { boxes.first?.text ?? "" }
-    /// The choices block's text, if there are choices.
-    public var rail: String? { self["rail"] }
+    /// The choices, one per line, if there are any.
+    public var rail: String? { list?.items.joined(separator: "\n") }
     public subscript(name: String) -> String? { boxes.first { $0.name == name }?.text }
-    /// Every box's text, top to bottom, for logs and tests.
-    public var allText: String { boxes.map(\.text).joined(separator: "\n") }
+    /// Every box's text and the choices, top to bottom, for logs and tests.
+    public var allText: String { (boxes.map(\.text) + (list?.items ?? [])).joined(separator: "\n") }
 }
 
 /// The connection to a pair of smart glasses. The app talks only to this, so other glasses can

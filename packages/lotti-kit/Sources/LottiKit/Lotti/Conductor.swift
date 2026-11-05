@@ -258,7 +258,7 @@ public final class Conductor {
         case .longPressEnd: if mode == .listening { stopListening() }
         case .headUp: if mode == .off { showToday(byHead: true) }
         case .headDown: if mode == .today(byHead: true) { turnOff() }
-        case .tap: tap()
+        case .tap: tap(item: event.item)
         case .doubleTap where mode == .alert: if let alertFor { stopTimer(alertFor) }
         case .doubleTap where mode == .off: showToday(byHead: false)
         case .doubleTap: back()
@@ -267,11 +267,14 @@ public final class Conductor {
         }
     }
 
-    private func tap() {
+    /// `item` is the choice the glasses had selected, when the tap came from the list of choices.
+    private func tap(item index: Int? = nil) {
         switch mode {
         case .off, .done: break  // a single tap alone does nothing; a double tap opens today
         case .today, .showing, .alert:
-            guard let item = screen?.rail?.current else { return restartIdleTimer() }
+            guard let rail = screen?.rail else { return restartIdleTimer() }
+            let item = index.flatMap { rail.items.indices.contains($0) ? rail.items[$0] : nil } ?? rail.current
+            guard let item else { return restartIdleTimer() }
             pick(item.action)
         case .listening, .working: break
         }
@@ -292,13 +295,16 @@ public final class Conductor {
         }
     }
 
+    /// The glasses move the selection in the list of choices themselves; this only follows it
+    /// (for a tap that doesn't say which item) and keeps the screen open. Nothing is redrawn.
     private func moveHighlight(down: Bool) {
         guard var current = screen, var rail = current.rail else { return }
         if down { rail.moveDown() } else { rail.moveUp() }
         current.rail = rail
+        screen = current
         // Scrolling a head-up today view keeps it open like a touched one.
         if case .today = mode { mode = .today(byHead: false) }
-        show(current)
+        restartIdleTimer()
     }
 
     private func pick(_ action: RailAction) {
@@ -677,7 +683,7 @@ public final class Conductor {
         var frame = screen.map(renderer.render) ?? .dark
         let key = IndicatorKey(
             state: IndicatorState(attention: inbox.pendingCounts(at: now()), locationActive: locationActive),
-            attention: screen == nil, location: frame.boxes.count == 1)
+            attention: screen == nil, location: frame.boxes.count == 1 && frame.list == nil)
         if indicatorCache?.key != key {
             indicatorCache = (key, indicators.images(for: key.state, showAttention: key.attention, showLocation: key.location))
         }

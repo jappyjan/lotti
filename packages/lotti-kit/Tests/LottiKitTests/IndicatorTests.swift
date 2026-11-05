@@ -69,11 +69,11 @@ struct IndicatorRendererTests {
         #expect(many.width < 288)  // Even Hub images are at most 288 px wide
     }
 
-    @Test func theImageIsTheNavMapEncoding() throws {
+    @Test func theImageIsTheGrayEncoding() throws {
         let state = IndicatorState(attention: [IndicatorCount(kind: .mail, count: 3)])
         let box = try #require(renderer.images(for: state, showAttention: true, showLocation: false).first)
         let bitmap = try #require(renderer.attentionBitmap(state.attention))
-        let expected = try #require(NavMapBmp.encode(rgba: bitmap.rgba(), width: bitmap.width, height: bitmap.height))
+        let expected = try #require(NavMapBmp.encode(bitmap))
         #expect(box.data == expected.data && box.compression == expected.mode)
         // LZ4 wins on such a flat picture; the raw form is a full BMP of the same size.
         #expect(box.compression == .lz4)

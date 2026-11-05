@@ -40,10 +40,12 @@ struct ScreenRendererTests {
         #expect(frame == GlassesFrame(main: "Mara asks if you are\nstill coming"))
     }
 
-    @Test func choicesMarkTheHighlight() {
+    @Test func choicesAreTheListsItems() {
+        // The glasses draw the selection: no marker, and moving it changes nothing on the page.
         let rail = Rail([RailItem("On my way to you now", .dismiss), RailItem("Late", .dismiss)], highlighted: 1)
         let frame = renderer.render(Screen(.says, "Hi", rail: rail))
-        #expect(frame.rail == "  On my way to you …\n> Late")
+        #expect(frame.list?.items == ["On my way to you …", "Late"])
+        #expect(frame == renderer.render(Screen(.says, "Hi", rail: Rail(rail.items))))
     }
 
     @Test func detailsGoBelowABlankLine() {
@@ -72,15 +74,15 @@ struct ScreenRendererTests {
     @Test func choicesSitBelowAcrossTheFullWidth() {
         let rail = Rail([RailItem("On my way", .dismiss), RailItem("Running late", .dismiss)])
         let frame = ScreenRenderer().render(Screen(.says, "Mara asks if you are still coming", rail: rail))
-        #expect(frame == GlassesFrame(main: "Mara asks if you are still coming", rail: "> On my way\n  Running late"))
-        #expect(frame.boxes[1].y == G2Layout.choicesY && frame.boxes[1].width == G2Layout.width)
+        #expect(frame == GlassesFrame(main: "Mara asks if you are still coming", choices: ["On my way", "Running late"]))
+        #expect(frame.list?.y == G2Layout.choicesY && frame.list?.width == G2Layout.width)
     }
 
     @Test func theSentenceAboveChoicesGetsSixLines() {
         let text = Array(repeating: "word", count: 60).joined(separator: " ")
         let frame = ScreenRenderer().render(Screen(.says, text, rail: Rail([RailItem("Yes", .dismiss)])))
         #expect(frame.main.components(separatedBy: "\n").count == 6)
-        #expect(frame.rail == "> Yes")
+        #expect(frame.rail == "Yes")
     }
 
     // MARK: Header and cards
@@ -92,11 +94,11 @@ struct ScreenRendererTests {
 
     @Test func headerSentenceCardsAndChoicesStackUp() {
         let frame = ScreenRenderer().render(today)
-        #expect(frame.boxes.map(\.name) == ["main", "date", "card1", "card2", "rail"])
+        #expect(frame.boxes.map(\.name) == ["main", "date", "card1", "card2"])
         #expect(frame.main == "Dentist in 25 min.\n\n+2 more today")
         #expect(frame["card1"] == "Pasta\n4 min left\nRings 14:09")
-        #expect(frame.rail == "> Agenda\n  Weather")
-        let main = frame.boxes[0], date = frame.boxes[1], card1 = frame.boxes[2], card2 = frame.boxes[3], choices = frame.boxes[4]
+        #expect(frame.rail == "Agenda\nWeather")
+        let main = frame.boxes[0], date = frame.boxes[1], card1 = frame.boxes[2], card2 = frame.boxes[3], choices = frame.list!
         #expect(card1.y >= main.y + main.height)
         #expect(card2.x > card1.x + card1.width && card2.x + card2.width <= G2Layout.width)
         // Two choices take two lines at the bottom, not the fixed four-line block.
@@ -150,7 +152,7 @@ struct ScreenRendererTests {
         let frame = ScreenRenderer().render(Screen(.says, "Time's up: Pasta", icon: .bell, rail: Rail([RailItem("Stop", .dismiss)])))
         #expect(frame.images.map(\.name) == ["icon"])
         #expect(frame.boxes[0].x > frame.images[0].x + frame.images[0].width)
-        #expect(frame.rail == "> Stop")
+        #expect(frame.rail == "Stop")
     }
 
     @Test func cardLinesAreCutNotWrapped() {
@@ -177,11 +179,13 @@ struct ScreenRendererTests {
         #expect(narrowLit.min()! >= 0 && narrowLit.max()! < width)
     }
 
-    @Test func atMostTwelveContainers() {
+    @Test func atMostFourPictures() {
+        // The glasses reject a page with more than four image containers.
         let many = Screen(.says, "x", header: Header("Thu", right: "14:05"),
                           cards: (1...5).map { Card("\($0)", art: .icon(.sun)) }, rail: Rail([RailItem("A", .dismiss)]))
         let frame = ScreenRenderer().render(many)
-        #expect(frame.boxes.count + frame.images.count == 12)
+        #expect(frame.images.count == ScreenRenderer.maxImages)
+        #expect(frame.boxes.count + frame.images.count <= 12)
     }
 
     @Test func iconsAreDrawn() {
@@ -257,9 +261,9 @@ struct TodayComposerTests {
         let weather = Weather(temperature: 12, condition: "cloudy", high: 14, low: 7, days: days)
         let screen = composer.forecast(weather, now: at(9))
         #expect(screen.text == "12° and cloudy, between 7° and 14° today.")
-        #expect(screen.cards.count == 5)
-        #expect(screen.cards[0] == Card("Today", ["Rain 80%"], art: .day(.rain, low: 5, high: 10, range: 5...14)))
-        #expect(screen.cards[1] == Card("Mon", art: .day(.rain, low: 5, high: 11, range: 5...14)))
+        #expect(screen.cards.count == 4)  // one picture each, and a page takes four
+        #expect(screen.cards[0] == Card("Today", ["Rain 80%"], art: .day(.rain, low: 5, high: 10, range: 5...13)))
+        #expect(screen.cards[1] == Card("Mon", art: .day(.rain, low: 5, high: 11, range: 5...13)))
         let today = composer.screen(for: TodayInfo(now: at(9), weather: weather))
         #expect(today.rail?.items.last?.action == .show(screen))
     }
