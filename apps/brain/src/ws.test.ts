@@ -296,11 +296,23 @@ test('perform runs a proposed server action once; undo reverts; wrong ids fail c
     const ans = await c.waitFor((m) => m.type === 'answer');
     assert.equal(ans.actions[0].target, 'server');
     assert.equal(created.length, 0, 'not executed by the proposal');
+    // The tool's own output goes to the model; the user gets the model's words.
+    t.mock.script(answer('Der Zahnarzt-Termin steht im Kalender.'));
     c.send({ type: 'perform', id: 'r1', actionId: ans.actions[0].id });
     const done1 = await c.waitFor(
       (m) => m.type === 'performed' && m.id === 'r1',
     );
-    assert.deepEqual([done1.ok, done1.text], [true, 'Termin angelegt']);
+    assert.deepEqual(
+      [done1.ok, done1.text, done1.result],
+      [true, 'Der Zahnarzt-Termin steht im Kalender.', 'Termin angelegt'],
+    );
+    const report = t.mock.calls.at(-1)!.messages.at(-1) as any;
+    assert.match(report.content, /Zahnarzt/);
+    assert.match(report.content, /<result>\nTermin angelegt\n<\/result>/);
+    assert.equal(
+      t.app.conversations.turns(t.app.conversations.current().id).at(-1)!.text,
+      'Der Zahnarzt-Termin steht im Kalender.',
+    );
     assert.equal(created.length, 1);
     assert.equal(done1.undo.label, 'Termin löschen');
     c.send({ type: 'perform', id: 'r2', actionId: ans.actions[0].id });
@@ -527,6 +539,58 @@ test('ask: a status frame arrives at once, before conversation maintenance finis
     assert.equal(ans.text, 'Hallo.');
     assert.ok(Date.now() - t0 < 9000, 'maintenance wait is bounded');
     release();
+    await c.close();
+  } finally {
+    await done();
+  }
+});
+
+test('perform: when the model cannot word the result, a plain line stands in (raw output only on failure)', async () => {
+  const { t, srv, token, done } = await setup();
+  try {
+    const c = await WsClient.connect(srv, token);
+    let ok = true;
+    t.app.integrations.calendar = {
+      events: async () => [],
+      createEvent: async () =>
+        ok
+          ? { ok: true, text: '{"raw":"json"}' }
+          : { ok: false, text: 'HA said no' },
+    };
+    const propose = async (id: string) => {
+      t.mock.script(
+        call('create_calendar_event', {
+          title: 'X',
+          start: '2026-11-04T10:00:00+01:00',
+          end: '2026-11-04T11:00:00+01:00',
+        }),
+        answer('Soll ich?'),
+      );
+      c.send({
+        type: 'ask',
+        id,
+        text: 'Termin',
+        channel: 'phone',
+        now: new Date().toISOString(),
+        locale: 'de',
+      });
+      return (await c.waitFor((m) => m.type === 'answer' && m.id === id))
+        .actions[0].id;
+    };
+    const boom = () => {
+      throw new Error('provider down');
+    };
+    const a1 = await propose('b1');
+    t.mock.script(boom);
+    c.send({ type: 'perform', id: 'p1', actionId: a1 });
+    const a = await c.waitFor((m) => m.type === 'performed' && m.id === 'p1');
+    assert.deepEqual([a.ok, a.text], [true, 'Erledigt.']);
+    ok = false;
+    const a2 = await propose('b2');
+    t.mock.script(boom);
+    c.send({ type: 'perform', id: 'p2', actionId: a2 });
+    const b = await c.waitFor((m) => m.type === 'performed' && m.id === 'p2');
+    assert.deepEqual([b.ok, b.text], [false, 'Hat nicht geklappt: HA said no']);
     await c.close();
   } finally {
     await done();

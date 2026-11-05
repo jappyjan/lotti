@@ -12,6 +12,9 @@ export function proposeAction(
 ): string {
   const p = ctx.app.actions.propose(a);
   ctx.run.actions.push(p);
+  ctx.app.log.info(
+    `proposed ${p.id} ${p.tool ?? ''} "${p.title}" (ask ${ctx.run.askId ?? 'none'})`,
+  );
   return `Proposed "${p.title}". Nothing has happened yet: the user must tap to confirm. Tell them briefly what you proposed.`;
 }
 

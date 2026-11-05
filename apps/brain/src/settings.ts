@@ -5,12 +5,24 @@ export interface SettingDef {
   description: string;
   /** Safety settings change what the agent may do: setting them is a `tap` op for the agent. */
   safety?: boolean;
-  /** A whole number in this range; settings.set refuses anything else. */
-  int?: { min: number; max: number };
+  /** Number settings: allowed range (inclusive), `int` for whole numbers only. */
+  min?: number;
+  max?: number;
+  int?: boolean;
+  /** String settings: `pattern` the whole value must match, `format` says so in an error. */
+  pattern?: RegExp;
+  format?: string;
 }
 
+const HHMM = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
 export const SETTING_DEFS: Record<string, SettingDef> = {
-  'user.name': { default: 'Jan', description: 'How Lotti addresses you' },
+  'user.name': {
+    default: 'Jan',
+    description: 'How Lotti addresses you',
+    pattern: /^\S.{0,39}$/,
+    format: '1 to 40 characters, not starting with a space',
+  },
   'provider.active': {
     default: 'deepseek',
     description: 'Active model provider id',
@@ -59,10 +71,16 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: 8,
     description: 'Max tool rounds per question',
     safety: true,
+    min: 1,
+    max: 30,
+    int: true,
   },
   'agent.silence_timeout_sec': {
     default: 60,
     description: 'Give up when the model is silent this long',
+    min: 1,
+    max: 600,
+    int: true,
   },
   'agent.op_tool_groups': {
     default: [
@@ -85,14 +103,23 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'conversation.compact_idle_min': {
     default: 10,
     description: 'Compact the conversation after this idle time',
+    min: 1,
+    max: 1440,
+    int: true,
   },
   'conversation.new_idle_min': {
     default: 60,
     description: 'Start a new conversation after this idle time',
+    min: 1,
+    max: 10080,
+    int: true,
   },
   'conversation.keep_recent_turns': {
     default: 6,
     description: 'Turns kept verbatim when compacting',
+    min: 0,
+    max: 50,
+    int: true,
   },
   'shell.enabled': {
     default: true,
@@ -103,11 +130,17 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     default: 30,
     description: 'Shell command timeout',
     safety: true,
+    min: 1,
+    max: 600,
+    int: true,
   },
   'shell.max_output_chars': {
     default: 20000,
     description: 'Shell output cap',
     safety: true,
+    min: 100,
+    max: 200000,
+    int: true,
   },
   'web_fetch.enabled': {
     default: true,
@@ -126,18 +159,26 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'catchup.away_hours': {
     default: 2,
     description: 'Away this long without presence = return',
+    min: 0.1,
+    max: 72,
   },
   'catchup.night_start': {
     default: '22:00',
     description: 'Night window start (HH:MM)',
+    pattern: HHMM,
+    format: 'HH:MM, 00:00 to 23:59',
   },
   'catchup.night_end': {
     default: '09:00',
     description: 'Night window end (HH:MM)',
+    pattern: HHMM,
+    format: 'HH:MM, 00:00 to 23:59',
   },
   'catchup.sleep_min_hours': {
     default: 4,
     description: 'Night overlap that counts as slept',
+    min: 0,
+    max: 24,
   },
   'catchup.use_weather': {
     default: true,
@@ -146,16 +187,23 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
   'inbox.default_expiry_hours': {
     default: 72,
     description: 'Inbox items expire after this (0 = never)',
+    min: 0,
+    max: 8760,
   },
   'memory.stale_days': {
     default: 180,
     description: 'Dreaming drops memories unused this long',
+    min: 1,
+    max: 3650,
+    int: true,
   },
   'dreaming.enabled': { default: true, description: 'Nightly dreaming' },
   'jobs.meeting_soon.lead_min': {
     default: 10,
     description: 'Meeting soon: minutes before an event it shows up',
-    int: { min: 1, max: 1440 },
+    min: 1,
+    max: 1440,
+    int: true,
   },
 };
 
@@ -183,7 +231,8 @@ export class SettingsService {
     return String(this.get(key) ?? '');
   }
 
-  set(key: string, value: unknown): void {
+  /** Throws unless `value` is allowed for `key`; `set` checks too, this lets a batch check first. */
+  check(key: string, value: unknown): void {
     const def = SETTING_DEFS[key];
     if (!def) throw new Error(`Unknown setting: ${key}`);
     if (
@@ -194,6 +243,25 @@ export class SettingsService {
         `Setting ${key} expects ${Array.isArray(def.default) ? 'array' : typeof def.default}`,
       );
     }
+    if (typeof value === 'number') {
+      if (
+        !Number.isFinite(value) ||
+        (def.int && !Number.isInteger(value)) ||
+        (def.min !== undefined && value < def.min) ||
+        (def.max !== undefined && value > def.max)
+      )
+        throw new Error(
+          `Setting ${key} must be a ${def.int ? 'whole number' : 'number'} from ${def.min ?? '-∞'} to ${def.max ?? '∞'}`,
+        );
+    }
+    if (typeof value === 'string' && def.pattern && !def.pattern.test(value))
+      throw new Error(
+        `Setting ${key} has the wrong format${def.format ? `: ${def.format}` : ''}`,
+      );
+  }
+
+  set(key: string, value: unknown): void {
+    this.check(key, value);
     this.app.db.run(
       `INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
       'setting:' + key,
@@ -228,6 +296,13 @@ export class SettingsService {
   notePhoneOffset(offsetMin: number): void {
     if (this.kvGet('phone.utc_offset_min') !== String(offsetMin))
       this.kvSet('phone.utc_offset_min', String(offsetMin));
+  }
+  /** The language of the phone's last ask; actions confirmed from the inbox have no ask of their own. */
+  noteLocale(locale: 'de' | 'en'): void {
+    if (this.kvGet('phone.locale') !== locale) this.kvSet('phone.locale', locale);
+  }
+  lastLocale(): 'de' | 'en' {
+    return this.kvGet('phone.locale') === 'de' ? 'de' : 'en';
   }
   /**
    * Offset to render times in for background work (jobs, catch-up, meeting items): the phone's last one,

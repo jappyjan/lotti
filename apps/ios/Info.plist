@@ -14,7 +14,7 @@
 	<string>Lotti reads your reminders and adds new ones when you confirm them.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Lotti talks to your Lotti Brain on your network.</string>
-	<!-- Lotti Brain may run on the local network or a tailnet without HTTPS. -->
+	<!-- Plain http:// works for loopback, .local names and local-network addresses only; a tailnet host needs HTTPS (tailscale serve, https://<name>.<tailnet>.ts.net). -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -38,14 +38,27 @@ public struct URLSessionBackendTransport: BackendTransport {
 
         init(task: URLSessionWebSocketTask) { self.task = task }
 
-        func send(_ text: String) async throws { try await task.send(.string(text)) }
+        /// A refused handshake (revoked or unknown token) reaches us as "bad response from the server":
+        /// say what happened instead.
+        private func translated(_ error: Error) -> Error {
+            if let response = task.response as? HTTPURLResponse, response.statusCode == 401 || response.statusCode == 403 {
+                return BackendError.http(response.statusCode, "")
+            }
+            return error
+        }
+
+        func send(_ text: String) async throws {
+            do { try await task.send(.string(text)) } catch { throw translated(error) }
+        }
 
         func receive() async throws -> String {
-            switch try await task.receive() {
-            case .string(let text): return text
-            case .data(let data): return String(decoding: data, as: UTF8.self)
-            @unknown default: throw BackendError.badResponse
-            }
+            do {
+                switch try await task.receive() {
+                case .string(let text): return text
+                case .data(let data): return String(decoding: data, as: UTF8.self)
+                @unknown default: throw BackendError.badResponse
+                }
+            } catch { throw translated(error) }
         }
 
         func ping() async throws {
