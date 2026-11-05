@@ -69,6 +69,15 @@ test('glasses channel prompt asks for one very short sentence', async () => {
   );
 });
 
+test('prompt tells the agent chat history is not permanent', async () => {
+  const t = makeApp();
+  await t.app.ask({ text: 'hi', channel: 'phone', locale: 'en' });
+  assert.match(
+    (t.mock.calls[0]!.messages[0] as any).content,
+    /history is not permanent[\s\S]*memory tools/,
+  );
+});
+
 test('proposal tools give actions (max 2) and never act by themselves', async () => {
   const t = makeApp();
   t.mock.script(

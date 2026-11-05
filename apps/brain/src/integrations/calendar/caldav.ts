@@ -1,5 +1,8 @@
 import type { CalendarEvent } from '../index.ts';
-import { buildEvent, parseEvents } from './ics.ts';
+import { buildEvent, parseEvents, seriesInfo } from './ics.ts';
+
+export const REPEATS_REFUSED =
+  "This event repeats, and in this calendar Lotti can only delete it as the whole series, so it doesn't. Delete it in your calendar app.";
 
 export interface DavAuth {
   /** Base URL of the CalDAV service (iCloud: https://caldav.icloud.com). */
@@ -64,6 +67,8 @@ export class CalDav {
       throw new Error(
         'CalDAV login failed: check the username and (app-specific) password.',
       );
+    if (res.status === 412 && method === 'DELETE')
+      throw new Error('The event changed in the meantime: list it again.');
     if (res.status >= 400)
       throw new Error(`CalDAV ${method} answered HTTP ${res.status}`);
     return { status: res.status, text };
@@ -145,6 +150,55 @@ export class CalDav {
     for (const data of elements(xml, 'calendar-data'))
       out.push(...parseEvents(decode(data), cal.name));
     return out.filter((e) => e.end > from && e.start < to);
+  }
+
+  /** The resource holding the event with exactly this UID (text-match is a substring match). */
+  private async find(
+    cal: DavCalendar,
+    uid: string,
+  ): Promise<{ href: string; etag?: string; data: string }> {
+    const body =
+      `<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><d:getetag/><c:calendar-data/></d:prop>` +
+      `<c:filter><c:comp-filter name="VCALENDAR"><c:comp-filter name="VEVENT"><c:prop-filter name="UID">` +
+      `<c:text-match collation="i;octet">${uid.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</c:text-match>` +
+      `</c:prop-filter></c:comp-filter></c:comp-filter></c:filter></c:calendar-query>`;
+    const xml = (await this.dav('REPORT', cal.id, body, { depth: '1' })).text;
+    const hits = elements(xml, 'response')
+      .map((r) => ({
+        href: first(r, 'href'),
+        etag: first(r, 'getetag'),
+        data: decode(first(r, 'calendar-data') ?? ''),
+      }))
+      .filter((r) => r.href && seriesInfo(r.data).uids.includes(uid));
+    if (hits.length !== 1)
+      throw new Error(
+        hits.length ? 'More than one event matches.' : 'Event not found.',
+      );
+    const hit = hits[0]!;
+    return {
+      href: this.abs(hit.href!, cal.id),
+      data: hit.data,
+      ...(hit.etag ? { etag: decode(hit.etag).trim() } : {}),
+    };
+  }
+
+  /**
+   * The event with this UID, as the server has it now. A repeating one (RRULE / RDATE / RECURRENCE-ID /
+   * several VEVENTs) is refused: the resource is the whole series, and deleting it would wipe all of it.
+   */
+  async deletable(cal: DavCalendar, uid: string): Promise<CalendarEvent> {
+    const { data } = await this.find(cal, uid);
+    if (seriesInfo(data).repeats) throw new Error(REPEATS_REFUSED);
+    const ev = parseEvents(data, cal.name)[0];
+    if (!ev) throw new Error('Event not found.');
+    return ev;
+  }
+
+  /** Deletes one non-repeating event by UID; If-Match so a resource changed since the check is not deleted. */
+  async delete(cal: DavCalendar, uid: string): Promise<void> {
+    const { href, etag, data } = await this.find(cal, uid);
+    if (seriesInfo(data).repeats) throw new Error(REPEATS_REFUSED);
+    await this.dav('DELETE', href, '', etag ? { 'if-match': etag } : {});
   }
 
   async create(

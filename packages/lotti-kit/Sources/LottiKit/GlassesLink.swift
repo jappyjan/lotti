@@ -62,6 +62,21 @@ public enum WearState: Equatable, Sendable {
     case removed
 }
 
+/// One line of the wear-detection capture: a raw state message (sid 0x0D) from the glasses, or a
+/// marker you set ("glasses ON now") so the bytes can be matched to what you did.
+public struct StateTraceEntry: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public var time: Date
+    public var text: String
+    public var isMarker: Bool
+
+    public init(time: Date = .now, text: String, isMarker: Bool = false) {
+        self.time = time
+        self.text = text
+        self.isMarker = isMarker
+    }
+}
+
 /// One block of text at a fixed place on the display (pixels, 576 × 288 on the G2).
 public struct FrameBox: Equatable, Sendable {
     /// Short and unique within a frame ("main", "rail", "card1"); at most 14 characters.
@@ -154,6 +169,11 @@ public protocol GlassesLink: AnyObject, Observable {
     /// `.removed` inputs. **Unverified on hardware:** the sid 0x0D layout is a best guess (see
     /// `G2Events.wearState`).
     var wearState: WearState { get }
+    /// Every raw state message (sid 0x0D) and marker this session, newest last (at most 100). Also
+    /// written to the log as `[state]` and `[MARK]` lines, to find the real wear-detection bytes.
+    var stateTrace: [StateTraceEntry] { get }
+    /// Adds a marker to the trace and the log, e.g. "glasses ON".
+    func addStateMarker(_ text: String)
     /// When looking up counts as head-up.
     var headUpSettings: HeadUpSettings { get set }
     /// The head's latest pitch in degrees while head tracking is on, for calibrating.

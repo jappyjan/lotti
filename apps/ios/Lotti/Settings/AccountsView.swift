@@ -245,6 +245,9 @@ struct AccountDetailView: View {
     @State private var password = ""
     @State private var calendars: [Selectable]?
     @State private var mailboxes: [Selectable]?
+    @State private var allMailboxes: Bool
+    /// Config as last saved from this screen: `accounts.update` replaces the whole config.
+    @State private var config: [String: JSONValue]
     @State private var selectionNote: String?
     @State private var checking = false
     @State private var confirmDelete = false
@@ -259,6 +262,8 @@ struct AccountDetailView: View {
         _status = State(initialValue: account.status)
         _problem = State(initialValue: account.lastError)
         _lastSync = State(initialValue: account.lastSync)
+        _allMailboxes = State(initialValue: account.config["allMailboxes"]?.boolValue ?? false)
+        _config = State(initialValue: account.config)
     }
 
     var body: some View {
@@ -295,11 +300,28 @@ struct AccountDetailView: View {
                 }
             }
             selectionSection("Calendars", items: $calendars, empty: "Check the connection to list the calendars.", note: "No selection means all of them.") {
-                try await model.call("accounts.set_calendars", ["id": .string(account.id), "calendars": .array($0.map { .string($0) })])
+                config["calendars"] = .array($0.map { .string($0) })
+                return try await model.call("accounts.set_calendars", ["id": .string(account.id), "calendars": .array($0.map { .string($0) })])
             }
             if account.kind != "google" {
-                selectionSection("Mailboxes", items: $mailboxes, empty: "Check the connection to list the mailboxes.", note: "No selection means the inbox only.") {
-                    try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "mailboxes": .array($0.map { .string($0) })])
+                Section {
+                    Toggle("All folders", isOn: Binding(get: { allMailboxes }, set: { setAllMailboxes($0) }))
+                } footer: {
+                    Text("Searches every folder except Trash, Spam, Drafts and the duplicate \"All Mail\", Starred and Important folders. Folders you add later are included.")
+                }
+                if allMailboxes {
+                    Section {
+                        ForEach(mailboxes ?? []) { box in
+                            LabeledContent(box.name, value: box.selected ? "Included" : "Left out")
+                        }
+                    } header: {
+                        Text("Mailboxes")
+                    }
+                } else {
+                    selectionSection("Mailboxes", items: $mailboxes, empty: "Check the connection to list the mailboxes.", note: "No selection means the inbox only.") {
+                        config["mailboxes"] = .array($0.map { .string($0) })
+                        return try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "mailboxes": .array($0.map { .string($0) })])
+                    }
                 }
             }
             Section {
@@ -360,8 +382,19 @@ struct AccountDetailView: View {
         }
     }
 
+    private func setAllMailboxes(_ on: Bool) {
+        allMailboxes = on
+        Task {
+            // Only the mode: the server keeps the explicit selection, so switching off restores it.
+            let saved = await attempt($error) {
+                _ = try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "all": .bool(on)])
+            }
+            if saved { config["allMailboxes"] = .bool(on) } else { allMailboxes = !on }
+            await loadSelections()
+        }
+    }
+
     private func saveSettings() {
-        var config = account.config
         config["enabled"] = .bool(enabled)
         config["calendar"] = .bool(calendarService)
         config["mail"] = .bool(mailService)

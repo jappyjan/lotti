@@ -57,7 +57,7 @@ The same on the R1 ring and both temple touchpads.
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Scroll / swipe    | Move the highlight in the choices; in a list, move between items                                                                                                                              |
 | Tap               | Do the highlighted thing. On its own (display off) it does nothing                                                                                                                            |
-| Double tap        | Back or dismiss. With the display off: the today view                                                                                                                                         |
+| Double tap        | Back or dismiss. With the display off: the today view (also by looking up, if head-up is on). While a catch-up brief from the last 12 h exists, Today has a "Catch-up" choice that shows it again |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
 | Look up           | The look-up view; look down to hide it                                                                                                                                                        |
 
@@ -197,6 +197,8 @@ Lotti keeps memories, and you can always ask about them.
 Incoming things never appear as full notifications. A **small image indicator** at an edge of the view shows a kind icon (mail, calendar, job, reminder, info) plus a count, and stays in the display-off state. It never covers Lotti's sentence or choices and never opens by itself. The today view gives a one-line summary ("2 Mails, Termin in 10 min") and a choice for the full list; each item opens in full with Dismiss and its actions. A second small icon, a location pin, shows while the phone's location is read and briefly after. Icons are images (EvenHub image containers), not letters.
 
 ### Catch-up brief
+
+To open **Today** with the display off: double tap, or look up (if head-up is switched on). A brief from the last 12 hours stays reachable there as the "Catch-up" choice.
 
 When Jan comes back after sleep or ≥ 2 h away, putting the glasses on (or opening the app first) gives one short catch-up: what happened, what is next, anything weather-relevant. Nothing relevant means nothing shown. Once per return.
 

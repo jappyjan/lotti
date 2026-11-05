@@ -176,13 +176,11 @@ struct ChatRow: View {
                 .foregroundStyle(.secondary)
             }
             ForEach(Array(item.actions.enumerated()), id: \.offset) { _, action in
-                Button {
+                ActionCard(action: action) {
                     Task { await chat.perform(action, in: item.id) }
-                } label: {
-                    Label(action.title, systemImage: action.target == .server ? "bolt.horizontal" : "iphone")
+                } dismiss: {
+                    chat.dismiss(action, in: item.id)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
             }
             if let undo = item.undo { undoButton(undo) }
             if isLast, !item.followUps.isEmpty {

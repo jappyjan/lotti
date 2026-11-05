@@ -39,6 +39,9 @@ struct ScheduleDraft: Equatable {
         if let m = Self.match(#"^every (\d+) minutes?$"#, t) {
             kind = .everyMinutes
             minutes = Int(m[0]) ?? 30
+        } else if t == "every minute" {
+            kind = .everyMinutes
+            minutes = 1
         } else if t == "hourly" {
             kind = .hourly
         } else if let m = Self.match(#"^daily at (\d{1,2}):(\d{2})$"#, t) {

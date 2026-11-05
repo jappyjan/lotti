@@ -17,7 +17,7 @@ const schema = z.object({
 export const calendarEventsTool: ToolDef = {
   name: 'calendar_events',
   description:
-    "The user's calendar events (all connected calendars merged) in a time range, or just the next event.",
+    "The user's calendar events (all connected calendars merged) in a time range, or just the next event. Each event has an {id: …}: pass it as eventRef to delete_calendar_event to remove that event.",
   inputSchema: schema,
   kind: 'server',
   status: { de: 'Schaue in den Kalender …', en: 'Checking the calendar …' },
@@ -37,8 +37,10 @@ export const calendarEventsTool: ToolDef = {
       location?: string;
       allDay?: boolean;
       calendar?: string;
+      ref?: string;
+      recurring?: boolean;
     }) =>
-      `- ${e.allDay ? humanLocal(e.start, run.locale).slice(0, -6) + ' (all day)' : `${humanLocal(e.start, run.locale, run.utcOffsetMin)}–${humanLocal(e.end, run.locale, run.utcOffsetMin).slice(-5)}`} ${e.title}${e.location ? ' @ ' + e.location : ''}${e.calendar ? ' [' + e.calendar + ']' : ''}`;
+      `- ${e.allDay ? humanLocal(e.start, run.locale).slice(0, -6) + ' (all day)' : `${humanLocal(e.start, run.locale, run.utcOffsetMin)}–${humanLocal(e.end, run.locale, run.utcOffsetMin).slice(-5)}`} ${e.title}${e.location ? ' @ ' + e.location : ''}${e.calendar ? ' [' + e.calendar + ']' : ''}${e.recurring ? ' (repeats)' : ''}${e.ref ? ' {id: ' + e.ref + '}' : ''}`;
     if (a.nextOnly && cal.next) {
       const e = await cal.next(from);
       return e

@@ -47,10 +47,16 @@ struct Loaded<Value, Content: View>: View {
     }
 }
 
-/// Runs `work`; a failure goes to `message` (see `errorAlert`).
-@MainActor
-func attempt(_ message: Binding<String?>, _ work: @MainActor () async throws -> Void) async {
-    do { try await work() } catch { message.wrappedValue = error.localizedDescription }
+/// Runs `work`; a failure goes to `message` (see `errorAlert`). Returns whether it worked.
+@MainActor @discardableResult
+func attempt(_ message: Binding<String?>, _ work: @MainActor () async throws -> Void) async -> Bool {
+    do {
+        try await work()
+        return true
+    } catch {
+        message.wrappedValue = error.localizedDescription
+        return false
+    }
 }
 
 extension View {

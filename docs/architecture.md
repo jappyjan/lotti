@@ -1,6 +1,6 @@
 # Lotti — Architecture (draft)
 
-Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses. The UI schema, simulator and messengers are plans.
+Status: living document. Built: glasses link, ring input, screens and today view, on-device offline brain (timer, navigation), phone tools, turn-by-turn navigation, **Lotti Brain** (own backend, `apps/brain`), the AI-first phone app, attention and location indicators on the glasses. The wear event (sid `0x0D`) and EvenHub image containers are decoded from the APK/references and still unverified on real glasses (the old device log held 43 state messages, none a wear event; Debug → Wear capture and `[state]`/`[MARK]` log lines collect the real bytes). The UI schema, simulator and messengers are plans.
 
 ## Big picture
 
@@ -175,7 +175,7 @@ Measured on the Mac's model (macOS 26.6), `LOTTI_LIVE_MODEL=1 swift test --filte
 - `location` is a phone tool the agent may call any time. Every read emits `location_access`, shows a small location icon on the glasses and is logged in the app.
 - Calendar (Google, iCloud/CalDAV, generic), mail (Gmail, iCloud/IMAP, generic), `web_fetch`, web search with a key, `shell` (workspace cwd, timeout, output cap, no secrets in env, non-root, logged).
 - Bring! (unofficial API, isolated in one client): adds and removes run at once with a "Done" line and **Undo**.
-- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
+- Proposed actions need a tap and run only after `perform`: `send_mail_reply`, `create_calendar_event`, `delete_calendar_event` (server), `set_timer`, `create_reminder`, `start_navigation` (phone), and MCP tools marked as needing confirmation.
 - MCP client: stdio and streamable HTTP servers, added and tested in the app, with per-tool confirmation switches.
 
 **Conversations.** One shared current conversation for glasses and phone. After 10 minutes idle it is compacted (an LLM summary replaces the old turns in the model's context; the turns themselves are kept, flagged `compacted`, so the history stays complete and searchable); after 1 hour idle a new conversation starts and the old one gets a title and summary. FTS5 over titles, summaries and turns powers `conversation_search` / `conversation_read`.

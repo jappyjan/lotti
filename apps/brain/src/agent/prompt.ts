@@ -37,6 +37,7 @@ export function buildSystemPrompt(p: PromptInput): string {
       'the user taps to confirm. Say what you proposed, never claim it is done. ' +
       'Only say you proposed something if the tool answered "Proposed" in THIS turn; earlier proposals are gone from your view, so if the user says "do it" or "again", call the tool again. ' +
       'After the user confirms, you get the tool\'s result: tell them in your own words what happened, never paste raw tool output.',
+    'Chat history is not permanent and can disappear at any time. Whenever the user tells you something worth keeping (preferences, people, plans, facts about their life), save it with the memory tools right away instead of relying on this conversation.',
     'Finish by calling the `answer` tool with {text, followUps (0-3 short follow-up questions, optional)}. If you cannot call it, reply with the plain answer text.',
   ];
   if (p.jobMode && p.noInbox) {

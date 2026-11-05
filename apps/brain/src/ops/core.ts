@@ -147,7 +147,13 @@ export const coreOps = [
         try {
           return {
             source: 'live',
-            models: await p.listModels(AbortSignal.timeout(8000)),
+            // Suggestions stay in the list: a provider's own list may lag behind new models.
+            models: [
+              ...new Set([
+                ...p.knownModels,
+                ...(await p.listModels(AbortSignal.timeout(8000))),
+              ]),
+            ],
           };
         } catch (e) {
           return {
@@ -213,7 +219,8 @@ export const coreOps = [
     inputSchema: z.object({ key: z.string(), value: z.unknown() }),
     risk: 'free',
     handler(i, { app }) {
-      if (!SETTING_DEFS[i.key]) throw new Error(`Unknown setting ${i.key}`);
+      const def = SETTING_DEFS[i.key];
+      if (!def) throw new Error(`Unknown setting ${i.key}`);
       refuseProviderKey(i.key);
       if (app.settings.isSafety(i.key))
         throw new Error(

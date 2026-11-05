@@ -339,6 +339,17 @@ public final class G2Link: NSObject, GlassesLink {
     }
     public private(set) var headPitch: Double?
     public private(set) var wearState: WearState = .unknown
+    public private(set) var stateTrace: [StateTraceEntry] = []
+
+    public func addStateMarker(_ text: String) {
+        print("[MARK] \(text)")
+        record(StateTraceEntry(text: text, isMarker: true))
+    }
+
+    private func record(_ entry: StateTraceEntry) {
+        stateTrace.append(entry)
+        if stateTrace.count > 100 { stateTrace.removeFirst(stateTrace.count - 100) }
+    }
 
     public var headUpConfig: HeadUpDetector.Config {
         get { headUp.config }
@@ -734,6 +745,13 @@ extension G2Link: @MainActor CBPeripheralDelegate {
             return
         }
         let event = G2Events.decode(message)
+        if message.sid == G2Events.stateService {
+            // Wear-detection capture: every raw state message, whatever the decoder makes of it.
+            let decoded: String = if case .wear(let worn) = event { "decoded as \(worn ? "worn" : "removed")" } else { "not a wear event" }
+            let line = "\(arm.side) arm cmd \(message.command) payload \(hex(message.payload)) (\(decoded))"
+            print("[state] \(line)")
+            record(StateTraceEntry(text: line))
+        }
         // IMU reports come several times a second; receiveImu logs them once a second.
         if case .imu = event {} else { log("rx \(arm.side) \(hex(bytes))") }
         if let magic = message.magic {
