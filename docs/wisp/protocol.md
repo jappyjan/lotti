@@ -44,7 +44,7 @@ Each temple is its own peripheral. An SDK may connect to both temples (two strea
 | 2      | 1     | `route`  | bits 0–1 destination lens (`0` = the lens you're connected to, `1` left, `2` right, `3` both); bits 2–3 source lens on glasses → phone (`1` left, `2` right); bits 4–7 reserved, 0 |
 | 3      | 1     | `fflags` | reserved, 0 (later: frame compression)                                                                                                                                             |
 | 4      | 2     | `len`    | body length, ≤ `max_frame`                                                                                                                                                         |
-| 6      | 2     | `seq`    | per direction and connection, +1 per frame, wraps                                                                                                                                  |
+| 6      | 2     | `seq`    | per direction and connection, starts at 0, +1 per frame, wraps                                                                                                                     |
 | 8      | `len` | body     | one message                                                                                                                                                                        |
 | 8+len  | 2     | `crc`    | CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) over bytes 0 … 7+len                                                                                                                 |
 
@@ -54,8 +54,10 @@ Overhead: 10 bytes per frame. `max_frame` defaults to 4096 and is negotiated in 
 
 - Credits in bytes. Each side announces `rx_window` in `HELLO`. A sender keeps the sum of frame sizes sent but not yet acknowledged ≤ the peer's window.
 - The receiver acknowledges with `CREDIT {ack_seq}` (session service) when it has consumed frames; it coalesces (at most every 25 % of its window or 20 ms, whichever comes first).
-- A frame with a bad magic or CRC: the receiver drops bytes until the next `magic` that starts a frame with a valid CRC, and sends `RESYNC {last_good_seq}`. The sender resends every frame after `last_good_seq` (it still holds them: they're inside the window). BLE already retransmits on the air; this covers buffer overruns and firmware bugs.
-- The receiver drops duplicate `seq` values silently.
+- A frame with a bad magic, a `len` above `max_frame` or a bad CRC: the receiver drops bytes until the next `magic` that starts a frame with a valid CRC, and sends `RESYNC {last_good_seq}`. The sender resends every frame after `last_good_seq` (it still holds them: they're inside the window). BLE already retransmits on the air; this covers buffer overruns and firmware bugs.
+- The receiver accepts only `seq = last_good_seq + 1` (before the first frame, `last_good_seq` is `0xFFFF`). A frame behind that is a duplicate and is dropped silently. A frame ahead of it means one went missing: it's dropped and, unless a `RESYNC` is already outstanding, answered with `RESYNC`. So messages are always handled in order.
+- One `RESYNC` per run of discarded bytes; frames that arrive in the meantime (sent before the sender saw the `RESYNC`) are dropped without another one. The next in-order frame ends the recovery.
+- A sender that holds unacknowledged frames and hears no `CREDIT` for a while (SDK default 1 s) resends all of them. That recovers a lost or corrupted last frame, which no later frame would expose.
 
 ## Messages
 
@@ -67,6 +69,10 @@ Body = message header + payload:
 | 1      | 1    | `mflags` | bit 0 `RESPONSE`, bit 1 `ERROR`, bit 2 `EVENT` (unsolicited)                         |
 | 2      | 2    | `req`    | correlation id. A request with `req = 0` wants no response. A response echoes `req`. |
 | 4      | …    | payload  |                                                                                      |
+
+`mflags` picks the payload layout: `ERROR` → the error payload below, else `EVENT` → the event, else `RESPONSE` → the response, else the request. A plain "ok" response has an empty payload. Responses, errors included, are only sent for requests with `req ≠ 0`.
+
+Append-only decoding: a missing trailing field reads as 0 (unless the field says otherwise); a field cut in half is error `2`.
 
 An `ERROR` response's payload is `{code u16, message utf8…}`. Codes: `1` unsupported op, `2` bad payload, `3` no such id, `4` out of memory, `5` busy, `6` hash mismatch, `7` not allowed, `8` exists.
 
@@ -96,6 +102,8 @@ Types below: `u8 u16 u32 u64 i16 i32` little-endian; `str16` = 16 bytes UTF-8, z
 | 4   | `PING`      | `token u32`                                                                                     | `token u32`                                                                                                                                                                                                                                    |
 | 5   | `TIME_SYNC` | `phone_ms u64`                                                                                  | `phone_ms u64, glass_us u64` — the SDK estimates offset and drift (stock clocks drift 1–2 %)                                                                                                                                                   |
 | 6   | `BYE`       | —                                                                                               | — (ends the session; same effect as a timeout)                                                                                                                                                                                                 |
+
+In `HELLO`, `max_frame 0` means 4096 and `rx_window 0` means 16384. Each side uses the smaller `max_frame` of the two.
 
 `HELLO` must be the first message on a connection; everything else before it gets error `7`. **Session timeout:** if the glasses receive nothing for `session_timeout_ms` (default 10 s; any frame counts, `PING` is the keepalive), the session ends: subscriptions stop, mic stops, animations stop, non-persisted resources may be freed, and the display state stays as it was until the display policy turns it off. `app_id` namespaces persisted resources.
 
@@ -132,7 +140,7 @@ Resources are referenced by `res u16`, scoped to the session's `app_id`. **Persi
 | 2   | `PUT_DATA`  | `res u16, offset u32, data…`                                                  | none (flow control covers it)                                                                   |
 | 3   | `PUT_END`   | `res u16`                                                                     | ok, or error `6` hash mismatch                                                                  |
 | 4   | `DELETE`    | `res u16` (`0xFFFF` = all of this app)                                        | ok                                                                                              |
-| 5   | `LIST`      | —                                                                             | `count u16, {res u16, type u8, flags u8, size u32, hash hash16}…`                               |
+| 5   | `LIST`      | —                                                                             | `count u16, entries {res u16, type u8, flags u8, size u32, hash hash16}…`                       |
 
 Resource types:
 
@@ -143,14 +151,14 @@ Resource types:
 
 **Codecs** (pixel data, all 4 bpp, rows top to bottom, high nibble = left pixel):
 
-| id  | codec     |                                                                                                        |
-| --- | --------- | ------------------------------------------------------------------------------------------------------ |
-| 0   | `RAW4`    | packed, stride `ceil(w/2)`                                                                             |
-| 1   | `RLE4`    | one byte per run: high nibble = run length − 1 (1–16 pixels), low nibble = value. Runs may cross rows. |
-| 2   | `LZ4`     | LZ4 _block_ format over the `RAW4` bytes                                                               |
-| 3   | `LZ4_RLE` | LZ4 block over `RLE4` bytes                                                                            |
+| id  | codec     |                                                                                                                                                                                      |
+| --- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0   | `RAW4`    | packed, stride `ceil(w/2)`; the padding nibble of an odd width is 0                                                                                                                  |
+| 1   | `RLE4`    | one byte per run: high nibble = run length − 1 (1–16 pixels), low nibble = value. Runs may cross rows. Encoders emit greedy maximal runs; the runs must cover exactly `w × h` pixels |
+| 2   | `LZ4`     | LZ4 _block_ format over the `RAW4` bytes                                                                                                                                             |
+| 3   | `LZ4_RLE` | LZ4 block over `RLE4` bytes                                                                                                                                                          |
 
-Codec support is listed in `caps`; the SDK picks the smallest that the glasses support.
+Every decoded image must have exactly the size `w`, `h` and the codec imply. Codec support is listed in `caps`; the SDK picks the smallest that the glasses support.
 
 ### 0x04 input
 
@@ -169,7 +177,7 @@ Default: nothing is sent until `CONFIG`. Gestures are recognised on the glasses 
 | 1   | `SUBSCRIBE`    | `sensor u8, rate_hz u16, batch_ms u16` — `rate_hz 0` = on change. Samples are buffered on the glasses and sent every `batch_ms` (fewer radio wakeups). |
 | 2   | `UNSUBSCRIBE`  | `sensor u8`                                                                                                                                            |
 | 3   | `DATA` (event) | `sensor u8, count u8, t0_us u32, dt_us u32, samples…`                                                                                                  |
-| 4   | `READ`         | `sensor u8` → one sample in the response                                                                                                               |
+| 4   | `READ`         | `sensor u8` → response `sample…` (one sample)                                                                                                          |
 
 | sensor        | id  | sample                            |
 | ------------- | --- | --------------------------------- |
@@ -188,7 +196,7 @@ Default: nothing is sent until `CONFIG`. Gestures are recognised on the glasses 
 | 1   | `MIC_START`        | `codec u8 (0 PCM16, 1 LC3), rate_hz u16, channels u8 (bit mask of mics), frame_ms u8, lc3_bytes u8` |
 | 2   | `MIC_STOP`         | —                                                                                                   |
 | 3   | `MIC_DATA` (event) | `seq u16, t_us u32, data…`                                                                          |
-| 4   | `TONE`             | `count u8, {freq_hz u16, duration_ms u16, duty u8 (0–100)}…` (buzzer; `freq_hz 0` = pause)          |
+| 4   | `TONE`             | `count u8, steps {freq_hz u16, duration_ms u16, duty u8 (0–100)}…` (buzzer; `freq_hz 0` = pause)    |
 
 ### 0x01 system
 

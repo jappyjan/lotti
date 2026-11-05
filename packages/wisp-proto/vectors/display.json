@@ -1,0 +1,233 @@
+[
+  {
+    "name": "display/layer-set-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 1,
+    "mflags": 0,
+    "req": 275,
+    "fields": {
+      "layer": 16,
+      "z": 17,
+      "flags": 18,
+      "alpha": 19,
+      "x": -1319,
+      "y": -1576,
+      "w": 4884,
+      "h": 5655,
+      "content_w": 6426,
+      "content_h": 7197,
+      "scroll_x": -2861,
+      "scroll_y": -3118
+    },
+    "hex": "0100130110111213d9fad8f9141317161a191d1cd3f4d2f3"
+  },
+  {
+    "name": "display/layer-del-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 2,
+    "mflags": 0,
+    "req": 276,
+    "fields": {
+      "layer": 16
+    },
+    "hex": "0200140110"
+  },
+  {
+    "name": "display/fill-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 3,
+    "mflags": 0,
+    "req": 277,
+    "fields": {
+      "layer": 16,
+      "value": 17,
+      "x": -805,
+      "y": -1062,
+      "w": 3342,
+      "h": 4113
+    },
+    "hex": "030015011011dbfcdafb0e0d1110"
+  },
+  {
+    "name": "display/blit-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 4,
+    "mflags": 0,
+    "req": 278,
+    "fields": {
+      "layer": 16,
+      "flags": 17,
+      "x": -805,
+      "y": -1062,
+      "res": 3342,
+      "src_x": 4113,
+      "src_y": 4884,
+      "w": 5655,
+      "h": 6426
+    },
+    "hex": "040016011011dbfcdafb0e0d1110141317161a19"
+  },
+  {
+    "name": "display/image-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 5,
+    "mflags": 0,
+    "req": 279,
+    "fields": {
+      "layer": 16,
+      "codec": 17,
+      "x": -805,
+      "y": -1062,
+      "w": 3342,
+      "h": 4113,
+      "data": "f0f1f2f3f4f5f6"
+    },
+    "hex": "050017011011dbfcdafb0e0d1110f0f1f2f3f4f5f6"
+  },
+  {
+    "name": "display/text-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 6,
+    "mflags": 0,
+    "req": 280,
+    "fields": {
+      "layer": 16,
+      "value": 17,
+      "x": -805,
+      "y": -1062,
+      "font": 3342,
+      "max_w": 4113,
+      "line_h": 4884,
+      "utf8": "Wisp ✓ grüße"
+    },
+    "hex": "060018011011dbfcdafb0e0d111014135769737020e29c93206772c3bcc39f65"
+  },
+  {
+    "name": "display/text-response",
+    "kind": "message",
+    "svc": 2,
+    "op": 6,
+    "mflags": 1,
+    "req": 281,
+    "fields": {
+      "w": 258,
+      "h": 1029,
+      "chars_drawn": 1800
+    },
+    "hex": "06011901020105040807"
+  },
+  {
+    "name": "display/scroll-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 7,
+    "mflags": 0,
+    "req": 282,
+    "fields": {
+      "layer": 16,
+      "dx": -548,
+      "dy": -805,
+      "fill": 19
+    },
+    "hex": "07001a0110dcfddbfc13"
+  },
+  {
+    "name": "display/commit-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 8,
+    "mflags": 0,
+    "req": 283,
+    "fields": {
+      "flags": 16
+    },
+    "hex": "08001b0110"
+  },
+  {
+    "name": "display/commit-response",
+    "kind": "message",
+    "svc": 2,
+    "op": 8,
+    "mflags": 1,
+    "req": 284,
+    "fields": {
+      "frame": 16909060,
+      "glass_us": 2826896153644817
+    },
+    "hex": "08011c0104030201110f0e0d0c0b0a00"
+  },
+  {
+    "name": "display/anim-play-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 9,
+    "mflags": 0,
+    "req": 285,
+    "fields": {
+      "slot": 16,
+      "layer": 17,
+      "x": -805,
+      "y": -1062,
+      "res": 3342,
+      "loops": 4113,
+      "flags": 22
+    },
+    "hex": "09001d011011dbfcdafb0e0d111016"
+  },
+  {
+    "name": "display/anim-done-event",
+    "kind": "message",
+    "svc": 2,
+    "op": 9,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "slot": 16
+    },
+    "hex": "0904000010"
+  },
+  {
+    "name": "display/anim-stop-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 10,
+    "mflags": 0,
+    "req": 287,
+    "fields": {
+      "slot": 16
+    },
+    "hex": "0a001f0110"
+  },
+  {
+    "name": "display/tween-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 11,
+    "mflags": 0,
+    "req": 288,
+    "fields": {
+      "layer": 16,
+      "prop": 17,
+      "easing": 18,
+      "to": -1062,
+      "duration_ms": 3342
+    },
+    "hex": "0b002001101112dafb0e0d"
+  },
+  {
+    "name": "display/clear-all-request",
+    "kind": "message",
+    "svc": 2,
+    "op": 12,
+    "mflags": 0,
+    "req": 289,
+    "fields": {},
+    "hex": "0c002101"
+  }
+]

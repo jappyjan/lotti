@@ -1,0 +1,107 @@
+[
+  {
+    "name": "resource/put-begin-request",
+    "kind": "message",
+    "svc": 3,
+    "op": 1,
+    "mflags": 0,
+    "req": 290,
+    "fields": {
+      "res": 258,
+      "type": 17,
+      "codec": 18,
+      "flags": 19,
+      "size": 286133000,
+      "hash": "05060708090a0b0c0d0e0f1011121314"
+    },
+    "hex": "010022010201111213080b0e1105060708090a0b0c0d0e0f1011121314"
+  },
+  {
+    "name": "resource/put-begin-response",
+    "kind": "message",
+    "svc": 3,
+    "op": 1,
+    "mflags": 1,
+    "req": 291,
+    "fields": {
+      "status": 16
+    },
+    "hex": "0101230110"
+  },
+  {
+    "name": "resource/put-data-request",
+    "kind": "message",
+    "svc": 3,
+    "op": 2,
+    "mflags": 0,
+    "req": 292,
+    "fields": {
+      "res": 258,
+      "offset": 84215045,
+      "data": "f0f1f2f3f4f5f6"
+    },
+    "hex": "02002401020105050505f0f1f2f3f4f5f6"
+  },
+  {
+    "name": "resource/put-end-request",
+    "kind": "message",
+    "svc": 3,
+    "op": 3,
+    "mflags": 0,
+    "req": 293,
+    "fields": {
+      "res": 258
+    },
+    "hex": "030025010201"
+  },
+  {
+    "name": "resource/delete-request",
+    "kind": "message",
+    "svc": 3,
+    "op": 4,
+    "mflags": 0,
+    "req": 294,
+    "fields": {
+      "res": 258
+    },
+    "hex": "040026010201"
+  },
+  {
+    "name": "resource/list-request",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 0,
+    "req": 295,
+    "fields": {},
+    "hex": "05002701"
+  },
+  {
+    "name": "resource/list-response",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 296,
+    "fields": {
+      "count": 258,
+      "entries": [
+        {
+          "res": 1029,
+          "type": 18,
+          "flags": 19,
+          "size": 286133000,
+          "hash": "05060708090a0b0c0d0e0f1011121314"
+        },
+        {
+          "res": 1800,
+          "type": 19,
+          "flags": 20,
+          "size": 353438985,
+          "hash": "060708090a0b0c0d0e0f101112131415"
+        }
+      ]
+    },
+    "hex": "05012801020105041213080b0e1105060708090a0b0c0d0e0f101112131408071314090d1115060708090a0b0c0d0e0f101112131415"
+  }
+]

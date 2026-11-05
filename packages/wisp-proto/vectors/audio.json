@@ -1,0 +1,66 @@
+[
+  {
+    "name": "audio/mic-start-request",
+    "kind": "message",
+    "svc": 6,
+    "op": 1,
+    "mflags": 0,
+    "req": 305,
+    "fields": {
+      "codec": 16,
+      "rate_hz": 1029,
+      "channels": 18,
+      "frame_ms": 19,
+      "lc3_bytes": 20
+    },
+    "hex": "01003101100504121314"
+  },
+  {
+    "name": "audio/mic-stop-request",
+    "kind": "message",
+    "svc": 6,
+    "op": 2,
+    "mflags": 0,
+    "req": 306,
+    "fields": {},
+    "hex": "02003201"
+  },
+  {
+    "name": "audio/mic-data-event",
+    "kind": "message",
+    "svc": 6,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "seq": 258,
+      "t_us": 84215045,
+      "data": "f0f1f2f3f4f5f6"
+    },
+    "hex": "03040000020105050505f0f1f2f3f4f5f6"
+  },
+  {
+    "name": "audio/tone-request",
+    "kind": "message",
+    "svc": 6,
+    "op": 4,
+    "mflags": 0,
+    "req": 308,
+    "fields": {
+      "count": 16,
+      "steps": [
+        {
+          "freq_hz": 1029,
+          "duration_ms": 1800,
+          "duty": 19
+        },
+        {
+          "freq_hz": 1800,
+          "duration_ms": 2571,
+          "duty": 20
+        }
+      ]
+    },
+    "hex": "0400340110050408071308070b0a14"
+  }
+]

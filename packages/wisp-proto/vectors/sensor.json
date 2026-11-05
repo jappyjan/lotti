@@ -1,0 +1,68 @@
+[
+  {
+    "name": "sensor/subscribe-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 1,
+    "mflags": 0,
+    "req": 300,
+    "fields": {
+      "sensor": 16,
+      "rate_hz": 1029,
+      "batch_ms": 1800
+    },
+    "hex": "01002c011005040807"
+  },
+  {
+    "name": "sensor/unsubscribe-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 2,
+    "mflags": 0,
+    "req": 301,
+    "fields": {
+      "sensor": 16
+    },
+    "hex": "02002d0110"
+  },
+  {
+    "name": "sensor/data-event",
+    "kind": "message",
+    "svc": 5,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "sensor": 16,
+      "count": 17,
+      "t0_us": 151521030,
+      "dt_us": 218827015,
+      "samples": "f0f1f2f3f4"
+    },
+    "hex": "0304000010110607080907090b0df0f1f2f3f4"
+  },
+  {
+    "name": "sensor/read-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 4,
+    "mflags": 0,
+    "req": 303,
+    "fields": {
+      "sensor": 16
+    },
+    "hex": "04002f0110"
+  },
+  {
+    "name": "sensor/read-response",
+    "kind": "message",
+    "svc": 5,
+    "op": 4,
+    "mflags": 1,
+    "req": 304,
+    "fields": {
+      "sample": "f0f1f2f3f4"
+    },
+    "hex": "04013001f0f1f2f3f4"
+  }
+]
