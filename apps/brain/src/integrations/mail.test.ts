@@ -151,7 +151,13 @@ function fakeImap() {
   const sent: any[] = [];
   const boxes: Record<
     string,
-    { uid: number; seen: boolean; src: Buffer; at: number }[]
+    {
+      uid: number;
+      seen: boolean;
+      src: Buffer;
+      at: number;
+      messageId?: string;
+    }[]
   > = {
     INBOX: [
       {
@@ -181,6 +187,12 @@ function fakeImap() {
     ],
   };
   let open = 'INBOX';
+  const folders: {
+    path: string;
+    delimiter?: string;
+    flags?: Set<string>;
+    specialUse?: string;
+  }[] = [{ path: 'INBOX' }, { path: 'Archive' }];
   const client: ImapLike = {
     async connect() {
       log.push('connect');
@@ -189,6 +201,7 @@ function fakeImap() {
       log.push('logout');
     },
     async getMailboxLock(p) {
+      if (!boxes[p]) throw new Error(`no access to ${p}`);
       open = p;
       log.push('lock ' + p);
       return {
@@ -211,6 +224,7 @@ function fakeImap() {
           envelope: {
             from: [{ name: 'X', address: 'x@y' }],
             subject: /Subject: (.*)\r/.exec(m.src.toString())![1],
+            ...(m.messageId ? { messageId: m.messageId } : {}),
           },
           internalDate: new Date(m.at),
           flags: new Set(m.seen ? ['\\Seen'] : []),
@@ -229,8 +243,14 @@ function fakeImap() {
         source: m.src,
       };
     },
-    async list() {
-      return [{ path: 'INBOX' }, { path: 'Archive' }];
+    async list(o) {
+      log.push('list ' + JSON.stringify(o ?? {}));
+      return folders.map((f) => ({
+        ...f,
+        ...(o?.statusQuery?.unseen && boxes[f.path]
+          ? { status: { unseen: boxes[f.path]!.filter((m) => !m.seen).length } }
+          : {}),
+      }));
     },
   };
   const deps: ImapDeps = {
@@ -241,7 +261,7 @@ function fakeImap() {
       },
     }),
   };
-  return { deps, log, sent };
+  return { deps, log, sent, boxes, folders };
 }
 
 async function imapApp(kind = 'icloud') {
@@ -374,6 +394,56 @@ test('imap: all folders skips Trash/Spam/Drafts/All Mail, keeps Sent/Archive, pi
     inbox.map((m) => m.subject),
     ['Termin morgen'],
   );
+});
+
+test('imap: all folders leaves out what is inside Trash/Junk, skips a folder it cannot open, counts a mail once', async () => {
+  const { t, id, log, boxes, folders } = await imapApp();
+  const { excludedMailboxes } = await import('./mail/imap.ts');
+  assert.deepEqual(
+    [
+      ...excludedMailboxes([
+        { path: 'INBOX', delimiter: '.' },
+        { path: 'INBOX.Junk', delimiter: '.', specialUse: '\\Junk' },
+        { path: 'INBOX.Junk.2024', delimiter: '.' },
+        { path: 'Trash', delimiter: '/', specialUse: '\\Trash' },
+        { path: 'Trash/Old', delimiter: '/' },
+        { path: 'Trash-old-projects', delimiter: '/' },
+        { path: '[Gmail]', delimiter: '/', flags: new Set(['\\Noselect']) },
+        { path: '[Gmail]/Sent Mail', delimiter: '/', specialUse: '\\Sent' },
+      ]),
+    ].sort(),
+    ['INBOX.Junk', 'INBOX.Junk.2024', 'Trash', 'Trash/Old', '[Gmail]'],
+  );
+
+  // the stored explicit choice survives "All folders" on and off (the app sends only `all`)
+  await t.app.ops.invoke(
+    'accounts.set_mailboxes',
+    { id, mailboxes: ['Archive'] },
+    'app',
+  );
+  await t.app.ops.invoke('accounts.set_mailboxes', { id, all: true }, 'app');
+  folders.push({ path: 'Shared/Board' }, { path: 'Labels' });
+  boxes.Labels = [
+    // the same mail as INBOX uid 2, under a second Gmail-style label
+    { ...boxes.INBOX![1]!, uid: 40, messageId: '<m2@firma.de>' },
+  ];
+  boxes.INBOX![1]!.messageId = '<m2@firma.de>';
+  const since = new Date(2026, 10, 3, 7, 0).getTime();
+  const un = await t.app.integrations.mail!.unread(since);
+  assert.deepEqual(un.map((m) => m.subject).sort(), [
+    'Archiv',
+    'Termin morgen',
+  ]);
+  assert.ok(log.includes('list {"statusQuery":{"unseen":true}}'));
+  await t.app.ops.invoke('accounts.set_mailboxes', { id, all: false }, 'app');
+  assert.deepEqual(
+    (await t.app.integrations.mail!.unread(since)).map((m) => m.subject),
+    ['Archiv'],
+  );
+  // when no folder opens it is the account that fails, not "no mail"
+  await t.app.ops.invoke('accounts.set_mailboxes', { id, all: true }, 'app');
+  folders.splice(0, folders.length, { path: 'Gone' }, { path: 'Also gone' });
+  await assert.rejects(t.app.integrations.mail!.unread(since));
 });
 
 test('imap: reply goes out via SMTP (icloud defaults) with threading, only after perform', async () => {

@@ -307,7 +307,7 @@ struct AccountDetailView: View {
                 Section {
                     Toggle("All folders", isOn: Binding(get: { allMailboxes }, set: { setAllMailboxes($0) }))
                 } footer: {
-                    Text("Searches every folder except Trash, Spam, Drafts and duplicate \"All Mail\" folders. Folders you add later are included.")
+                    Text("Searches every folder except Trash, Spam, Drafts and the duplicate \"All Mail\", Starred and Important folders. Folders you add later are included.")
                 }
                 if allMailboxes {
                     Section {
@@ -384,14 +384,12 @@ struct AccountDetailView: View {
 
     private func setAllMailboxes(_ on: Bool) {
         allMailboxes = on
-        config["allMailboxes"] = .bool(on)
-        // The explicit selection, not what the list shows: in "All folders" mode it lists every included
-        // folder as selected, and saving that back would replace the earlier choice when switching off.
-        let chosen = config["mailboxes"]?.array?.compactMap(\.string) ?? (mailboxes ?? []).filter(\.selected).map(\.id)
         Task {
-            await attempt($error) {
-                _ = try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "mailboxes": .array(chosen.map { .string($0) }), "all": .bool(on)])
+            // Only the mode: the server keeps the explicit selection, so switching off restores it.
+            let saved = await attempt($error) {
+                _ = try await model.call("accounts.set_mailboxes", ["id": .string(account.id), "all": .bool(on)])
             }
+            if saved { config["allMailboxes"] = .bool(on) } else { allMailboxes = !on }
             await loadSelections()
         }
     }

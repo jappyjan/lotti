@@ -125,10 +125,10 @@ export const accountOps: Operation[] = [
     name: 'accounts.set_mailboxes',
     group: 'accounts',
     description:
-      'Choose which mailboxes of an IMAP account Lotti searches (empty = INBOX). `all: true` searches all folders except Trash, Spam, Drafts and duplicate "All Mail" folders, including folders created later.',
+      'Choose which mailboxes of an IMAP account Lotti searches (empty = INBOX; left out = keep the stored choice). `all: true` searches all folders except Trash, Spam, Drafts and duplicate "All Mail" folders, including folders created later.',
     inputSchema: z.object({
       id: z.string(),
-      mailboxes: z.array(z.string()),
+      mailboxes: z.array(z.string()).optional(),
       all: z.boolean().optional(),
     }),
     risk: 'tap',
@@ -137,9 +137,10 @@ export const accountOps: Operation[] = [
       const { config } = acc(app, i.id);
       const prev = config.mailboxes ?? [];
       const all = i.all === true;
-      setConfig(app, i.id, { mailboxes: i.mailboxes, allMailboxes: all });
+      const mailboxes = i.mailboxes ?? prev;
+      setConfig(app, i.id, { mailboxes, allMailboxes: all });
       return out(
-        { id: i.id, mailboxes: i.mailboxes, all },
+        { id: i.id, mailboxes, all },
         {
           undo: {
             label: 'Mailbox selection back',

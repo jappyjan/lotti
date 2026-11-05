@@ -28,7 +28,9 @@ export interface ImapLike {
     q: Record<string, unknown>,
     o?: Record<string, unknown>,
   ): Promise<any>;
-  list(): Promise<{ path: string; flags?: Set<string>; specialUse?: string }[]>;
+  list(o?: {
+    statusQuery?: { unseen?: boolean };
+  }): Promise<(ListedBox & { status?: { unseen?: number } })[]>;
 }
 export interface SmtpLike {
   sendMail(m: Record<string, unknown>): Promise<unknown>;
@@ -158,7 +160,12 @@ const EXCLUDED_SPECIAL_USE = [
 ];
 const SPECIAL_USE = [...EXCLUDED_SPECIAL_USE, '\\Sent', '\\Archive'];
 
-type ListedBox = { path: string; flags?: Set<string>; specialUse?: string };
+type ListedBox = {
+  path: string;
+  delimiter?: string;
+  flags?: Set<string>;
+  specialUse?: string;
+};
 
 /**
  * "All folders" leaves out what is noise or a duplicate: Trash, Spam, Drafts, the "All Mail" /
@@ -178,17 +185,42 @@ export function isExcludedMailbox(b: ListedBox): boolean {
   );
 }
 
+/** isExcludedMailbox, plus what sits inside an excluded folder ("Trash/Old", "INBOX.Junk.2024"). */
+export function excludedMailboxes(list: ListedBox[]): Set<string> {
+  const out = new Set(list.filter(isExcludedMailbox).map((b) => b.path));
+  // A \Noselect parent ("[Gmail]") only groups folders: what is inside it still counts on its own.
+  const parents = list
+    .filter(
+      (b) =>
+        out.has(b.path) &&
+        !b.flags?.has('\\Noselect') &&
+        !b.flags?.has('\\NonExistent'),
+    )
+    .map((b) => b.path + (b.delimiter ?? '/'));
+  for (const b of list)
+    if (parents.some((p) => b.path.startsWith(p))) out.add(b.path);
+  return out;
+}
+
 export function imapBackend(
   app: App,
   acc: AccountRow,
   deps: ImapDeps = realImapDeps,
 ): MailBackend {
-  const boxes = async (c: ImapLike): Promise<string[]> => {
+  const allFolders = () => acc.config.allMailboxes === true;
+  /** With `unseenOnly`, "All folders" skips folders the server says have no unseen mail (one LIST-STATUS). */
+  const boxes = async (c: ImapLike, unseenOnly = false): Promise<string[]> => {
     // "All folders" is evaluated per run, so new folders are picked up on their own.
-    if (acc.config.allMailboxes === true)
-      return (await c.list())
-        .filter((b) => !isExcludedMailbox(b))
+    if (allFolders()) {
+      const list = await c.list(
+        unseenOnly ? { statusQuery: { unseen: true } } : undefined,
+      );
+      const excluded = excludedMailboxes(list);
+      return list
+        .filter((b) => !excluded.has(b.path))
+        .filter((b) => !unseenOnly || b.status?.unseen !== 0)
         .map((b) => b.path);
+    }
     return strList(acc.config.mailboxes).length
       ? strList(acc.config.mailboxes)
       : ['INBOX'];
@@ -199,8 +231,8 @@ export function imapBackend(
     c: ImapLike,
     box: string,
     uids: number[],
-  ): Promise<MailMessage[]> => {
-    const out: MailMessage[] = [];
+  ): Promise<(MailMessage & { messageId?: string })[]> => {
+    const out: (MailMessage & { messageId?: string })[] = [];
     if (!uids.length) return out;
     for await (const m of c.fetch(
       uids.join(','),
@@ -220,6 +252,9 @@ export function imapBackend(
         snippet: await snippetOf(m.source),
         receivedAt: new Date(m.internalDate ?? m.envelope?.date ?? 0).getTime(),
         unread: !m.flags?.has?.('\\Seen'),
+        ...(m.envelope?.messageId
+          ? { messageId: String(m.envelope.messageId) }
+          : {}),
       });
     }
     return out;
@@ -231,21 +266,40 @@ export function imapBackend(
     minTime?: number,
   ) =>
     withClient(deps, settings(), async (c) => {
-      const all: MailMessage[] = [];
-      for (const box of await boxes(c)) {
-        all.push(
-          ...(await inMailbox(c, box, async () => {
-            const uids = ((await c.search(query, { uid: true })) || []).slice(
-              -limit,
-            );
-            return fetchSome(c, box, uids);
-          })),
-        );
+      const all: (MailMessage & { messageId?: string })[] = [];
+      const list = await boxes(c, query.seen === false);
+      let failed = 0;
+      for (const box of list) {
+        try {
+          all.push(
+            ...(await inMailbox(c, box, async () => {
+              const uids = ((await c.search(query, { uid: true })) || []).slice(
+                -limit,
+              );
+              return fetchSome(c, box, uids);
+            })),
+          );
+        } catch (e) {
+          // A folder you chose must work; one of "All folders" that can't be opened is skipped.
+          // When none worked it's the connection, not a folder: that is an account error, not "no mail".
+          if (!allFolders() || ++failed === list.length) throw e;
+          app.log.warn(`mail: skipped folder ${box}`, String(e));
+        }
       }
+      // The same mail in several folders (Gmail labels over IMAP) counts once.
+      const seen = new Set<string>();
       return all
         .filter((m) => minTime === undefined || m.receivedAt >= minTime)
         .sort((a, b) => b.receivedAt - a.receivedAt)
-        .slice(0, limit);
+        .filter((m) =>
+          !m.messageId
+            ? true
+            : seen.has(m.messageId)
+              ? false
+              : (seen.add(m.messageId), true),
+        )
+        .slice(0, limit)
+        .map(({ messageId: _, ...m }) => m);
     });
 
   const readRaw = (native: string) => {
@@ -324,11 +378,13 @@ export async function imapMailboxes(
   acc: AccountRow,
   deps: ImapDeps = realImapDeps,
 ) {
-  return withClient(deps, imapSettings(app, acc), async (c) =>
-    (await c.list()).map((b) => ({
+  return withClient(deps, imapSettings(app, acc), async (c) => {
+    const list = await c.list();
+    const excluded = excludedMailboxes(list);
+    return list.map((b) => ({
       id: b.path,
       name: b.path,
-      excluded: isExcludedMailbox(b),
-    })),
-  );
+      excluded: excluded.has(b.path),
+    }));
+  });
 }
