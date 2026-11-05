@@ -130,7 +130,9 @@ struct DebugView: View {
                 LabeledContent("Wear state", value: String(describing: link.wearState))
                 Button("Marker: glasses ON now") { link.addStateMarker("glasses ON") }
                 Button("Marker: glasses OFF now") { link.addStateMarker("glasses OFF") }
-                if link.stateTrace.isEmpty { Text("No state messages from the glasses yet.").foregroundStyle(.secondary) }
+                Button("Ask the glasses now") { Task { await link.checkWear() } }
+                    .disabled(!link.status.isConnected)
+                if link.stateTrace.isEmpty { Text("No answers from the glasses yet.").foregroundStyle(.secondary) }
                 ForEach(link.stateTrace.reversed().prefix(30)) { entry in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.time, format: .dateTime.hour().minute().second()).font(.caption2).foregroundStyle(.secondary)
@@ -142,7 +144,7 @@ struct DebugView: View {
             } header: {
                 Text("Wear capture")
             } footer: {
-                Text("Take the glasses off and put them on. Tap the matching marker at the same moment. Every state message the glasses send is listed here and written to the log with the markers.")
+                Text("The glasses only say whether they're worn when asked, so Lotti asks every 10 seconds. Take them off and put them on, tap the matching marker, and check that the answers follow. Changes and markers are also written to the log.")
             }
 
             if link.status.isConnected {

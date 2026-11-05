@@ -72,7 +72,7 @@ struct GlassesSettingsView: View {
         } header: {
             Text("Wear detection")
         } footer: {
-            Text("From the glasses' own sensor. Lotti Brain uses it to know when you're around; the display goes dark when you take them off. \"Unknown\" means the glasses haven't sent a wear signal yet; Debug → Wear capture records what they do send.")
+            Text("From the glasses' own sensor. Lotti Brain uses it to know when you're around; the display goes dark when you take them off. \"Unknown\" means the glasses haven't answered yet; Lotti asks them every 10 seconds.")
         }
     }
 

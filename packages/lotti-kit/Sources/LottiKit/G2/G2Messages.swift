@@ -8,6 +8,8 @@ public enum G2Service {
     public static let navigation: UInt8 = 0x08
     /// Glasses settings (brightness, head-up, wear detection).
     public static let settings: UInt8 = 0x09
+    /// Onboarding: setup steps, and the wear-status question ("are the glasses on a head?").
+    public static let onboarding: UInt8 = 0x10
     /// Device config: auth, arm roles, time sync.
     public static let deviceConfig: UInt8 = 0x80
     /// EvenHub: pages, text/list/image containers, heartbeat.
@@ -67,6 +69,21 @@ public enum G2Payload {
         w.varint(1, 1)
         w.varint(2, magic)
         w.message(3) { $0.message(4) { $0.varint(1, enabled ? 1 : 0) } }
+        return w.bytes
+    }
+
+    // MARK: Onboarding (sid 0x10)
+
+    /// Ask whether the glasses are on a head. The firmware never reports wearing on its own, so
+    /// this is the only way to know (wear capture, 2026-11-05). The reply is
+    /// `{1: 3, 2: magic, 5: {1: 1, 2: 1 worn / 0 not}}`; see `G2Events.wearReply`.
+    /// `{1: EVENT(3), 2: magic, 5: {1: GLS_WEAR_STATUS(1)}}` (even-g2-protocol
+    /// `build_wear_status_query`, byte-identical to the Even app's capture).
+    public static func wearStatusQuery(magic: UInt64) -> [UInt8] {
+        var w = ProtoWriter()
+        w.varint(1, 3)
+        w.varint(2, magic)
+        w.message(5) { $0.varint(1, 1) }
         return w.bytes
     }
 

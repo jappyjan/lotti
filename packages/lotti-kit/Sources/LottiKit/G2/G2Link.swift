@@ -10,7 +10,8 @@ import Observation
 /// Connection sequence (see docs/spikes/s1-ble.md):
 /// 1. connect both arms, subscribe to the control notify characteristic
 /// 2. auth on sid 0x80 (both arms), make the right arm the command arm, sync the clock
-/// 3. session prelude on sid 0x01, then an EvenHub heartbeat every 4 s
+/// 3. session prelude on sid 0x01, then an EvenHub heartbeat every 4 s and a wear question
+///    (sid 0x10) every 10 s: the glasses never report wearing on their own
 /// 4. display: create the page once (Cmd 0), then update texts (Cmd 5) or rebuild it (Cmd 7)
 ///    when the layout changes (see `G2PagePlanner`)
 /// 5. mic (on demand): Cmd 15 on, LC3 packets on `…6402`, decoded to 16 kHz PCM
@@ -49,6 +50,9 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var replyWaiters: [ReplyKey: Waiter<G2Message>] = [:]
     @ObservationIgnored private var armWaiter: (pairID: String, side: G2Side, waiter: Waiter<UUID>)?
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
+    @ObservationIgnored private var wearPoll: Task<Void, Never>?
+    /// Seconds between wear questions while connected.
+    @ObservationIgnored public var wearPollInterval: TimeInterval = 10
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
     @ObservationIgnored private var page = G2PagePlanner()
@@ -136,6 +140,7 @@ public final class G2Link: NSObject, GlassesLink {
                            flag: G2Flag.request, to: right)
             }
             if headTrackingWanted { Task { await armImu() } }
+            startWearPoll()
         } catch {
             log("connect failed: \(error)")
             stopArmScan()
@@ -489,9 +494,36 @@ public final class G2Link: NSObject, GlassesLink {
         }
     }
 
+    /// Asks for the wear status right away, then every `wearPollInterval` seconds.
+    private func startWearPoll() {
+        wearPoll?.cancel()
+        wearPoll = Task { [weak self] in
+            await self?.checkWear()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(self?.wearPollInterval ?? 10))
+                guard let self, !Task.isCancelled else { return }
+                await self.checkWear()
+            }
+        }
+    }
+
+    public func checkWear() async {
+        guard let right = arms[.right] else { return }
+        let m = nextMagic()
+        do {
+            // The answer updates `wearState` in the receive path, like the Even app's answers do.
+            _ = try await request(G2Payload.wearStatusQuery(magic: m), sid: G2Service.onboarding,
+                                  flag: G2Flag.request, magic: m, to: right, step: "wear status")
+        } catch {
+            log("wear status: no answer (\(error))")
+        }
+    }
+
     private func tearDown() {
         heartbeat?.cancel()
         heartbeat = nil
+        wearPoll?.cancel()
+        wearPoll = nil
         page.reset()
         lastFrame = nil
         redraw?.cancel()
@@ -745,15 +777,19 @@ extension G2Link: @MainActor CBPeripheralDelegate {
             return
         }
         let event = G2Events.decode(message)
-        if message.sid == G2Events.stateService {
-            // Wear-detection capture: every raw state message, whatever the decoder makes of it.
-            let decoded: String = if case .wear(let worn) = event { "decoded as \(worn ? "worn" : "removed")" } else { "not a wear event" }
-            let line = "\(arm.side) arm cmd \(message.command) payload \(hex(message.payload)) (\(decoded))"
+        if case .wear(let worn) = event {
+            record(StateTraceEntry(text: "wear: \(worn ? "worn" : "not worn") (\(arm.side) arm, \(hex(message.payload)))"))
+        } else if message.sid == G2Events.stateService {
+            let line = "\(arm.side) arm state cmd \(message.command) payload \(hex(message.payload))"
             print("[state] \(line)")
             record(StateTraceEntry(text: line))
         }
-        // IMU reports come several times a second; receiveImu logs them once a second.
-        if case .imu = event {} else { log("rx \(arm.side) \(hex(bytes))") }
+        // IMU reports come several times a second (receiveImu logs them once a second); wear
+        // answers every 10 s, logged below only when they change.
+        switch event {
+        case .imu, .wear: break
+        default: log("rx \(arm.side) \(hex(bytes))")
+        }
         if let magic = message.magic {
             let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
             replyWaiters.removeValue(forKey: key)?.resume(.success(message))
@@ -773,10 +809,10 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         case .imu(let x, let y, let z):
             receiveImu(x: x, y: y, z: z)
         case .wear(let worn):
-            // Both arms may report it; only a change counts.
+            // Answers come every 10 s (and to the Even app's questions too); only a change counts.
             let next: WearState = worn ? .worn : .removed
-            log("wear detection: \(next) from \(arm.side) arm (unverified layout)")
             if wearState != next {
+                print("[state] wear: \(next) from \(arm.side) arm (\(hex(message.payload)))")
                 wearState = next
                 inputBroadcast.send(InputEvent(worn ? .worn : .removed, from: .glasses))
             }
