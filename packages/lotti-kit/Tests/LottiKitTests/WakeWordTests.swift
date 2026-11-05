@@ -25,6 +25,9 @@ struct WakeWordMatcherTests {
         #expect(WakeWordMatcher.match("hey lottie what's the weather?")?.command == "what's the weather?")
         #expect(WakeWordMatcher.match("Hey Lotti 5 minutes timer")?.command == "5 minutes timer")
         #expect(WakeWordMatcher.match("okay hey Lotti what's up")?.command == "what's up")
+        #expect(WakeWordMatcher.match("Hey Lotti, hey Lotti, Timer 3 Minuten.")?.command == "Timer 3 Minuten.")
+        #expect(WakeWordMatcher.match("Hey Lotti, hey Lotti")?.command == "")
+        #expect(WakeWordMatcher.match("Hey Lotti, hi Lotta")?.command == "hi Lotta")
     }
 }
 

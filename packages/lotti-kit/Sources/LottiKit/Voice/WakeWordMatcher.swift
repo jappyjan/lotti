@@ -11,14 +11,27 @@ public enum WakeWordMatcher {
 
     static let greetings: Set<String> = ["hey", "hei", "hi", "hallo"]
 
-    /// The first "greeting + Lotti" in `text`, or nil.
+    /// The first "greeting + Lotti" in `text`, or nil. A phrase said again right after the first
+    /// ("Hey Lotti, hey Lotti, Timer") is part of the wake, not of the command.
     public static func match(_ text: String) -> Match? {
+        guard var command = command(after: text) else { return nil }
+        while let again = commandIfStartsWithWakePhrase(command) { command = again }
+        return Match(command: command)
+    }
+
+    private static func command(after text: String) -> String? {
         let words = words(in: text)
         for index in words.indices.dropLast() where greetings.contains(words[index].word) && isName(words[index + 1].word) {
             let rest = text[words[index + 1].end...]
-            return Match(command: String(rest.drop { !$0.isLetter && !$0.isNumber }).trimmingCharacters(in: .whitespacesAndNewlines))
+            return String(rest.drop { !$0.isLetter && !$0.isNumber }).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
+    }
+
+    private static func commandIfStartsWithWakePhrase(_ text: String) -> String? {
+        let words = words(in: text)
+        guard words.count >= 2, greetings.contains(words[0].word), isName(words[1].word) else { return nil }
+        return String(text[words[1].end...].drop { !$0.isLetter && !$0.isNumber }).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Runs of letters and digits, lowercased, with where each one ends.
