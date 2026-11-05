@@ -9,6 +9,7 @@ Status: working end to end in code; the iOS app and the glasses pieces (wear eve
 - [Architecture](docs/architecture.md)
 - [Lotti Brain protocol](docs/protocol.md) and [backend README](apps/brain/README.md)
 - [Roadmap](docs/roadmap.md)
+- [Wisp](docs/wisp/README.md): open firmware and SDK for the G2 (foundation stage, nothing flashed)
 
 ## Workspace
 
