@@ -2,7 +2,7 @@
 
 A curious raccoon living in your Even G2 glasses: an AI-first assistant you control with the R1 ring, the touchpads, voice, or the chat in the phone app.
 
-Status: working end to end in code; the iOS app and the glasses pieces (wear event, image containers) still need real-device checks.
+Status: working end to end in code; the iOS app and the glasses pieces (image containers) still need real-device checks.
 
 - [Vision & goals](docs/vision.md)
 - [Design language](docs/design.md)

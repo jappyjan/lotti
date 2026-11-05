@@ -62,8 +62,8 @@ public enum WearState: Equatable, Sendable {
     case removed
 }
 
-/// One line of the wear-detection capture: a raw state message (sid 0x0D) from the glasses, or a
-/// marker you set ("glasses ON now") so the bytes can be matched to what you did.
+/// One line of the wear trace: a wear answer (sid 0x10) or state message (sid 0x0D) from the
+/// glasses, or a marker you set ("glasses ON now") so the answers can be matched to what you did.
 public struct StateTraceEntry: Identifiable, Equatable, Sendable {
     public let id = UUID()
     public var time: Date
@@ -165,12 +165,14 @@ public protocol GlassesLink: AnyObject, Observable {
     /// Raw gravity samples while head tracking is on (about one a second on the G2). Each call
     /// returns a new stream; listening adds no traffic on the link.
     func imuSamples() -> AsyncStream<IMUSample>
-    /// Wear detection: `.unknown` until the glasses report. Changes also arrive as `.worn` /
-    /// `.removed` inputs. **Unverified on hardware:** the sid 0x0D layout is a best guess (see
-    /// `G2Events.wearState`).
+    /// Wear detection: `.unknown` until the glasses answer. The G2 only says when asked, so the
+    /// link asks every few seconds while connected (see `G2Payload.wearStatusQuery`). Changes
+    /// also arrive as `.worn` / `.removed` inputs.
     var wearState: WearState { get }
-    /// Every raw state message (sid 0x0D) and marker this session, newest last (at most 100). Also
-    /// written to the log as `[state]` and `[MARK]` lines, to find the real wear-detection bytes.
+    /// Ask the glasses now instead of waiting for the next regular question.
+    func checkWear() async
+    /// Every wear answer, state message and marker this session, newest last (at most 100). Also
+    /// written to the log as `[state]` and `[MARK]` lines.
     var stateTrace: [StateTraceEntry] { get }
     /// Adds a marker to the trace and the log, e.g. "glasses ON".
     func addStateMarker(_ text: String)

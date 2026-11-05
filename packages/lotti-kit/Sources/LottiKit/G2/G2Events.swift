@@ -4,8 +4,8 @@ public enum G2Event: Equatable, Sendable {
     /// One IMU sample (only while IMU reporting is on): gravity-normalised, so |v| ≈ 1 at rest
     /// (MentraOS). Axis orientation on the head isn't confirmed yet.
     case imu(x: Float, y: Float, z: Float)
-    /// Wear detection: the glasses were put on (true) or taken off (false). **Unverified on
-    /// hardware**, see `G2Events.wearState`.
+    /// Wear status: the glasses are on a head (true) or not (false). Only ever an answer to a
+    /// question (`G2Payload.wearStatusQuery`), ours or the Even app's; see `G2Events.wearReply`.
     case wear(Bool)
     /// Anything else worth logging (app lifecycle, state change, ring status), in words.
     case info(String)
@@ -26,7 +26,8 @@ public enum G2Event: Equatable, Sendable {
 /// eventSource: 1 right touchpad, 2 ring, 3 left touchpad. Zero values are left out on the wire,
 /// so a missing eventType is a click.
 public enum G2Events {
-    /// sid 0x0D: device state changes (wear detect, head-up, dashboard open/close).
+    /// sid 0x0D: device state changes (dashboard open/close, our page active again). Not wear:
+    /// the glasses send nothing here when they are put on or taken off (wear capture, 2026-11-05).
     public static let stateService: UInt8 = 0x0D
     /// The sid 0x0D payload saying EvenHub (our page) is the active app again (S1 capture).
     public static let evenHubActive: [UInt8] = [0x08, 0x01, 0x1A, 0x03, 0x08, 0xE0, 0x01]
@@ -42,8 +43,9 @@ public enum G2Events {
             guard message.command == 2, let event = ProtoReader.message(p, 13) else { return nil }
             return deviceEvent(event)
         case stateService:
-            if let worn = wearState(p) { return .wear(worn) }
             return .info("state change \(hex(p))")
+        case G2Service.onboarding where message.command == wearQueryCommand:
+            return wearReply(p).map(G2Event.wear)
         case G2Service.deviceConfig where message.command == ringConnectInfo:
             return .info(ringInfo(ProtoReader.message(p, 5) ?? []))
         default:
@@ -51,27 +53,26 @@ public enum G2Events {
         }
     }
 
-    /// Wear detection from a sid 0x0D payload, or nil if it isn't one.
+    /// Wear status from a sid 0x10 reply, or nil if it isn't one.
     ///
-    /// **Unverified on hardware.** The two sid 0x0D payloads captured so far (`evenHubActive`,
-    /// `dashboardToggled`) are `{1: event kind, 3: body}`. g2-kit's device-state schema and the
-    /// Even Hub SDK's `isWearing` flag say the glasses report wearing as a state change on this
-    /// service, but no capture of one exists and the APK recon has no layout. Best evidence: kind
-    /// 2 is "wear detect", the state is `{3: {1: 1 worn / 0 not worn}}`, or a plain varint in
-    /// field 2. If a real capture differs, only this function (and its tests) change; unknown
-    /// payloads still surface as `.info("state change …")`, so the app log shows the raw bytes.
-    public static func wearState(_ payload: [UInt8]) -> Bool? {
-        guard payload != evenHubActive, payload != dashboardToggled else { return nil }
-        let f = ProtoReader.varintFields(payload)
-        guard f[1] == wearEventKind else { return nil }
-        // Zero values are left out on the wire: an empty body means "not worn".
-        if let body = ProtoReader.message(payload, 3) { return (ProtoReader.varintFields(body)[1] ?? 0) != 0 }
-        if let state = f[2] { return state != 0 }
-        return nil
+    /// The firmware never pushes wear changes: during a marked on/off capture (2026-11-05,
+    /// firmware 2.4.0.24, wear detection on) nothing at all arrived when the glasses went on or
+    /// off. It only answers the onboarding question `{1: 3, 2: magic, 5: {1: GLS_WEAR_STATUS(1)}}`
+    /// with `{1: 3, 2: magic, 5: {1: 1, 2: 1 worn / 0 not worn}}` (even-g2-protocol
+    /// `decode_onboarding`). Zero values are left out on the wire, so a missing field 2 means
+    /// "not worn".
+    public static func wearReply(_ payload: [UInt8]) -> Bool? {
+        guard ProtoReader.varintFields(payload)[1] == wearQueryCommand,
+              let event = ProtoReader.message(payload, 5) else { return nil }
+        let f = ProtoReader.varintFields(event)
+        guard f[1] == wearStatusEvent else { return nil }
+        return (f[2] ?? 0) != 0
     }
 
-    /// The sid 0x0D event kind assumed to be wear detection (unverified).
-    static let wearEventKind: UInt64 = 2
+    /// Onboarding Cmd 3, EVENT: carries the wear-status question and its answer.
+    static let wearQueryCommand: UInt64 = 3
+    /// eOnboardingEvent GLS_WEAR_STATUS.
+    static let wearStatusEvent: UInt64 = 1
 
     private static func deviceEvent(_ event: [UInt8]) -> G2Event? {
         if let list = ProtoReader.message(event, 1) {

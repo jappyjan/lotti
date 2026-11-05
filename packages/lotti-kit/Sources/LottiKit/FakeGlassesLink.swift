@@ -35,6 +35,9 @@ public final class FakeGlassesLink: GlassesLink {
     public private(set) var wearState: WearState = .unknown
     public private(set) var stateTrace: [StateTraceEntry] = []
     public func addStateMarker(_ text: String) { stateTrace.append(StateTraceEntry(text: text, isMarker: true)) }
+    /// How often `checkWear()` was called.
+    public private(set) var wearChecks = 0
+    public func checkWear() async { wearChecks += 1 }
 
     @ObservationIgnored private let imuBroadcast = Broadcast<IMUSample>()
     @ObservationIgnored private let inputBroadcast = Broadcast<InputEvent>()

@@ -2,34 +2,51 @@ import Foundation
 import Testing
 @testable import LottiKit
 
-/// Wear detection. **The sid 0x0D wear layout is unverified**: these tests pin the decoder to the
-/// synthetic frames it is written for, not to captures. A real capture changes `G2Events.wearState`
-/// and these frames together.
+/// Wear detection. The glasses never report wearing on their own (marked on/off capture,
+/// 2026-11-05): they only answer the onboarding question on sid 0x10.
 struct WearDetectionTests {
-    private func decode(_ payload: String) -> G2Event? {
-        G2Events.decode(G2Message(sid: G2Events.stateService, flag: 0x01, seq: 1, payload: bytes(payload)))
+    private func decode(_ payload: String, sid: UInt8 = G2Service.onboarding) -> G2Event? {
+        G2Events.decode(G2Message(sid: sid, flag: 0x00, seq: 1, payload: bytes(payload)))
     }
 
-    @Test func wornAndRemovedFromSyntheticFrames() {
-        // {1: 2, 3: {1: 1}} and {1: 2, 3: {1: 0}} / {1: 2, 3: {}} (zero is left out on the wire)
-        #expect(decode("0802" + "1a020801") == .wear(true))
-        #expect(decode("0802" + "1a020800") == .wear(false))
-        #expect(decode("0802" + "1a00") == .wear(false))
-        // The plain-varint variant: {1: 2, 2: 1}
-        #expect(decode("08021001") == .wear(true))
-        #expect(decode("08021000") == .wear(false))
+    @Test func theQueryMatchesTheEvenAppsCapture() {
+        // even-g2-protocol CAP_WEAR: aa 21 41 0a 01 01 10 20 08 03 10 41 2a 02 08 01 d6 fe
+        let frames = G2Frame.encode(payload: G2Payload.wearStatusQuery(magic: 0x41), sid: G2Service.onboarding,
+                                    flag: G2Flag.request, seq: 0x41)
+        #expect(frames.map(hex) == ["aa21410a0101102008031041" + "2a020801" + "d6fe"])
     }
 
-    @Test func theKnownStateChangesAreNotWear() {
-        #expect(decode("08011a0308e001") == .info("state change 08011a0308e001"))  // EvenHub active (S1 capture)
-        #expect(decode("08011a00") == .info("state change 08011a00"))  // dashboard toggled
-        #expect(G2Events.wearState(G2Events.evenHubActive) == nil)
-        #expect(G2Events.wearState(G2Events.dashboardToggled) == nil)
-        #expect(G2Events.wearState([]) == nil)
+    @Test func theCapturedAnswerIsWorn() {
+        // Lotti's log, 2026-11-05 11:35:24: aa12910c010110000803100b2a0408011001006b
+        var assembler = G2FrameAssembler()
+        let message = assembler.feed(bytes("aa12910c010110000803100b2a0408011001006b"))
+        #expect(message?.sid == G2Service.onboarding)
+        #expect(message?.magic == 0x0B)
+        #expect(message.flatMap(G2Events.decode) == .wear(true))
+    }
+
+    @Test func notWornLeavesTheZeroOut() {
+        // Lotti's log, 2026-11-05 22:59:07, glasses taken off: {1: 3, 2: 133, 5: {1: 1}}, field 2 = 0
+        // left out on the wire.
+        #expect(decode("08031085012a020801") == .wear(false))
+        #expect(decode("0803100b2a0408011000") == .wear(false))
+    }
+
+    @Test func otherOnboardingMessagesAreNotWear() {
+        #expect(decode("0801100a1a020804") == nil)  // onboarding FINISH echo
+        #expect(decode("0803100b2a00") == nil)  // event without a type
+        #expect(decode("0803100b2a0408021001") == nil)  // another event type
+    }
+
+    @Test func stateMessagesAreNeverWear() {
+        // sid 0x0D: EvenHub active and dashboard toggled (both captured), and the old guess.
+        #expect(decode("08011a0308e001", sid: G2Events.stateService) == .info("state change 08011a0308e001"))
+        #expect(decode("08011a00", sid: G2Events.stateService) == .info("state change 08011a00"))
+        #expect(decode("08021001", sid: G2Events.stateService) == .info("state change 08021001"))
     }
 
     @Test func otherSidsAreNotWear() {
-        #expect(G2Events.decode(G2Message(sid: G2Service.evenHub, flag: 1, seq: 1, payload: bytes("08021001"))) == nil)
+        #expect(decode("0803100b2a0408011001", sid: G2Service.evenHub) == nil)
     }
 
     @MainActor
@@ -43,6 +60,8 @@ struct WearDetectionTests {
         link.sendWear(false)
         #expect(link.wearState == .removed)
         #expect(await inputs.next() == InputEvent(.removed, from: .glasses))
+        await link.checkWear()
+        #expect(link.wearChecks == 1)
     }
 }
 
