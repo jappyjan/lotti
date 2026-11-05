@@ -133,7 +133,7 @@ public final class Conductor {
     @ObservationIgnored private var usingPhoneMic = false
     /// When Jan last asked anything: the offline brain's clock for `timing.conversation`.
     /// The backend has no such clock: it continues one conversation forever.
-    @ObservationIgnored var lastAsked: Date?
+    @ObservationIgnored private var lastAsked: Date?
     @ObservationIgnored private var shownFrame: GlassesFrame?
     @ObservationIgnored private var drawing = false
     /// Shared demand for the IMU feed (head-up here, the mascot elsewhere).
@@ -168,10 +168,12 @@ public final class Conductor {
     /// Set while the Debug recorder takes clips, so saying "Hey Lotti" for it doesn't wake Lotti.
     @ObservationIgnored public var wakePaused = false
     @ObservationIgnored var wakeStage2Seconds = 0.0
-    /// What the "Hey Lotti" listener is doing, for the status and Debug screens.
+    /// What the "Hey Lotti" listener is doing, for Settings → Glasses and Debug.
     public internal(set) var wakeState: WakeState = .off
     /// The newest candidate and how it ended ("0.91 confirmed: …", "0.85 rejected: …").
     public internal(set) var wakeLast: String?
+    /// The newest classifier score, for Debug.
+    public internal(set) var wakeScore: Double?
     /// Minutes the classifier and the speech confirm ran, to judge battery.
     public internal(set) var wakeMinutes: (stage1: Double, stage2: Double) = (0, 0)
 
@@ -282,6 +284,7 @@ public final class Conductor {
     /// Call when the glasses disconnect.
     public func glassesDisconnected() {
         backend?.presence(.glassesDisconnected)
+        restartWake()  // stops it: there is no glasses' mic now
     }
 
     /// Redraw the glasses' indicators after the inbox changed outside the backend's events
@@ -297,7 +300,9 @@ public final class Conductor {
         reportPresence(event)
         switch event.gesture {
         case .worn: showHeldCatchup()  // otherwise presence only; nothing to show
-        case .removed: if mode != .off { turnOff() }
+        case .removed:
+            if mode == .listening { cancelListening() }
+            if mode != .off { turnOff() }
         case .longPress:
             // Display off: only "double tap, then hold" talks (the double tap opens today first).
             guard mode != .off else { return log("hold ignored: display off, no double tap first") }
@@ -594,7 +599,7 @@ public final class Conductor {
         presentCatchup(held.catchup)
     }
 
-    func turnOff() {
+    private func turnOff() {
         let hadConversation = lastAsked != nil
         timer?.cancel()
         ticker?.cancel()
@@ -679,7 +684,7 @@ public final class Conductor {
     }
 
     /// Shows the oldest ringing timer, unless you're talking or Lotti is thinking.
-    private func showAlertIfDue() {
+    func showAlertIfDue() {
         guard let ringer = ringing.first, ![.alert, .listening, .working].contains(mode) else { return }
         if let current = screen, current.kind != .done { backStack.append(current) }
         showAlert(ringer)
@@ -761,7 +766,7 @@ public final class Conductor {
 
     // MARK: - Voice
 
-    func startListening() {
+    private func startListening() {
         guard mode != .listening else { return }
         abortWakeSession(reason: "hold-to-talk started")
         timer?.cancel()
@@ -842,16 +847,16 @@ public final class Conductor {
     /// The latest partial transcript, used if the final one doesn't arrive in time.
     @ObservationIgnored var lastPartial = ""
     /// Set when you let go (or cancel) before the microphone finished starting.
-    @ObservationIgnored var micStopRequested = false
+    @ObservationIgnored private var micStopRequested = false
 
-    func cancelListening() {
+    private func cancelListening() {
         abortWakeSession(reason: "cancelled")
         listening?.cancel()
         listening = nil
         Task { await stopMicrophone() }
     }
 
-    func stopMicrophone() async {
+    private func stopMicrophone() async {
         micStopRequested = true
         if usingPhoneMic {
             await phoneMicrophone?.stop()
@@ -1074,11 +1079,11 @@ public final class Conductor {
     // MARK: - Language
 
     /// The glasses' own words follow the same language as the inbox summary.
-    private func say(_ german: String, _ english: String) -> String { summary.german ? german : english }
+    func say(_ german: String, _ english: String) -> String { summary.german ? german : english }
     private var tryAgain: String { say("Nochmal", "Try again") }
     private var notConnected: String { say("Lotti Brain ist nicht verbunden.", "Lotti Brain isn't connected.") }
 
-    func log(_ message: String) {
+    private func log(_ message: String) {
         print("[Lotti] \(message)")
     }
 }

@@ -120,6 +120,11 @@ final class WakeWordRecorder {
         do {
             let directory = Self.root.appending(path: label)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            // Room audio (other people too) stays out of iCloud backups.
+            var root = Self.root
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? root.setResourceValues(values)
             let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false)!
             let url = directory.appending(path: "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString.prefix(4)).wav")
             let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatInt16, interleaved: false)

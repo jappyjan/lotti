@@ -10,6 +10,7 @@ struct DebugView: View {
     private var link: any GlassesLink { model.link }
     private var conductor: Conductor { model.conductor }
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var threshold = Settings.wakeThreshold
     @State private var recorder: WakeWordRecorder?
 
@@ -61,7 +62,7 @@ struct DebugView: View {
             } header: {
                 Text("Record training clips")
             } footer: {
-                Text("From the glasses' mic, saved in Documents/wakeword. \"Hey Lotti\" doesn't wake Lotti while recording, and leaving this screen stops it. Copy them to packages/wake-word/data/user and retrain.")
+                Text("From the glasses' mic (connect them first), saved in Documents/wakeword. \"Hey Lotti\" doesn't wake Lotti while recording; leaving this screen or locking the phone stops it. Copy them to packages/wake-word/data/user and retrain.")
             }
         }
     }
@@ -175,6 +176,8 @@ struct DebugView: View {
         .onAppear { if recorder == nil { recorder = WakeWordRecorder(conductor: conductor) } }
         // No recording you can't see (or stop).
         .onDisappear { recorder?.stop() }
+        // Nor in the background or with the phone locked.
+        .onChange(of: scenePhase) { _, phase in if phase != .active { recorder?.stop() } }
     }
 
     /// The last map bitmap the glasses got, or a placeholder. Tap for the full-size image.

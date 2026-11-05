@@ -101,13 +101,12 @@ public final class MicrophoneHub {
 
     private func close() async {
         if let closing { return await closing.value }
-        let task = Task { @MainActor in
-            self.pump?.cancel()
-            self.pump = nil
-            for continuation in self.subscribers.values { continuation.finish() }
-            self.subscribers = [:]
-            await self.link.stopMicrophone()
-        }
+        // Who is subscribed now ends now: someone subscribing meanwhile waits for `closing`, then reopens.
+        pump?.cancel()
+        pump = nil
+        for continuation in subscribers.values { continuation.finish() }
+        subscribers = [:]
+        let task = Task { @MainActor in await self.link.stopMicrophone() }
         closing = task
         await task.value
         closing = nil

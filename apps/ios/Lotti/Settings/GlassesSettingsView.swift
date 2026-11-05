@@ -61,7 +61,7 @@ struct GlassesSettingsView: View {
             Text("Connection")
         } footer: {
             Text(link.status.isConnected
-                 ? "Display off? Double tap, or look up (if switched on below), to open Today. A \"Catch-up\" choice appears there for 12 hours after Lotti sends one. To talk: double tap, then hold and speak (just hold while something is showing). Scroll and tap to pick, double tap to go back."
+                 ? "Display off? Double tap, or look up (if switched on below), to open Today. A \"Catch-up\" choice appears there for 12 hours after Lotti sends one. To talk: double tap, then hold and speak (just hold while something is showing), or say \"Hey Lotti, …\" if it's on below. Scroll and tap to pick, double tap to go back."
                  : "Force-quit the Even app first. Lotti replaces it while connected.")
         }
     }
@@ -109,7 +109,7 @@ struct GlassesSettingsView: View {
             Toggle("Listen for \"Hey Lotti\"", isOn: $wakeWord)
                 .onChange(of: wakeWord) { _, on in conductor.setWakeWord(enabled: on) }
             if wakeWord {
-                StatusRow(title: "Hey Lotti", value: wakeText, good: conductor.wakeState == .listening ? true : nil)
+                StatusRow(title: "Hey Lotti", value: wakeText, good: wakeGood)
             }
         } header: {
             Text("Voice")
@@ -122,7 +122,15 @@ struct GlassesSettingsView: View {
         switch conductor.wakeState {
         case .off: link.status.isConnected ? "Off" : "Waiting for glasses"
         case .listening: "Listening"
-        case .unavailable: "Glasses mic unavailable"
+        case .unavailable(let reason): reason
+        }
+    }
+
+    private var wakeGood: Bool? {
+        switch conductor.wakeState {
+        case .off: nil
+        case .listening: true
+        case .unavailable: false
         }
     }
 

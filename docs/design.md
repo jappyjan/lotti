@@ -59,7 +59,7 @@ The same on the R1 ring and both temple touchpads.
 | Tap               | Do the highlighted thing. On its own (display off) it does nothing                                                                                                                            |
 | Double tap        | Back or dismiss. With the display off: the today view (also by looking up, if head-up is on). While a catch-up brief from the last 12 h exists, Today has a "Catch-up" choice that shows it again |
 | Long press (hold) | Talk to Lotti while held. She knows what you're looking at ("tell her…" means the sender). With the display off: double tap (today opens), then hold, so a stray hold doesn't start listening |
-| "Hey Lotti"       | Not a gesture, but the same as a hold, from any state (display off, phone locked): Listening starts by itself and ends after 1.5 s of quiet. Double tap cancels |
+| "Hey Lotti"       | Not a gesture, but the same as a hold, from any state (display off, phone locked): Listening starts by itself and ends after 1.5 s of quiet; nothing said in 5 s, the display goes dark. Double tap cancels |
 | Look up           | The look-up view; look down to hide it                                                                                                                                                        |
 
 ## Without voice
