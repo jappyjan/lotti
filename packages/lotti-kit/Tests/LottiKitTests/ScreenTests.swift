@@ -177,11 +177,13 @@ struct ScreenRendererTests {
         #expect(narrowLit.min()! >= 0 && narrowLit.max()! < width)
     }
 
-    @Test func atMostTwelveContainers() {
+    @Test func atMostFourPictures() {
+        // The glasses reject a page with more than four image containers.
         let many = Screen(.says, "x", header: Header("Thu", right: "14:05"),
                           cards: (1...5).map { Card("\($0)", art: .icon(.sun)) }, rail: Rail([RailItem("A", .dismiss)]))
         let frame = ScreenRenderer().render(many)
-        #expect(frame.boxes.count + frame.images.count == 12)
+        #expect(frame.images.count == ScreenRenderer.maxImages)
+        #expect(frame.boxes.count + 1 + frame.images.count <= 12)  // + the input box
     }
 
     @Test func iconsAreDrawn() {
@@ -257,9 +259,9 @@ struct TodayComposerTests {
         let weather = Weather(temperature: 12, condition: "cloudy", high: 14, low: 7, days: days)
         let screen = composer.forecast(weather, now: at(9))
         #expect(screen.text == "12° and cloudy, between 7° and 14° today.")
-        #expect(screen.cards.count == 5)
-        #expect(screen.cards[0] == Card("Today", ["Rain 80%"], art: .day(.rain, low: 5, high: 10, range: 5...14)))
-        #expect(screen.cards[1] == Card("Mon", art: .day(.rain, low: 5, high: 11, range: 5...14)))
+        #expect(screen.cards.count == 4)  // one picture each, and a page takes four
+        #expect(screen.cards[0] == Card("Today", ["Rain 80%"], art: .day(.rain, low: 5, high: 10, range: 5...13)))
+        #expect(screen.cards[1] == Card("Mon", art: .day(.rain, low: 5, high: 11, range: 5...13)))
         let today = composer.screen(for: TodayInfo(now: at(9), weather: weather))
         #expect(today.rail?.items.last?.action == .show(screen))
     }

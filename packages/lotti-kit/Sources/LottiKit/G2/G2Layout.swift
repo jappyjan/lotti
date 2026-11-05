@@ -39,6 +39,8 @@ public struct G2TextBox: Equatable, Sendable {
 
     public static let mainID = 1
     public static let railID = 2
+    /// The blank box that takes the events (see `boxes(for:)`).
+    public static let inputID = 9
     /// Header and card boxes start here: the indicator images own ids 3 and 4.
     public static let firstExtraID = 10
 
@@ -53,11 +55,16 @@ public struct G2TextBox: Equatable, Sendable {
         self.text = text
     }
 
-    /// The containers for a frame. The main box is id 1 and takes the events, the choices block
-    /// (`rail`) is id 2, everything else counts up from `firstExtraID`.
+    /// The containers for a frame. The main box is id 1, the choices block (`rail`) is id 2,
+    /// everything else counts up from `firstExtraID`, and the blank `input` box comes last.
+    ///
+    /// The input box takes the events. The firmware scrolls (and bounces) the container that
+    /// takes them, so it is one with nothing in it: the sentence and the choices stay put while
+    /// you scroll, and Lotti moves the highlight itself. Seen 2026-11-05: with the sentence or
+    /// the choices taking the events, a scroll bounced that text.
     static func boxes(for frame: GlassesFrame) -> [G2TextBox] {
         var next = firstExtraID
-        return frame.boxes.prefix(G2Layout.maxTextBoxes).enumerated().map { index, box in
+        return frame.boxes.prefix(G2Layout.maxTextBoxes - 1).enumerated().map { index, box in
             let id: Int
             if index == 0 {
                 id = mainID
@@ -68,10 +75,15 @@ public struct G2TextBox: Equatable, Sendable {
                 next += 1
             }
             return G2TextBox(id: id, name: String(box.name.prefix(14)), x: box.x, y: box.y, width: box.width,
-                             height: box.height, capturesEvents: index == 0,
+                             height: box.height, capturesEvents: false,
                              text: box.text.isEmpty ? G2Layout.blank : box.text)
-        }
+        } + [input]
     }
+
+    /// The blank box that takes the events, in the top-right corner (left of it is the date;
+    /// the attention mark only shows with the display off).
+    static let input = G2TextBox(id: inputID, name: "input", x: G2Layout.width - 48, y: 0, width: 48,
+                                 height: G2Layout.lineHeight, capturesEvents: true, text: G2Layout.blank)
 
     /// The same container without its text: what decides between an update and a rebuild.
     var geometry: G2TextBox {
@@ -115,9 +127,9 @@ public struct G2ImageBox: Equatable, Sendable {
         self.compression = compression
     }
 
-    /// Encodes a monochrome bitmap (lit pixels green, the rest off) as a container at (x, y).
+    /// Encodes a monochrome bitmap (lit pixels full brightness, the rest off) as a container at (x, y).
     public init?(id: Int, name: String, x: Int, y: Int, bitmap: MonoBitmap) {
-        guard let encoded = NavMapBmp.encode(rgba: bitmap.rgba(), width: bitmap.width, height: bitmap.height) else { return nil }
+        guard let encoded = NavMapBmp.encode(bitmap) else { return nil }
         self.init(id: id, name: name, x: x, y: y, width: bitmap.width, height: bitmap.height,
                   data: encoded.data, compression: encoded.mode)
     }

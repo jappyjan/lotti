@@ -122,7 +122,7 @@ public struct TodayComposer: Sendable {
                       cards: cards, rail: Rail(items))
     }
 
-    /// The weather now, then a card per day (up to 5): its icon, a bar from low to high on the
+    /// The weather now, then a card per day (up to 4, one picture each): its icon, a bar from low to high on the
     /// scale of the whole forecast with the numbers at its ends, and the chance of rain if it's
     /// worth saying.
     public func forecast(_ weather: Weather, now: Date) -> Screen {

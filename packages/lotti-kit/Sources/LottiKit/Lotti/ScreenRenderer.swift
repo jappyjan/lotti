@@ -52,7 +52,8 @@ public struct ScreenRenderer: Sendable {
     static let cardGap = 8
     /// Space between a picture and the text next to it.
     static let artGap = 10
-    public static let maxCards = 5
+    /// Four, like the pictures: a forecast card per day needs one picture each.
+    public static let maxCards = 4
     /// The clock in the header is drawn this big (5 × 7 font × 4 = 28 px tall).
     static let clockScale = 4
     static let bigHeaderHeight = 32
@@ -60,6 +61,9 @@ public struct ScreenRenderer: Sendable {
     public static let firstImageID = 20
     /// The page holds 12 containers (text and images together).
     static let maxContainers = 12
+    /// The glasses take at most 4 image containers on a page and reject the whole page beyond
+    /// that (seen 2026-11-05: a 5-day forecast rebuild got no ack; the Even Hub docs say 4).
+    public static let maxImages = 4
 
     public init(layout: TextLayout = .g2) {
         self.layout = layout
@@ -193,12 +197,12 @@ public struct ScreenRenderer: Sendable {
         return finish(boxes, art: art)
     }
 
-    /// At most 8 text boxes and 12 containers in all. A lone sentence keeps one free for the
+    /// At most 7 text boxes (the link adds the input box), 4 pictures and 12 containers in all. A lone sentence keeps one free for the
     /// location pin (the Conductor shows it only there; the attention mark only with the display off).
     private func finish(_ boxes: [FrameBox], art: [Art]) -> GlassesFrame {
-        let text = Array(boxes.prefix(G2Layout.maxTextBoxes))
+        let text = Array(boxes.prefix(G2Layout.maxTextBoxes - 1))
         let reserved = text.count == 1 ? 1 : 0
-        let images = art.prefix(max(Self.maxContainers - reserved - text.count, 0)).enumerated().compactMap { index, art in
+        let images = art.prefix(min(max(Self.maxContainers - reserved - text.count - 1, 0), Self.maxImages - reserved)).enumerated().compactMap { index, art in
             G2ImageBox(id: Self.firstImageID + index, name: art.name, x: art.x, y: art.y, bitmap: art.bitmap)
         }
         return GlassesFrame(boxes: text, images: images)
