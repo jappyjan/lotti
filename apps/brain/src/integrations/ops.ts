@@ -39,13 +39,27 @@ export const accountOps: Operation[] = [
     }),
     risk: 'app_only',
     handler(i, { app }) {
-      app.secrets.set(GOOGLE_SECRETS.clientId, i.clientId);
+      const clientId = i.clientId.trim();
+      const clientSecret = i.clientSecret?.trim();
+      const redirectUri = i.redirectUri?.trim();
+      if (!clientId) throw new Error('Client id is empty.');
+      if (redirectUri) {
+        const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(redirectUri)?.[1];
+        if (!scheme)
+          throw new Error(
+            'The redirect URI needs a scheme, e.g. lotti://oauth or https://host/path.',
+          );
+        if (/^(javascript|data|file|vbscript|about|blob)$/i.test(scheme))
+          throw new Error(
+            `The redirect URI scheme "${scheme}" is not allowed.`,
+          );
+      }
+      app.secrets.set(GOOGLE_SECRETS.clientId, clientId);
       // A new client replaces the old one completely (secret and override included).
-      if (i.clientSecret)
-        app.secrets.set(GOOGLE_SECRETS.clientSecret, i.clientSecret);
+      if (clientSecret)
+        app.secrets.set(GOOGLE_SECRETS.clientSecret, clientSecret);
       else app.secrets.delete(GOOGLE_SECRETS.clientSecret);
-      if (i.redirectUri)
-        app.secrets.set(GOOGLE_SECRETS.redirect, i.redirectUri);
+      if (redirectUri) app.secrets.set(GOOGLE_SECRETS.redirect, redirectUri);
       else app.secrets.delete(GOOGLE_SECRETS.redirect);
       return googleClientInfo(app);
     },

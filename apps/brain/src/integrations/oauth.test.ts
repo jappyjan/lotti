@@ -108,6 +108,29 @@ test('google redirect: iOS client gets the reversed id, Web client the https cal
   assert.equal(c.callbackScheme, 'lotti');
 });
 
+test('google client: redirect override is trimmed and validated', async () => {
+  const t = makeApp();
+  registerIntegrations(t.app);
+  const set = (redirectUri: string) =>
+    op(t, 'accounts.set_google_client', {
+      clientId: ' 123-abc.apps.googleusercontent.com ',
+      redirectUri,
+    });
+  // Blank override = no override (stays an iOS client); the client id is trimmed.
+  const blank = (await set('   ')).result;
+  assert.equal(blank.mode, 'ios');
+  assert.equal(
+    blank.redirectUri,
+    'com.googleusercontent.apps.123-abc:/oauth2redirect',
+  );
+  for (const bad of ['nodomain', 'javascript:alert(1)', 'DATA:text/html,x'])
+    assert.equal((await set(bad)).ok, false, bad);
+  assert.equal(
+    (await set(' lotti://oauth ')).result.redirectUri,
+    'lotti://oauth',
+  );
+});
+
 test('google redirect: token exchange sends the same redirect_uri', async () => {
   const { t, m } = googleApp();
   await op(t, 'accounts.set_google_client', {
@@ -355,9 +378,16 @@ test('mcp oauth: without dynamic registration a client id is needed; manual clie
   // The origin fallback would have offered /register only without metadata; here metadata says "none".
   const r = await op(t, 'mcp.oauth_start', { id });
   assert.match(r.error, /client id/);
+  // Blank and oversized ids are refused; a padded one is trimmed.
+  for (const clientId of ['', '   ', 'x'.repeat(513)])
+    assert.equal(
+      (await op(t, 'mcp.oauth_set_client', { id, clientId })).ok,
+      false,
+      JSON.stringify(clientId.slice(0, 8)),
+    );
   await op(t, 'mcp.oauth_set_client', {
     id,
-    clientId: 'mine',
+    clientId: ' mine ',
     clientSecret: 'shh',
   });
   const s = (await op(t, 'mcp.oauth_start', { id })).result;

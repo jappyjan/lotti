@@ -421,13 +421,15 @@ export const integrationOps: Operation[] = [
       'Use a registered OAuth client for an MCP server that has no automatic client registration (clientId, optional clientSecret). Write-only.',
     inputSchema: z.object({
       id: z.string(),
-      clientId: z.string().min(1),
-      clientSecret: z.string().optional(),
+      clientId: z.string().max(512),
+      clientSecret: z.string().max(2048).optional(),
     }),
     risk: 'app_only',
     handler(i, { app }) {
       if (!mcpRow(app, i.id)) throw new Error('No such MCP server.');
-      setManualClient(app, i.id, i.clientId, i.clientSecret);
+      const clientId = i.clientId.trim();
+      if (!clientId) throw new Error('Client id is empty.');
+      setManualClient(app, i.id, clientId, i.clientSecret?.trim() || undefined);
       return { id: i.id, configured: true };
     },
   }),
