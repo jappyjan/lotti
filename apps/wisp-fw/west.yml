@@ -26,6 +26,9 @@ manifest:
           # Bluetooth host crypto (PSA). Off in M0; the rule 8 negative build in
           # wisp-fw:test links a full BT image and needs it, as M6 will.
           - mbedtls
+          # littlefs (BSD-3-Clause): Wisp Boot reads/writes the stock NOR filesystem with it,
+          # and the rung-3 host tools build and inspect littlefs images from the same source.
+          - littlefs
 
   self:
     path: manifest

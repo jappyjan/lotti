@@ -8,7 +8,7 @@ own copy on purpose (rule 3 wants an independent second implementation).
 # MRAM (per temple)
 SBL_START = 0x0040_0000          # Ambiq secure bootloader, never written
 EVEN_BOOTLOADER_START = 0x0041_0000
-PREAMBLE_ADDR = 0x0043_7FE0      # 32-byte EVEN main-app preamble, added by wisp-ota
+PREAMBLE_ADDR = 0x0043_7FE0      # where the 32-byte preamble would sit; the bootloader never writes it
 APP_LOAD_ADDR = 0x0043_8000      # the Even bootloader hands off here
 APP_END_LIMIT = 0x007F_8000      # hard ceiling for the image end (exclusive)
 UPDATE_FLAG_ADDR = 0x007F_E000   # bootloader-owned flag record

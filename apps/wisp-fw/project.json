@@ -7,25 +7,55 @@
   "targets": {
     "setup": {
       "executor": "nx:run-commands",
-      "options": { "command": "apps/wisp-fw/scripts/setup.sh" },
+      "options": {
+        "command": "apps/wisp-fw/scripts/setup.sh"
+      },
       "cache": false
     },
     "build": {
       "executor": "nx:run-commands",
       "dependsOn": ["setup"],
-      "options": { "command": "apps/wisp-fw/scripts/build.sh" },
+      "options": {
+        "command": "apps/wisp-fw/scripts/build.sh"
+      },
       "cache": false
     },
     "sim": {
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
-      "options": { "command": "apps/wisp-fw/scripts/sim.sh" },
+      "options": {
+        "command": "apps/wisp-fw/scripts/sim.sh"
+      },
       "cache": false
     },
     "test": {
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
-      "options": { "command": "apps/wisp-fw/scripts/test.sh" },
+      "options": {
+        "command": "apps/wisp-fw/scripts/test.sh"
+      },
+      "cache": false
+    },
+    "build-boot": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["setup"],
+      "options": {
+        "command": "apps/wisp-fw/scripts/build_boot.sh"
+      },
+      "cache": false
+    },
+    "boot-test": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "setup",
+        {
+          "projects": ["wisp-ota"],
+          "target": "build"
+        }
+      ],
+      "options": {
+        "command": "apps/wisp-fw/scripts/boot_test.sh"
+      },
       "cache": false
     }
   }

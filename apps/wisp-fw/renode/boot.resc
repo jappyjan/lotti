@@ -1,0 +1,26 @@
+:name: wisp_g2_boot — rung 3: the real Even bootloader, Wisp Boot and a NOR littlefs image
+:description: Builds the rung-3 machine (wisp_g2_boot.repl). The harness
+:description: (tests/boot/rung3.py) loads the images and drives the run over the monitor:
+:description:   nor LoadImage @<nor.bin>; sysbus LoadBinary @<bootloader> 0x410000;
+:description:   sysbus LoadBinary @<installed main image> 0x438000; flag words at 0x7FE000;
+:description:   rstgen PowerCut  (cold start: the SBL hand-off into the bootloader at 0x410000)
+:description: Nothing here contains or patches Even's code: the bootloader runs unmodified, all
+:description: models are peripherals (renode/models/, third_party/g2emu/).
+
+include $ORIGIN/../third_party/g2emu/cs/G2ClkgenRtc.cs
+include $ORIGIN/../third_party/g2emu/cs/G2Pwrctrl.cs
+include $ORIGIN/../third_party/g2emu/cs/G2Uart1Shell.cs
+include $ORIGIN/../third_party/g2emu/cs/G2Iom.cs
+include $ORIGIN/models/WispTrace.cs
+include $ORIGIN/models/WispUartIdle.cs
+include $ORIGIN/models/WispAdc.cs
+include $ORIGIN/models/WispMspiNor.cs
+include $ORIGIN/models/WispRstGen.cs
+include $ORIGIN/models/WispWdt.cs
+include $ORIGIN/models/WispBootRom.cs
+include $ORIGIN/models/WispProbe.cs
+
+mach create "g2"
+machine LoadPlatformDescription $ORIGIN/wisp_g2_boot.repl
+bootrom Install
+logLevel 3
