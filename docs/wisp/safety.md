@@ -66,6 +66,6 @@ Emulation only (t3-worker, Renode), stock bootloader running unmodified, Wisp Bo
 
 ## Hardware log
 
-| Date | Temple | Rung | Image (SHA-256, short) | Result              |
-| ---- | ------ | ---- | ---------------------- | ------------------- |
-| —    | —      | —    | —                      | nothing flashed yet |
+| Date       | Temple | Rung           | Image (SHA-256, short)                                               | Result                                                                                                                                                                                                                                        |
+| ---------- | ------ | -------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-11-06 | left   | 1 (first half) | `07fcde09…7b73cb3a` (stock 2.4.0.24 repacked as 2.4.0.29, main-only) | Sent over BLE from the Lotti Wisp update screen: success. After restart the right temple reports left 2.4.0.29 / right 2.4.0.24; the temple boots, the Lotti session (display, touch) and the Even app work. Return to pure stock still open. |
