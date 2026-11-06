@@ -156,7 +156,7 @@ No public brick reports or RMA experiences [C, not found]. Even's support articl
 
 **If Jan says no to W18:** no recovery path can be proven on hardware before rung 4. The only nets are 3a and 3e, both unproven on hardware, and SWD is a destructive last resort. In that case I would not open rung 4 on Jan's pair.
 
-### Proposed decision W18 (needs Jan)
+### Decision W18 (Jan, 2026-11-06: **accepted, option A**)
 
 > Allow exactly one bootloader write per temple: drdaeman's patched 2.3.2.14 bootloader (MIT, pinned at `1d22097`, SHA-256 of the output pinned in the hardware log), installed with its own tool, left temple first. Purpose: a UART2 recovery loader reachable through the case. After it, safety rules 1–2 apply again unchanged: Wisp never writes the bootloader, `wisp-ota` never sends type 1.
 
