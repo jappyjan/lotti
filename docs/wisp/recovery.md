@@ -208,7 +208,7 @@ What can actually interrupt one second of a running, battery-powered temple: its
 
 - **Temple out of the case** for the install, on the table, folded, nothing that can bump it. The case can then neither reset it nor talk to it. BLE, not the case UART: the BLE OTA is the path proven on this hardware (rung 1), and the case-UART OTA (`0x52`–`0x55`) is untested.
 - **Battery ≥ 80 %** (Even app), phone Bluetooth off, the Even app and Lotti force-quit. The Mac is the only central.
-- The other (right) temple stays in the case.
+- The temples are one pair of glasses, so both come out of the case: the whole pair on the table, folded. The case must not touch either temple during the install.
 
 ### Emulation proof (Renode, `pnpm nx run wisp-fw:w18-test`)
 
@@ -264,7 +264,7 @@ Success: it prints the image hash `87e2d4e0…`, 38 pages, the window, and the t
 `uv run --with pyserial==3.5 python -I apps/wisp-recovery/step0.py --side left`
 Success: `OK: left temple firmware 2.4.0.24, hardware 5 …`. Stop on anything else (README step 0, safe stops).
 
-**C. The install: Jan's go for this flash is the `--go` token.** Left temple out of the case, folded, flat; right temple in the case; battery ≥ 80 % read in the Even app; then force-quit the Even app and Lotti, phone Bluetooth off.
+**C. The install: Jan's go for this flash is the `--go` token.** Both temples out of the case (they are one pair), folded, flat on the table; battery ≥ 80 % read in the Even app; then force-quit the Even app and Lotti, phone Bluetooth off.
 `uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py bootloader-install --side left --address <LEFT-ID> --battery <N> --go W18-LEFT-87e2d4e0a7a6`
 Success: `38` lines `…/155648 bytes staged`, `END status 8: the app is copying…`, then `main app still answers after the copy`, and a report under `apps/wisp-recovery/runs/`. Don't touch the temple during the ~1 s after `END status 8`.
 Stops and what they mean:

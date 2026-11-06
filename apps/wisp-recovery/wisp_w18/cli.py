@@ -64,7 +64,7 @@ Preconditions (bootloader-install checks the ones marked *):
   * --battery N with N >= 80 (read it in the Even app first)
   * --go {pins.go_token(side)}  (Jan's per-flash go, rule 4)
     the {side} temple OUT of the case, flat on the table, nothing that can bump it; phone
-    Bluetooth off; Even app and Lotti force-quit; the other temple in the case or switched off
+    Bluetooth off; Even app and Lotti force-quit; the whole pair out of the case
 
 After it: put the {side} temple in the case and run `w18.py loader-hello --side {side}`.
 """
