@@ -145,7 +145,7 @@ No public brick reports or RMA experiences [C, not found]. Even's support articl
 
 **Prove 3d first**, as the one recovery path that can be proven on real hardware before any native code runs from MRAM. Keep 3a (and later 3e) as layers above it. Order:
 
-0. **No temple writes, no purchases.** On t3-worker, port the case relay's host side and pin drdaeman at `1d22097`. On the Mac, with Jan, load the relay into the case's RAM and exchange one read-only stock `5A A5 FF` frame with the left temple's main app. This proves the USB → case RAM → UART2 → temple link on Jan's case and confirms its firmware is 1.2.57. The case's RAM program goes away with a case power cycle. Risk: low, to the case only.
+0. **No temple writes, no purchases.** On t3-worker, port the case relay's host side and pin drdaeman at `1d22097`. On the Mac, with Jan, load the relay into the case's RAM and exchange one read-only stock `5A A5 FF` frame with the left temple's main app. This proves the USB → case RAM → UART2 → temple link on Jan's case and confirms its firmware is 1.2.57. The case's RAM program goes away with a case power cycle. Risk: low, to the case only. **Tool: [`apps/wisp-recovery`](../../apps/wisp-recovery/README.md).** drdaeman's relay itself always resets the temple and waits for the patched loader's `HELO`, so step 0 loads the program it extends instead: the webflasher's unmodified 1,720-byte read-only bridge, through the same STM32 ROM path. The temple gets one 5-byte version query (`24 00 01 00 a7`) and answers with a `5A A5 FF` frame. **Passed 2026-11-06** on Jan's left temple: case 1.2.57 (flash SHA-256 `773b6d4c…`), the reviewed bridge stopped at a zero-write baseline check (register 8 = `0x33`, a per-case identity byte), the pinned observed-33 variant (`3ca8ed1d…`) then went through. The temple answered `5aa5ff0924010305020400180557` = main app 2.4.0.24, hardware revision 5. Pogo switch registers restored, SRAM zeroed, case back on 1.2.57. No flash, option-byte or MRAM writes anywhere.
 1. **Jan decides W18** (proposed below): one bootloader write per temple, left first, accepted as the price of a permanent cable-free recovery path.
 2. **Install** the patched 2.3.2.14 bootloader on the left temple: drdaeman's `flash.py` from the Mac, case on USB power, battery > 80 %, nothing near that can bump the case (openCFW once lost a temple's link to a bumped case), an explicit per-flash go (rule 4). Then check that the main app still boots and the Even app works.
 3. **Prove it:** `HELO`/`HOLD`/`CONT` through the case; `checksum` of the bootloader; **dump INFOC, INFO0 and the DCU state** into the hardware log (this answers 3c and whether SWD is open).
@@ -156,7 +156,7 @@ No public brick reports or RMA experiences [C, not found]. Even's support articl
 
 **If Jan says no to W18:** no recovery path can be proven on hardware before rung 4. The only nets are 3a and 3e, both unproven on hardware, and SWD is a destructive last resort. In that case I would not open rung 4 on Jan's pair.
 
-### Proposed decision W18 (needs Jan)
+### Decision W18 (Jan, 2026-11-06: **accepted, option A**)
 
 > Allow exactly one bootloader write per temple: drdaeman's patched 2.3.2.14 bootloader (MIT, pinned at `1d22097`, SHA-256 of the output pinned in the hardware log), installed with its own tool, left temple first. Purpose: a UART2 recovery loader reachable through the case. After it, safety rules 1–2 apply again unchanged: Wisp never writes the bootloader, `wisp-ota` never sends type 1.
 

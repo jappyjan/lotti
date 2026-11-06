@@ -1,0 +1,24 @@
+{
+  "name": "wisp-recovery",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/wisp-recovery/wisp_case",
+  "tags": ["lang:python", "scope:wisp"],
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run -q --with unicorn==2.1.3 python -I -m unittest discover -s apps/wisp-recovery/tests -v"
+      },
+      "inputs": ["{projectRoot}/**/*"],
+      "cache": true
+    },
+    "plan": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3 -I apps/wisp-recovery/step0.py --plan"
+      },
+      "cache": false
+    }
+  }
+}
