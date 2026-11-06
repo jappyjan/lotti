@@ -350,7 +350,9 @@ describe('transfer across two contexts (sender ↔ host ↔ fake temple)', () =>
     let refused: boolean | undefined;
     const bundle = own(r.ota.prepareRung1(r.stock(), '2.2.6.19').bytes);
     const id = r.startOnly(bundle);
-    for (let i = 0; i < 300 && r.ota.state(id) !== 'result-check'; i++) {
+    // Time-bounded, not tick-bounded: slow CI runners need many more ticks to send the file.
+    const deadline = Date.now() + 10_000;
+    while (r.ota.state(id) !== 'result-check' && Date.now() < deadline) {
       await new Promise((res) => setImmediate(res));
     }
     assert.equal(r.ota.state(id), 'result-check');
