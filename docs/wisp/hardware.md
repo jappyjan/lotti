@@ -14,7 +14,7 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 | Function       | Part                                                                                     | Bus / address              | Source                               |
 | -------------- | ---------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------ |
 | Main MCU       | Ambiq Apollo510B, Cortex-M55 + MVE (Helium), NemaGFX GPU                                 | —                          | [C] openCFW `g2-glasses.md`          |
-| Memory         | 4 MiB MRAM, 512 KiB DTCM + 3 MiB SRAM                                                    | —                          | [C] §8.1                             |
+| Memory         | 4 MiB MRAM, 512 KiB DTCM (`0x20000000–0x20080000`) + 3 MiB SSRAM (`0x20080000–0x20380000`); stock initial SP `0x2007FB00` | — | [C] §8.1, openCFW `reference/memory-map.md` |
 | External flash | MX25U25643G, 32 MiB NOR (littlefs at `0x1400000`, FlashDB at `0x1FC0000`)                | MSPI                       | [C] `memory-map.md`                  |
 | BLE controller | EM9305 (own firmware, own NVM), HCI                                                      | IOM6 SPI                   | [C]; separate die vs. in-package [?] |
 | Display        | microLED 640×480, 4-bit grey (green); JBD JBD4010 or Hongshi A6N-G                       | MSPI0 quad SPI, 320 B/line | [C] §2, §5                           |
@@ -36,9 +36,9 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 | Range               | What                                                     | Wisp may write?                                         |
 | ------------------- | -------------------------------------------------------- | ------------------------------------------------------- |
 | `0x400000–0x410000` | Ambiq SBL (secure ROM bootloader)                        | **never**                                               |
-| `0x410000–0x434477` | Even bootloader (stock `ota/s200_bootloader.bin`)        | **never**                                               |
+| `0x410000–0x438000` | Even bootloader (stock `ota/s200_bootloader.bin`; image ends `0x434477` on 2.2.6.10, `0x434900` on 2.3.2.14) | **never** |
 | `0x437FE0`          | 32-byte main-app preamble                                | via stock install only                                  |
-| `0x438000–…`        | main application (stock ends `0x794324` on 2.2.6.10)     | via stock install only                                  |
+| `0x438000–…`        | main application (stock ends `0x794324` on 2.2.6.10, `0x7F5AAC` on 2.3.2.14: only 9.3 KiB below the ceiling) [C, `wisp-ota inspect`] | via stock install only |
 | ceiling `0x7F8000`  | hard limit for the app's end (g2flash guard)             | —                                                       |
 | `0x7FE000` (16 B)   | update-flag record, bootloader-owned                     | only the documented flag value, only from verified code |
 | `…–0x800000`        | NV / bond area; writing past `0x800000` = SWD-only brick | **never**                                               |
@@ -54,10 +54,13 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 
 ## Image formats
 
-- **EVENOTA:** `EVENOTA\0`, count `+0x08`, date/time/version strings `+0x10/0x20/0x30`, TOC at `0x40` (16-B entries `{id, off, size, crc32c}`), trailer `evenota\0`. Each component = 128-B header (size `+8`, CRC32C `+0xC`, magic `EVEN` `+0x14`, type `+0x24`, storage type `+0x28`, path `+0x30`) + payload [C, `firmware-formats.md`].
+- **EVENOTA:** `EVENOTA\0`, count `+0x08`, `+0x0C` = 0, date/time/version strings `+0x10/0x20/0x30` (16 B each, NUL-padded; version `s200_v<x.y.z.w>`), TOC at `0x40` (16-B entries `{id, off, size, crc32c}`, `size` = 128 + payload), trailer `evenota\0` + 8 zero bytes. Components follow contiguously (unaligned) and close exactly at EOF. Each component = 128-B header (`+0/+4/+0x10/+0x20` = 0, size `+8`, CRC32C `+0xC`, magic `EVEN` `+0x14`, `+0x18/+0x1C/+0x2C` = `0xFFFFFFFF`, type `+0x24`, storage type `+0x28`, path `+0x30`, 80 B) + payload [C, `firmware-formats.md`; all 18 official bundles 2.0.1.14–2.3.2.14 checked with `wisp-ota`].
+- Entry ids run 1..n in TOC order. Most bundles carry 6 components (codec, EM9305, touch, case, bootloader, main); **2.2.0.24 and 2.2.4.34 carry 5 (no bootloader), so main is entry 5 there** [C, `wisp-ota inspect`]. Every stock component uses storage type 3.
+- Official bundles: `https://cdn.evenreal.co/firmware/<md5>.bin` (Even's CDN); pinned SHA-256s in `packages/wisp-ota/src/catalog.ts` [C, webflasher catalog, g2flash `build_cfw.sh`].
 - Component types: main 0, bootloader 1, font 2, touch 3, codec 4, EM9305 5, case 6. Storage: 0 MRAM, 1 XIP NOR (read-back verified), 3 littlefs file [C].
 - CRC-32C MSB-first (poly `0x1EDC6F41`, init 0, xorout 0) per payload, in TOC and subheader [C].
-- Main-app preamble: word0 = `0x04<<24 | size`, word1 = zlib CRC32 over `payload[8:]`, type `0xCB`, run base `0x438000` [C].
+- Main-app preamble (32 B): word0 = `0x04<<24 | size`, where size is the whole payload **including** the preamble; word1 = zlib CRC32 over `payload[8:]`; `+0x10` type `0xCB`; `+0x14` run base `0x438000`; `+0x08/+0x0C/+0x18/+0x1C` = 0. The bootloader programs `payload[0x20:]` at the run base [C].
+- The bootloader takes the run base and the 24-bit size from the preamble **without a bounds check**; an oversized image overruns into the flag / NV area. `wisp-ota` is therefore the only guard [C, g2flash `APP_MAX_END` comment].
 - A main-only bundle is accepted [C, g2flash #3].
 - Downgrades are not blocked on the glasses [C, faceclaw #56, #6].
 
