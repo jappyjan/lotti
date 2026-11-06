@@ -48,6 +48,14 @@ Recovery step 0: what this tool sends, in order.
    8. RTS reset with DTR asserted: normal case app; require the
       "B200 1.2.57" banner again.                                       case MCU reset, read-only
 
+  7b. Only if step 6 stopped with status 3, the bridge record in step 7 proves
+      zero YHM writes and zero temple bytes, and the baseline it read is a row of
+      the "observed-33" table (YHM register 8 = 0x33, a per-case identity byte):
+      steps 2-7 run once more with the observed-33 bridge. That is the same
+      bridge with 4 table bytes 0x22 -> 0x33 (offsets 1670/1680/1690/1700),
+      SHA-256 3ca8ed1d..., as the webflasher derives and pins it. Never more than
+      one switch; any other baseline stops.
+
   To the temple: only step 6's 24 00 01 00 a7. No reset, no OTA (0x52-0x55),
   no bootloader traffic. The stock main app answers 5A A5 FF 09 24 ... sum.
 
@@ -72,8 +80,8 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
         report["events"].append(event)
         echo(json.dumps(event))
 
-    image = pins.bridge_image()
     operation = pins.BRIDGE_OP_VERSION
+    image = pins.bridge_image(pins.PROFILE_REVIEWED_22)
     request = br.make_request(operation, side, image)
     log({"bridge_sha256": pins.BRIDGE_SHA256, "g2rq": request.hex(),
          "temple_request": br.temple_request(operation, image).hex()})
@@ -84,11 +92,16 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
     if before["version"] != pins.CASE_VERSION:
         raise Step0Error(f"case reports {before['version']!r}, expected {pins.CASE_VERSION}; nothing loaded")
 
-    bridge_launched = False
-    bridge_answered = False
-    sram_dirty = False
-    try:
-        port, loader = enter_rom(device, image, opener, sleep, log)
+    state = {"image": image, "launched": False, "answered": False, "sram_dirty": False}
+
+    def bridge_cycle(profile: str):
+        """ROM entry, case-image check, load + run one bridge variant, read its record back,
+        zero the SRAM. Returns (response, retained record)."""
+        variant = pins.bridge_image(profile)
+        state.update(image=variant, launched=False, answered=False)
+        cycle_request = br.make_request(operation, side, variant)
+        log({"bridge_profile": profile, "bridge_sha256": pins.BRIDGE_VARIANTS[profile][2]})
+        port, loader = enter_rom(device, variant, opener, sleep, log)
         try:
             flash = loader.read_range(pins.CASE_IMAGE_BASE, pins.CASE_IMAGE_LENGTH)
             digest = hashlib.sha256(flash).hexdigest()
@@ -96,32 +109,33 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
             log({"case_image_sha256": digest})
             if digest != pins.CASE_IMAGE_SHA256:
                 raise Step0Error("case flash is not the pinned B200 1.2.57 image; bridge not loaded")
-            sram_dirty = True
+            state["sram_dirty"] = True
             loader.load_bridge()
             loader.go_bridge()
-            bridge_launched = True
+            state["launched"] = True
             port.timeout = 6.0
             banner = read_exact(port, len(pins.BRIDGE_BANNER), "bridge banner")
             log({"bridge_banner": banner.decode("ascii", "replace")})
             if banner != pins.BRIDGE_BANNER:
                 raise Step0Error("bridge banner mismatch")
-            port.write(request)
+            port.write(cycle_request)
             port.flush()
             port.timeout = 12.0
             head = read_exact(port, 12, "bridge response header")
             tail = read_exact(port, min(head[9], 64) + 1, "bridge response tail")
             log({"g2rs": (head + tail).hex()})
-            bridge_answered = True
-            response = br.parse_response(head, tail, request)
+            state["answered"] = True
+            response = br.parse_response(head, tail, cycle_request)
         finally:
             port.close()
         report["temple_raw"] = response["captured"].hex()
         report["bridge_status"] = response["status"]
+        report["bridge_profile"] = profile
         log({"bridge_status": response["status"], "bridge_status_text": response["status_text"],
              "temple_raw": response["captured"].hex(), "uart_errors": response["uart_errors"]})
 
         sleep(0.3)  # the bridge resets the case after G2RS; let the ROM come up
-        port, loader = enter_rom(device, image, opener, sleep, log)
+        port, loader = enter_rom(device, variant, opener, sleep, log)
         try:
             proof = loader.read_memory(pins.PROOF_ADDRESS, len(pins.PROOF))
             result = loader.read_memory(pins.RESULT_ADDRESS, pins.RESULT_LENGTH)
@@ -129,10 +143,21 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
             log({"bridge_record": retained})
             report["bridge_record"] = retained
             loader.clear_sram()
-            sram_dirty = False
+            state["sram_dirty"] = False
             log({"case_sram_cleared": True})
         finally:
             port.close()
+        return response, retained
+
+    try:
+        response, retained = bridge_cycle(pins.PROFILE_REVIEWED_22)
+        if response["status"] == 3 and retained["yhm_restored"] == "untouched":
+            # A verified zero-write, zero-transmission stop. Switch once, and only to a
+            # pinned variant whose table holds this exact baseline (webflasher behaviour).
+            profile = pins.identify_profile(retained["baseline"])
+            log({"baseline_profile": profile, "baseline": retained["baseline"]})
+            if profile == pins.PROFILE_OBSERVED_33:
+                response, retained = bridge_cycle(profile)
 
         if response["status"] != 0:
             raise Step0Error(f"bridge status {response['status']}: {response['status_text']}")
@@ -140,14 +165,14 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
         log({"temple_version": report["temple"]})
     except BaseException as error:
         report["error"] = repr(error)
-        if sram_dirty:
+        if state["sram_dirty"]:
             try:
-                if bridge_launched:
+                if state["launched"]:
                     # Never reset the case under a running bridge: its loops are bounded
                     # (about 6 s worst case) and it restores the YHM route before it
                     # resets itself. Give it that time when its reply never came.
-                    sleep(0.3 if bridge_answered else 12.0)
-                port, loader = enter_rom(device, image, opener, sleep, log)
+                    sleep(0.3 if state["answered"] else 12.0)
+                port, loader = enter_rom(device, state["image"], opener, sleep, log)
                 try:
                     loader.clear_sram()
                     log({"case_sram_cleared_after_error": True})

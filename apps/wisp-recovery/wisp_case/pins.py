@@ -91,8 +91,63 @@ BRIDGE_STATUS = {
 }
 
 
-def bridge_image() -> bytes:
-    image = (DATA / "pogo_bridge.bin").read_bytes()
+# --- YHM2510 baseline profiles [W yhmProfiles.js, pogoBridge.js] ----------------------------
+# The bridge only touches the pogo route if the 10 registers it reads first equal one of five
+# rows baked into its image at 0x674 (10 bytes each). Register 8 (the 9th byte) is, per the
+# webflasher, a per-case YHM2510 identity byte that stays constant through charging and
+# resets: unrelated cases ship 0x22, 0x33 or 0x45. The reviewed bridge carries 0x22. The
+# "observed-33" variant is the same bridge with register 8 patched to 0x33 in rows 2-5,
+# exactly as getVerifiedPogoBridgePayload() derives it, and pinned to the webflasher's
+# POGO_BRIDGE_OBSERVED_33_SHA256. Jan's case read 811104afaf03812033ff on 2026-11-06.
+PROFILE_REVIEWED_22 = "reviewed-22"
+PROFILE_OBSERVED_33 = "observed-33"
+BASELINE_TABLE_OFFSET = 0x674  # = 1660, row 1
+REVIEWED_22_BASELINES = (
+    "811104afaf038d2022ff",
+    "810004aeae03812022ff",
+    "811104afaf03812022ff",
+    "810104afae03812022ff",
+    "811004aeaf03812022ff",
+)
+BRIDGE_VARIANTS = {
+    # profile: (register-8 value, offsets patched from 0x22, SHA-256 of the result)
+    PROFILE_REVIEWED_22: (0x22, (), BRIDGE_SHA256),
+    PROFILE_OBSERVED_33: (
+        0x33,
+        (1670, 1680, 1690, 1700),
+        "3ca8ed1d8d37b2edef62dcb6915b5ec4b1d439160da0a89e93aa74901d760ef6",
+    ),
+}
+
+
+def profile_baselines(profile: str) -> tuple[str, ...]:
+    register8, offsets, _sha = BRIDGE_VARIANTS[profile]
+    rows = list(REVIEWED_22_BASELINES)
+    for offset in offsets:
+        row = (offset - BASELINE_TABLE_OFFSET) // 10
+        rows[row] = rows[row][:-4] + f"{register8:02x}ff"
+    return tuple(rows)
+
+
+def identify_profile(baseline_hex: str) -> str | None:
+    """The bridge variant whose table holds this exact baseline, or None (fail closed).
+    Only the two pinned variants exist; any other register-8 value, or any other byte
+    differing, gives None."""
+    for profile in BRIDGE_VARIANTS:
+        if baseline_hex.lower() in profile_baselines(profile):
+            return profile
+    return None
+
+
+def bridge_image(profile: str = PROFILE_REVIEWED_22) -> bytes:
+    image = bytearray((DATA / "pogo_bridge.bin").read_bytes())
     if len(image) != BRIDGE_LENGTH or hashlib.sha256(image).hexdigest() != BRIDGE_SHA256:
         raise ValueError("pinned bridge image failed its SHA-256 check")
-    return image
+    register8, offsets, sha = BRIDGE_VARIANTS[profile]
+    for offset in offsets:
+        if image[offset] != 0x22:
+            raise ValueError("bridge baseline table differs from the reviewed layout")
+        image[offset] = register8
+    if hashlib.sha256(image).hexdigest() != sha:
+        raise ValueError(f"{profile} bridge failed its SHA-256 check")
+    return bytes(image)

@@ -7,6 +7,7 @@
 <https://github.com/AM-Guru/evenRealities-webflasher> at `2fcdb88`.
 
 - `wisp_case/data/pogo_bridge.bin`: the 1,720-byte read-only pogo bridge (`src/lib/pogoBridge.js`, `POGO_BRIDGE_BASE64`), unchanged. SHA-256 `e30e143d522e5a5d0b10a92a15610badcc6aef014333716a94eae183b14dc258`.
+- The "observed-33" variant (`pins.BRIDGE_VARIANTS`): derived at run time from that file by the same 4-byte patch as `getVerifiedPogoBridgePayload()` (`src/lib/pogoBridge.js`, `src/lib/yhmProfiles.js`), pinned to its `POGO_BRIDGE_OBSERVED_33_SHA256`. Not stored as a separate file.
 - `wisp_case/bridge.py`: G2RQ/G2RS framing, the retained-result proof and the version-frame decoding are ported from `pogoBridge.js`; the probe sequence follows `serial.js` `probeRunningTempleOnce`.
 
 ```
