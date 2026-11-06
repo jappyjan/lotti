@@ -254,6 +254,43 @@ class Cli(unittest.TestCase):
     def test_plan_prints_the_token(self):
         self.assertEqual(cli.main(["bootloader-plan", "--side", "left"]), 0)
 
+    def run_install(self, second):
+        """bootloader-install over fake BLE; `second` is what the liveness reconnect meets."""
+        gatts = [FakeGatt(), second]
+        reports = []
+
+        class Connection:
+            def __init__(self, address, adapter=None):
+                self.gatt = gatts.pop(0)
+
+            async def __aenter__(self):
+                if isinstance(self.gatt, Exception):
+                    raise self.gatt
+                return self.gatt
+
+            async def __aexit__(self, *a):
+                return False
+
+        argv = ["bootloader-install", "--side", "left", "--address", "x", "--battery", "90",
+                "--go", pins.go_token("left")]
+        with mock.patch("wisp_w18.ble.BleakGatt", Connection), mock.patch.object(cli, "LIVENESS_DELAY", 0), \
+                mock.patch.object(cli, "latest_step0", lambda side: {"report": "fake"}), \
+                mock.patch.object(cli, "save", lambda report, name: reports.append(report) or Path(name)), \
+                mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            code = cli.main(argv)
+        return code, reports[0], gatts
+
+    def test_install_liveness_reconnects(self):
+        code, report, left = self.run_install(FakeGatt())
+        self.assertEqual((code, report["end_status"], report["liveness"]), (0, 8, {"ok": True}))
+        self.assertEqual(left, [])  # a second connection was made
+
+    def test_install_liveness_without_answer_is_not_fatal(self):
+        code, report, _ = self.run_install(ble.OtaError("temple not advertising"))
+        self.assertEqual((code, report["success"], report["end_status"]), (0, True, 8))
+        self.assertFalse(report["liveness"]["ok"])
+        self.assertIn("not advertising", report["liveness"]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

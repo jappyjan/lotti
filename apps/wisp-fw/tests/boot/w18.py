@@ -6,7 +6,9 @@ Runs the patched bootloader (drdaeman/g2-bootloader-patch @ 1d22097 on the stock
 bootloader, rebuilt from the git-ignored .wisp-cache by apps/wisp-recovery) in Renode on the
 rung-3 platform, with UART2 replaced by WispCaseLink (renode/models/WispCaseLink.cs). The host
 side is the real W18 tool code (apps/wisp-recovery/wisp_w18: Session, loader, SocketLink), so
-the same bytes that would cross the case relay cross the emulated UART2.
+the same bytes that would cross the case relay cross the emulated UART2. The *-relay cases put
+the case relay's own framing in between (G2RQ, G2TX/G2RX, G2EX/G2RS: links.RelayPortLink, the
+code CaseRelayLink runs, over relay_model.RelayModel, a port of drdaeman's case_exchange.c).
 
 Cases (end states):
   control-*     stock bootloaders (2.4.0.24, 2.3.2.14) boot the stock 2.4.0.24 app; no UART2 frame
@@ -14,6 +16,7 @@ Cases (end states):
   hello         loader-hello: HELO/HOLD/OKAY, bootloader CRC twice, flag read, CONT/RLSD, stock boots
   info          info-dump against synthetic INFO0/INFOC/DCU contents
   recover       app region erased (dead temple): recover writes stock 2.4.0.24, stock boots
+  recover-relay the same, every frame through the relay framing; the relay exits with status 6
   recover-cut   power cut in the middle of recover; a second recover completes, stock boots
   install-*     the post-cut MRAM states of the stock app's bootloader copy (4 KiB chunks, lowest
                 first, as reverse-engineered from 2.4.0.24): k of 38 chunks new, the rest old
@@ -36,7 +39,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "apps/wisp-recovery"))
 from rung3 import STOCK_MARK, Renode, evenota_components
 from wisp_w18 import image, pins
-from wisp_w18.links import SocketLink
+from wisp_w18.links import RelayPortLink, SocketLink
+from wisp_w18.relay_model import RelayModel
 from wisp_w18.session import Session
 
 FLAG = 0x7FE000
@@ -108,14 +112,18 @@ class Run:
         r.cmd(f"cpu PC {pc & ~1:#x}")
         self.host_error = None
 
-    def attach(self, body):
-        """Run `body(link)` on a host thread attached to UART2 before the CPU starts."""
+    def attach(self, body, relay=False):
+        """Run `body(link)` on a host thread attached to UART2 before the CPU starts. With
+        `relay`, the link is the case relay framing over the relay model over that socket."""
         port = free_port()
         result = {}
 
         def host():
             try:
                 link = SocketLink(port, trace=(self.dir / "uart2-trace.txt").open("w"))
+                if relay:
+                    link = RelayPortLink(RelayModel(link), "left")
+                result["link"] = link
                 result["value"] = body(link)
             except BaseException as error:  # noqa: BLE001 - reported by the case
                 result["error"] = error
@@ -200,7 +208,7 @@ class Harness:
             run.close()
 
     def session_case(self, name, app, body, check, setup=None, budget=60.0, bootloader=None,
-                     session_budget=120.0):
+                     session_budget=120.0, relay=False):
         run = Run(self.work, name, bootloader or self.patched, app)
         log = []
         try:
@@ -212,7 +220,7 @@ class Harness:
                     s.require_patched_bootloader(self.patched)
                     return body(s)
             t0 = time.time()
-            thread, result = run.attach(host)
+            thread, result = run.attach(host, relay=relay)
             t = 0.0
             while thread.is_alive():
                 run.r.cmd('emulation RunFor "1"')
@@ -261,7 +269,7 @@ class Harness:
                         "(OTP/CRYPTO off), stock app running" if ok else f"{result}")
         self.session_case("info", self.app, body, check, setup=setup)
 
-    def recover(self, name="recover", cut_fraction=None):
+    def recover(self, name="recover", cut_fraction=None, relay=False):
         dead = None  # app region erased: the stock bootloader has nothing to hand over to
         state = {}
 
@@ -285,12 +293,18 @@ class Harness:
             boot_ok = mram[0x10000:0x10000 + len(self.patched)] == self.patched
             v = result.get("value")
             ok = bool(v) and app_ok and boot_ok and run.stock_running()
-            return ok, (f"stock 2.4.0.24 written ({v['bytes']} B, CRC {v['crc_after']}, {v['host_s']} s host), "
+            via = ""
+            if relay:
+                link = result.get("link")
+                exits = [e["relay_exit_status"] for e in getattr(link, "events", []) if "relay_exit_status" in e]
+                ok = ok and exits == [6]
+                via = f", {link.recent.count} exchanges through the relay framing, exit status {exits}"
+            return ok, (f"stock 2.4.0.24 written ({v['bytes']} B, CRC {v['crc_after']}, {v['host_s']} s host{via}), "
                         f"bootloader unchanged, stock app running" if ok else f"app_ok={app_ok} boot_ok={boot_ok} "
                         f"{result} stock={run.stock_running()}")
 
         if cut_fraction is None:
-            return self.session_case(name, dead, body, check, setup=setup, budget=60)
+            return self.session_case(name, dead, body, check, setup=setup, budget=60, relay=relay)
 
         # Cut case: first session is cut mid-write, the temple resets into the loader again (the
         # app is still dead), and a second, fresh session completes the recovery.
@@ -372,7 +386,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
-                                                   "recover-cut", "install"])
+                                                   "recover-relay", "recover-cut", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -390,6 +404,8 @@ def main() -> int:
         h.info()
     if "recover" in only:
         h.recover()
+    if "recover-relay" in only:
+        h.recover("recover-relay", relay=True)
     if "recover-cut" in only:
         h.recover("recover-cut-40pct", cut_fraction=0.4)
     if "install" in only:

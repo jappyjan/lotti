@@ -9,7 +9,14 @@ CaseRelayLink: the real thing, the charging case on USB with drdaeman's relay in
 Ported from drdaeman/g2-bootloader-patch @ 1d22097 tools/g2patch/link.py (MIT), on top of the
 step-0 ROM client (wisp_case.rom, same allowlist: Get, Get ID, Read, Write SRAM, Go).
 
+RelayPortLink: the same relay framing (G2RQ, G2TX/G2RX, G2EX/G2RS, byte for byte the code
+CaseRelayLink runs) on a port that already speaks it: relay_model.RelayModel in tests and in
+the Renode W18 harness. Only the ROM bring-up and the ROM-side record check are left out.
+
 SocketLink: the Renode W18 model (apps/wisp-fw/renode/models/WispCaseLink.cs), lockstep.
+
+Every link keeps its last frames (`recent`) and an exchange count, so a failed session can
+report where it stopped even when the cleanup fails too (`diagnostics()`).
 """
 
 from __future__ import annotations
@@ -18,6 +25,7 @@ import hashlib
 import socket
 import struct
 import time
+from collections import deque
 
 from wisp_case import pins as case_pins
 from wisp_case.rom import read_exact
@@ -28,6 +36,82 @@ from . import pins
 
 class LinkError(RuntimeError):
     pass
+
+
+RECENT = 16  # exchanges kept for the error report
+
+# Exit status the pinned bridge reports in G2RS (and in its retained record, word 5) after the
+# extension returns; from our disassembly of drdaeman's case.bin (bridge at 0x20010000).
+RELAY_EXIT_STATUS = {
+    0: "step-0 reply captured",
+    1: "invalid G2RQ header",
+    2: "unsupported G2RQ operation or route",
+    3: "YHM read failed or its baseline is not allowlisted",
+    4: "route selection failed; route restored",
+    5: "step-0 temple request not sent; route restored",
+    6: "relay ended, route restored (the normal end of a W18 relay session: the relay leaves no "
+       "step-0 capture behind)",
+    7: "route restore did not verify",
+    16: "no G2RQ from the host",
+}
+RELAY_EXIT_OK = 6
+
+
+class _Recent:
+    """Ring buffer of the last exchanges: what was sent, what came back, when."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.t0 = clock()
+        self.count = 0
+        self.items: deque[dict] = deque(maxlen=RECENT)
+
+    def begin(self, sent: bytes) -> dict:
+        entry = {"n": self.count, "t": round(self.clock() - self.t0, 3), "sent": sent.hex(), "received": None}
+        self.count += 1
+        self.items.append(entry)
+        return entry
+
+    def report(self) -> dict:
+        return {"exchanges": self.count, "seconds": round(self.clock() - self.t0, 1), "recent": list(self.items)}
+
+
+def decode_relay_record(retained: bytes) -> dict:
+    """The pinned bridge's 160-byte retained record (case SRAM 0x20011A00), read back through
+    the ROM after the session. Layout from our disassembly of the bridge and drdaeman's
+    case_exchange.c: words 0..13, then the YHM2510 registers before / after route selection /
+    after restore (10 bytes each) and the relay's capture of the last temple frame."""
+    words = struct.unpack_from("<14I", retained)
+    capture = retained[86:150]
+    out = {
+        "magic_ok": words[0] == 0x47524247,
+        "phase": words[1],
+        "phase_meaning": {1: "bridge running: its exit path (route restore, G2RS) never completed",
+                          2: "bridge exit path ran"}.get(words[1], "unknown"),
+        "operation": words[2], "route": words[3], "sequence": words[4],
+        "yhm_reads_ok": {"before": f"{words[6]:#05x}", "selected": f"{words[7]:#05x}", "restored": f"{words[8]:#05x}"},
+        "yhm_writes_ok": f"{words[9]:#05x}",  # bits 0-3 route selection, 4-8 restore
+        "last_temple_send": words[10],  # bytes the relay last handed to the temple UART
+        "capture_count": words[11],
+        "uart_error_flags": words[13],
+        "yhm": {"before": retained[56:66].hex(), "selected": retained[66:76].hex(), "restored": retained[76:86].hex()},
+    }
+    if words[1] == 2:
+        out["exit_status"] = words[5]
+        out["exit_meaning"] = RELAY_EXIT_STATUS.get(words[5], "unknown")
+    if capture[:3] == b"\x5a\xa5\xff" and capture[3] in (8, 16, 24, 27):
+        frame = capture[: capture[3] + 5]
+        out["last_temple_frame"] = frame.hex()
+        if frame[8:12] == b"RESP":
+            kinds = ("ACK", "OUTPUT", "RESULT", "READY", "ERROR", "INPUT")
+            out["last_temple_frame_meaning"] = f"RESP {kinds[frame[12]] if frame[12] < 6 else frame[12]} status {frame[13]}"
+        else:
+            out["last_temple_frame_meaning"] = frame[8:12].decode("ascii", "replace")
+    if words[1] == 1:
+        out["interpretation"] = (
+            f"the case stopped executing the relay or the bridge: the last frame it handed to the temple was "
+            f"{words[10]} bytes, and it forwarded nothing after that")
+    return out
 
 
 class SocketLink:
@@ -47,6 +131,7 @@ class SocketLink:
                 time.sleep(0.1)
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.trace = trace  # optional open text file: one line per frame each way
+        self.recent = _Recent()
 
     def _read(self, n: int) -> bytes:
         out = bytearray()
@@ -75,8 +160,18 @@ class SocketLink:
         return self._frame()
 
     def exchange(self, frame: bytes) -> bytes:
-        self._send(frame)
-        return self._frame()
+        entry = self.recent.begin(frame)
+        try:
+            self._send(frame)
+            reply = self._frame()
+        except BaseException as error:
+            entry["error"] = repr(error)
+            raise
+        entry["received"] = reply.hex()
+        return reply
+
+    def diagnostics(self) -> dict:
+        return self.recent.report()
 
     def next_frame(self) -> bytes:
         """Answer the pending temple frame with nothing and wait for the next one."""
@@ -91,53 +186,20 @@ class SocketLink:
         self.sock.close()
 
 
-class CaseRelayLink:
-    """USB -> case ROM -> drdaeman's relay in case SRAM -> pogo UART2 -> temple loader.
+class _RelayFraming:
+    """Host side of drdaeman's case relay protocol on an open byte stream (`self.port`):
+    G2RQ arms the relay, G2TX/G2RX carries one temple frame each way, G2EX ends it and the
+    bridge answers G2RS [D link.py, PROTOCOL.md "Optional case USB relay"]."""
 
-    start(): case app banner (1.2.57), ROM entry, case image hash, the pinned relay into SRAM
-    (each block read back), Go; G2RQ selects the route; the relay resets the temple with Even's
-    reset waveform and forwards its HELO. close(): G2EX, the bridge restores the YHM route and
-    resets the case; ROM entry, the retained record is checked, the relay SRAM zeroed, the case
-    reset into its own app (banner again). The case flash is never written."""
+    port = None
+    ready = False
+    route = 0
+    sleep = staticmethod(time.sleep)
 
-    def __init__(self, device: str, side: str, profile: str, image_cache=None, opener=serial_opener,
-                 sleep=time.sleep, log=None):
-        from .image import CACHE, build_relay
+    def _init_recent(self) -> None:
+        self.recent = _Recent()
 
-        if side not in pins.SIDES:
-            raise ValueError("side must be left or right")
-        self.device, self.side, self.route = device, side, case_pins.ROUTES[side]
-        self.image = build_relay(profile, image_cache or CACHE)
-        self.profile = profile
-        self.opener, self.sleep = opener, sleep
-        self.events: list[dict] = []
-        self.port = None
-        self.loader = None
-        self.ready = False
-        self.touched = False
-        self._log = log or (lambda event: None)
-
-    def log(self, event: dict) -> None:
-        self.events.append(event)
-        self._log(event)
-
-    def start(self) -> bytes:
-        before = case_banner(self.device, self.opener, self.sleep)
-        self.log({"case_version_before": before["version"]})
-        if before["version"] != case_pins.CASE_VERSION:
-            raise LinkError(f"case reports {before['version']!r}, expected {case_pins.CASE_VERSION}; nothing loaded")
-        self.touched = True
-        self.port, self.loader = enter_rom(self.device, self.image, self.opener, self.sleep, self.log)
-        flash = self.loader.read_range(case_pins.CASE_IMAGE_BASE, case_pins.CASE_IMAGE_LENGTH)
-        digest = hashlib.sha256(flash).hexdigest()
-        self.log({"case_image_sha256": digest})
-        if digest != case_pins.CASE_IMAGE_SHA256:
-            raise LinkError("case flash is not the pinned B200 1.2.57 image; relay not loaded")
-        for address, length, want in pins.CASE_PRE_CHECKS:
-            if hashlib.sha256(flash[address - case_pins.CASE_IMAGE_BASE :][:length]).hexdigest() != want:
-                raise LinkError(f"case flash differs at {address:#x}")
-        self.loader.load_bridge()  # writes the relay (allowlisted: its own bytes or zeros)
-        self.loader.go_bridge()
+    def _arm(self) -> bytes:
         port = self.port
         port.timeout = 6.0
         if read_exact(port, len(pins.RELAY_BANNER), "relay banner") != pins.RELAY_BANNER:
@@ -170,33 +232,126 @@ class CaseRelayLink:
             raise ValueError("unsupported frame length")
         packet = b"G2TX" + bytes((len(frame),)) + frame
         packet += bytes((sum(packet) & 255,))
-        self.port.write(packet)
-        self.port.flush()
-        head = read_exact(self.port, 6, "relay response")
-        if head[:4] != b"G2RX" or head[5] > 32:
-            raise LinkError("invalid relay header")
-        tail = read_exact(self.port, head[5] + 1, "temple response")
-        if tail[-1] != (sum(head) + sum(tail[:-1])) & 255:
-            raise LinkError("relay checksum mismatch")
-        if head[4]:
-            raise LinkError(f"case relay status {head[4]}; the command outcome is unknown")
-        return tail[:-1]
+        entry = self.recent.begin(frame)
+        try:
+            self.port.write(packet)
+            self.port.flush()
+            head = read_exact(self.port, 6, "relay response")
+            if head[:4] != b"G2RX" or head[5] > 32:
+                raise LinkError(f"invalid relay header {head.hex()}")
+            tail = read_exact(self.port, head[5] + 1, "temple response")
+            entry["received"], entry["relay_status"] = tail[:-1].hex(), head[4]
+            if tail[-1] != (sum(head) + sum(tail[:-1])) & 255:
+                raise LinkError("relay checksum mismatch")
+            if head[4]:
+                raise LinkError(f"case relay status {head[4]}; the command outcome is unknown")
+            return tail[:-1]
+        except BaseException as error:
+            entry["error"] = repr(error)
+            raise
+
+    def _exit_relay(self) -> int:
+        """G2EX; the bridge restores the YHM route and answers G2RS. Returns its exit status."""
+        port = self.port
+        port.write(b"G2EX")
+        port.flush()
+        head = read_exact(port, 12, "restoration header")
+        if head[:5] != b"G2RS\1" or head[9] > 64:
+            raise LinkError(f"invalid restoration response {head.hex()}")
+        tail = read_exact(port, head[9] + 1, "restoration tail")
+        if (tail[-1] != (sum(head) + sum(tail[:-1])) & 255 or head[5:8] != bytes((2, self.route, pins.RELAY_SEQUENCE))
+                or head[9] or head[10]):
+            raise LinkError("invalid restoration framing")
+        status = head[8]
+        self.log({"relay_exit_status": status, "relay_exit_meaning": RELAY_EXIT_STATUS.get(status, "unknown")})
+        if status != RELAY_EXIT_OK:
+            raise LinkError(f"relay exit status {status}: {RELAY_EXIT_STATUS.get(status, 'unknown')}")
+        return status
+
+    def diagnostics(self) -> dict:
+        return {**self.recent.report(), "events": list(getattr(self, "events", []))}
+
+
+class RelayPortLink(_RelayFraming):
+    """The relay framing on a port that already runs the relay (relay_model.RelayModel)."""
+
+    def __init__(self, port, side: str = "left", log=None):
+        self.port, self.route = port, case_pins.ROUTES[side]
+        self.events: list[dict] = []
+        self._log = log or (lambda event: None)
+        self._init_recent()
+
+    def log(self, event: dict) -> None:
+        self.events.append(event)
+        self._log(event)
+
+    def start(self) -> bytes:
+        return self._arm()
+
+    def close(self) -> None:
+        try:
+            if self.ready:
+                self._exit_relay()
+        finally:
+            self.ready = False
+            self.port.close()
+
+
+class CaseRelayLink(_RelayFraming):
+    """USB -> case ROM -> drdaeman's relay in case SRAM -> pogo UART2 -> temple loader.
+
+    start(): case app banner (1.2.57), ROM entry, case image hash, the pinned relay into SRAM
+    (each block read back), Go; G2RQ selects the route; the relay resets the temple with Even's
+    reset waveform and forwards its HELO. close(): G2EX, the bridge restores the YHM route and
+    resets the case; ROM entry, the retained record is checked, the relay SRAM zeroed, the case
+    reset into its own app (banner again). The case flash is never written."""
+
+    def __init__(self, device: str, side: str, profile: str, image_cache=None, opener=serial_opener,
+                 sleep=time.sleep, log=None):
+        from .image import CACHE, build_relay
+
+        if side not in pins.SIDES:
+            raise ValueError("side must be left or right")
+        self.device, self.side, self.route = device, side, case_pins.ROUTES[side]
+        self.image = build_relay(profile, image_cache or CACHE)
+        self.profile = profile
+        self.opener, self.sleep = opener, sleep
+        self.events: list[dict] = []
+        self.port = None
+        self.loader = None
+        self.ready = False
+        self.touched = False
+        self._log = log or (lambda event: None)
+        self._init_recent()
+
+    def log(self, event: dict) -> None:
+        self.events.append(event)
+        self._log(event)
+
+    def start(self) -> bytes:
+        before = case_banner(self.device, self.opener, self.sleep)
+        self.log({"case_version_before": before["version"]})
+        if before["version"] != case_pins.CASE_VERSION:
+            raise LinkError(f"case reports {before['version']!r}, expected {case_pins.CASE_VERSION}; nothing loaded")
+        self.touched = True
+        self.port, self.loader = enter_rom(self.device, self.image, self.opener, self.sleep, self.log)
+        flash = self.loader.read_range(case_pins.CASE_IMAGE_BASE, case_pins.CASE_IMAGE_LENGTH)
+        digest = hashlib.sha256(flash).hexdigest()
+        self.log({"case_image_sha256": digest})
+        if digest != case_pins.CASE_IMAGE_SHA256:
+            raise LinkError("case flash is not the pinned B200 1.2.57 image; relay not loaded")
+        for address, length, want in pins.CASE_PRE_CHECKS:
+            if hashlib.sha256(flash[address - case_pins.CASE_IMAGE_BASE :][:length]).hexdigest() != want:
+                raise LinkError(f"case flash differs at {address:#x}")
+        self.loader.load_bridge()  # writes the relay (allowlisted: its own bytes or zeros)
+        self.loader.go_bridge()
+        return self._arm()
 
     def close(self) -> None:
         errors = []
         try:
             if self.ready and self.port is not None:
-                port = self.port
-                port.write(b"G2EX")
-                port.flush()
-                head = read_exact(port, 12, "restoration header")
-                if head[:5] != b"G2RS\1" or head[9] > 64:
-                    raise LinkError("invalid restoration response")
-                tail = read_exact(port, head[9] + 1, "restoration tail")
-                if (tail[-1] != (sum(head) + sum(tail[:-1])) & 255 or head[5:8] != bytes((2, self.route, pins.RELAY_SEQUENCE))
-                        or head[9] or head[10]):
-                    raise LinkError("invalid restoration framing")
-                self.log({"relay_exit_status": head[8]})
+                self._exit_relay()
         except Exception as error:  # noqa: BLE001 - collected, cleanup continues
             errors.append(repr(error))
         finally:
@@ -216,7 +371,8 @@ class CaseRelayLink:
                     and words[6:9] == (0x3FF,) * 3 and words[9] == 0x1FF and words[13] == 0
                     and retained[56:66] == retained[76:86]
                 )
-                self.log({"route_restored": restored, "relay_record": retained.hex()})
+                self.log({"route_restored": restored, "relay_record": retained.hex(),
+                          "relay_record_decoded": decode_relay_record(retained)})
                 if not restored:
                     errors.append("case route restoration not verified")
                 self.loader.clear_sram()

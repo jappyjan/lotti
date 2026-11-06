@@ -87,6 +87,7 @@ uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py bootloader-insta
     --address <BLE id> --battery <N> --go W18-LEFT-87e2d4e0a7a6                # the one bootloader write
 uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py loader-hello --side left   # read-only
 uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py info-dump --side left      # read-only
+uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py link-soak --side left      # read-only, long stream
 uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py recover --side left \
     --image .wisp-cache/stock/g2-2.4.0.24.bin                                  # stock main app via the loader
 pnpm nx run wisp-recovery:test     # fakes, no hardware
@@ -101,8 +102,13 @@ Needs `.wisp-cache/stock/g2-2.3.2.14.bin` and `g2-2.4.0.24.bin` (`wisp-ota fetch
 | `wisp_w18/image.py`   | EVENOTA parsing; the patched bootloader (drdaeman's `patch.py`, in Python); the OTA component header; the case relay rebuilt from the template plus Even's reset waveform out of the cached case firmware |
 | `wisp_w18/ble.py`     | the stock BLE OTA install (drdaeman's `ble_ota.py`): only type 1, only the pinned image, no replay, END must be 8                                                                                         |
 | `wisp_w18/loader.py`  | HELO/HOLD/OKAY/CONT/RLSD and LOAD/DATA/RUN (drdaeman's `handshake.py`, `protocol.py`)                                                                                                                     |
-| `wisp_w18/links.py`   | `CaseRelayLink` (case ROM → relay in case SRAM → temple; step 0's ROM allowlist, widened to the relay's own bytes) and `SocketLink` (Renode)                                                              |
+| `wisp_w18/links.py`   | `CaseRelayLink` (case ROM → relay in case SRAM → temple; step 0's ROM allowlist, widened to the relay's own bytes), `RelayPortLink` (the same relay framing on a model) and `SocketLink` (Renode); the last 16 exchanges of each session; the relay record decoder |
+| `wisp_w18/relay_model.py` | emulation and tests only: drdaeman's relay loop (`case_exchange.c`) and the bridge's G2RQ/G2RS wrapper in Python, behind a pyserial-like port, with a case-stall fault                                 |
 | `wisp_w18/session.py` | claim/release, CRC, dump, `info_dump`, and `write_app`, the only write path (stock main image, app region, body → CRC → vectors → CRC)                                                                    |
 | `wisp_w18/data/`      | drdaeman's compiled MIT programs, pinned: `patch.bin`, `checksum.bin`, `dump.bin`, `recover.bin`, and `case_relay_template.bin` (his `case.bin` with Even's 372 waveform bytes zeroed)                    |
+
+A failed session's report keeps the error that stopped it (`error`), where (`stopped_in`, `position`), what the cleanup ran into afterwards (`cleanup_errors`), and the link's last frames and exchange count (`link`). For the case, the events include the decoded relay record ([recovery.md, Step F on hardware](../../docs/wisp/recovery.md#step-f-on-hardware-the-stall-of-2026-11-06)).
+
+Tests: `tests/test_relay.py` runs sessions through the relay framing: on `relay_model.RelayModel`, and on drdaeman's real relay binary under Unicorn (`tests/fake_case.py`) behind the unmodified `CaseRelayLink`, including a case that stops mid-stream.
 
 What the case receives is step 0's sequence with drdaeman's 5,508-byte relay in place of the 1,720-byte bridge (the relay embeds that bridge). The relay resets the selected temple with Even's waveform, forwards its `HELO`, then relays one temple frame per `G2TX`. `G2EX` ends it: the bridge restores the YHM route and resets the case. The tool reads the retained record back through the ROM, zeroes the SRAM and resets the case into 1.2.57. Case flash is never written.

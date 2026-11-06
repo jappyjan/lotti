@@ -39,6 +39,9 @@ class Session:
         self.client: loader.Client | None = None
         self.claimed = False
         self.released = False
+        self.step = "claim"  # what the session was doing, for the error report
+        self.position: dict = {}  # the running write or read: target, bytes sent, bytes verified
+        self.cleanup_errors: list[str] = []
 
     # --- claim and release [drdaeman link.py claim/continue_boot] ---
     def __enter__(self):
@@ -55,6 +58,7 @@ class Session:
             raise
         self.claimed = True
         self.client = loader.Client(self._exchange)
+        self.step = "held: read-only checks"
         self.log("boot held (OKAY verified)")
         return self
 
@@ -77,11 +81,29 @@ class Session:
         raise SessionError("boot release unconfirmed after three CONTINUE exchanges")
 
     def __exit__(self, kind, error, traceback):
-        try:
-            if self.claimed and not self.released:
+        """Release, then close the link, whatever happened. A cleanup failure never replaces the
+        error that ended the session: that one propagates, the cleanup failures are attached to
+        it (a note, and `cleanup_errors`). Without an earlier error, a cleanup failure raises."""
+        failures = []
+        if self.claimed and not self.released:
+            try:
                 self.release()
-        finally:
+            except Exception as caught:  # noqa: BLE001 - reported below
+                failures.append(caught)
+        try:
             self.link.close()
+        except Exception as caught:  # noqa: BLE001
+            failures.append(caught)
+        self.cleanup_errors = [repr(f) for f in failures]
+        if error is not None:
+            for failure in failures:
+                error.add_note(f"cleanup after this error also failed: {failure!r}")
+            return False
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise SessionError("cleanup failed: " + "; ".join(self.cleanup_errors)) from failures[0]
+        return False
 
     # --- read-only primitives ---
     def checksum(self, address: int, length: int) -> int:
@@ -91,9 +113,17 @@ class Session:
             raise SessionError("unexpected checksum output")
         return result
 
-    def dump(self, address: int, length: int) -> bytes:
+    def dump(self, address: int, length: int, progress=None) -> bytes:
         self.client.upload(image.program("dump"), arg0=address, arg1=length)
-        result, data = self.client.execute()
+        received = 0
+
+        def counted(chunk: bytes) -> None:
+            nonlocal received
+            received += len(chunk)
+            if progress:
+                progress(received)
+
+        result, data = self.client.execute(counted if progress else None)
         if result or len(data) != length:
             raise SessionError(f"memory read at {address:#x} failed or returned {len(data)} of {length} bytes")
         return data
@@ -150,6 +180,7 @@ class Session:
             raise RefusedError("MRAM writes are 16-byte aligned and non-empty")
         if not pins.RECOVER_BASE <= address < end <= pins.RECOVER_END:
             raise RefusedError(f"write [{address:#x}, {end:#x}) is outside the stock main-app region")
+        self.position = {"target": f"{address:#x}+{len(data)}", "sent": 0, "verified": 0}
         self.client.upload(image.program("recover"), arg0=address, arg1=len(data))
         count = 0
 
@@ -161,6 +192,7 @@ class Session:
             if actual != min(count + BLOCK, len(data)):
                 raise SessionError("unexpected writer progress")
             count = actual
+            self.position["verified"] = count
             if progress:
                 progress(count)
 
@@ -170,6 +202,7 @@ class Session:
             nonlocal at
             chunk = data[at : at + capacity]
             at += len(chunk)
+            self.position["sent"] = at
             return chunk
 
         result, _output = self.client.execute(checked, source=source)
@@ -182,21 +215,28 @@ class Session:
             raise RefusedError("recover only writes the pinned stock 2.4.0.24 main image")
         size = pins.RECOVER_END - pins.RECOVER_BASE
         tail_at = pins.RECOVER_BASE + size - 16
+        self.step = "read the image tail unit"
         tail = self.dump(tail_at, 16)  # keep whatever follows the image inside its last unit
         keep = len(stock) - (size - 16)
         target = stock + tail[keep:]
+        self.step = "CRC of the app region before"
         before = self.checksum(pins.RECOVER_BASE, size)
         self.log(f"app region CRC-32 before: {before:08x} (stock {zlib.crc32(target):08x})")
+        self.step = "RAM API v2 check"
         api = image.program("recover")
         self.client.upload(api)  # length 0 = API check only, programs nothing
         result, output = self.client.execute()
         if result or output:
             raise SessionError("the loader lacks RAM API v2 (recv); nothing written")
+        self.step = "write the app body (vectors not yet written)"
         self._write(pins.RECOVER_BASE + 16, target[16:], progress)
+        self.step = "CRC of the app body"
         body = self.checksum(pins.RECOVER_BASE + 16, size - 16)
         if body != zlib.crc32(target[16:]):
             raise SessionError("app body CRC mismatch; the vector table was NOT committed")
+        self.step = "write the 16 vector bytes"
         self._write(pins.RECOVER_BASE, target[:16])
+        self.step = "final CRC"
         final = self.checksum(pins.RECOVER_BASE, size)
         if final != zlib.crc32(target):
             raise SessionError("final app CRC mismatch")

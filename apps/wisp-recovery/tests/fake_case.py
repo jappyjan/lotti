@@ -9,6 +9,11 @@
   stubbed (YHM2510 I2C register file, USART3 transmit to a fake temple), its MMIO is
   modelled (USART1 to the host, USART3 from the temple), and its final SYSRESETREQ resets
   the fake case with SRAM retained, as on the STM32.
+- The W18 relay (drdaeman's case.bin: the bridge plus his reset/claim/relay extension) runs the
+  same way. Its reset waveform is Even's code and not in the repository, so the call into it is
+  a hook that resets the fake temple (whose `reset()` returns its boot beacon, the HELO), and
+  CASE_GPIO_INIT is one more stub. `hang_when(frame)` stops the emulated MCU for good while it
+  hands that frame to the temple: the step-F failure as the hardware record shows it.
 """
 
 from __future__ import annotations
@@ -24,7 +29,11 @@ from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_AR
 FLASH, FLASH_SIZE = 0x0800_0000, 0x2_0000
 SRAM, SRAM_SIZE = 0x2000_0000, 0x2_4000
 IDLE_YHM = bytes.fromhex("811104afaf03812022ff")  # third seated-idle profile in the bridge
-STUB_INIT = (0x08004EEC, 0x08008438, 0x08006A40, 0x08002888, 0x08006CF8, 0x08006C80)
+STUB_INIT = (0x08004EEC, 0x08008438, 0x08006A40, 0x08002888, 0x08006CF8, 0x08006C80,
+             0x08004D30)  # the last: CASE_GPIO_INIT, called by the W18 relay's temple reset
+RELAY_WAVEFORM = 0x20011400  # W18 relay: Even's temple-reset waveform (zeroed in the template)
+HOST_READ_POLLS = ((0x20010316, 0x2001033E), (0x200109AC, 0x200109D6))  # bridge, W18 relay
+TEMPLE_POLL_COUNTERS = (0x200105C2, 0x2001090C)  # bridge capture, W18 relay_receive
 STUB_I2C_READ, STUB_I2C_WRITE, STUB_UART3_TX = 0x08009040, 0x08009108, 0x08003BB0
 BANNER = b"\r\n****** B200 1.2.57 0123456789abcdef01234567******\r\nPower up...\r\n"
 
@@ -47,6 +56,22 @@ def version_frame(version=(2, 4, 0, 24), hardware=5) -> bytes:
     frame = bytearray(b"\x5a\xa5\xff\x09\x24\x01\x03\x05" + bytes(version) + bytes((hardware,)))
     frame.append(sum(frame) & 0xFF)
     return bytes(frame)
+
+
+class LinkTemple:
+    """A temple for the W18 relay: a loader link (fake_temple.FakeLoaderLink, or anything with
+    start() and exchange()) behind the case's pogo UART."""
+
+    def __init__(self, link):
+        self.link = link
+        self.received: list[bytes] = []
+
+    def reset(self) -> bytes:
+        return self.link.start()
+
+    def hear(self, data: bytes) -> bytes:
+        self.received.append(data)
+        return self.link.exchange(data)
 
 
 class FakeTemple:
@@ -77,6 +102,9 @@ class FakeCase:
         self.rom_log: list[tuple] = []
         self.yhm_writes: list[tuple[int, int]] = []
         self.resets = 0
+        self.run_timeout_us = 20_000_000
+        self.hang_when = None
+        self.hung = False
         self.uc = u.Uc(u.UC_ARCH_ARM, u.UC_MODE_THUMB | u.UC_MODE_MCLASS)
         self.uc.mem_map(FLASH, FLASH_SIZE)
         self.uc.mem_write(FLASH, self.flash)
@@ -227,7 +255,7 @@ class FakeCase:
 
         def run():
             try:
-                self.uc.emu_start(pc | 1, 0xFFFF_FFF0, timeout=20_000_000)
+                self.uc.emu_start(pc | 1, 0xFFFF_FFF0, timeout=self.run_timeout_us)
             except u.UcError as error:
                 self.fault = error
 
@@ -256,19 +284,30 @@ class FakeCase:
                 ret(c, 1)
             elif address == STUB_UART3_TX:
                 data = bytes(c.mem_read(c.reg_read(UC_ARM_REG_R0), c.reg_read(UC_ARM_REG_R1)))
+                if self.hang_when and self.hang_when(data):
+                    self.hung = True  # the MCU never comes back from this call
+                    c.emu_stop()
+                    return
                 side = self._routed_side()
                 reply = self.temples[side].hear(data) if side else b""
                 self.temple_rx.extend(reply)
                 ret(c, 0)
+            elif address == RELAY_WAVEFORM:
+                side = self._routed_side()
+                temple = self.temples.get(side)
+                if temple is not None and hasattr(temple, "reset"):
+                    self.temple_rx.extend(temple.reset())
+                ret(c)
             elif address in (0x20010624, 0x2001062E):  # busy-wait delays
                 ret(c)
-            elif address == 0x200105C2 and not self.temple_rx:  # capture poll: fast-forward
+            elif address in TEMPLE_POLL_COUNTERS and not self.temple_rx:  # temple poll: fast-forward
                 c.reg_write(UC_ARM_REG_R3, 1)
 
         def mem_read(c, access, address, size, value, _):
             if address == 0x4001381C:  # USART1 ISR: TXE|TC, RXNE when host bytes wait
                 with self.cond:
-                    if 0x20010316 <= c.reg_read(UC_ARM_REG_PC) < 0x2001033E:  # host_read poll
+                    pc = c.reg_read(UC_ARM_REG_PC)
+                    if any(lo <= pc < hi for lo, hi in HOST_READ_POLLS):
                         self.cond.wait_for(lambda: self.host_in or self.stop, timeout=10)
                     flags = 0xC0 | (0x20 if self.host_in else 0)
                 c.mem_write(address, struct.pack("<I", flags))
