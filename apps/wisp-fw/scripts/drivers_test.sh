@@ -9,17 +9,49 @@
 #   3. tests/drivers/check_drivers.py: the panel's command sequence and bus modes, the frame bytes
 #      after a full and a partial update, the I2C traffic of every driver (no PSoC DFU command,
 #      PMIC registers addressed in the right byte order, suspend writes), and the UART log.
-# Then one negative case: the same image with the fork's unpatched i2c_ambiq.c must fail the PMIC
-# byte-order check (third_party/zephyr/README.md). WISP_DRIVERS_SKIP_NEGATIVE=1 skips it.
+# Then one negative case: the same image built against a pristine Zephyr tree (without
+# third_party/ambiq/patches/zephyr-0002, the I2C header byte-order fix; configure check skipped
+# with the TEST ONLY switch, Bluetooth off so rule 8's EM9305 check stays out of the way) must fail
+# the PMIC byte-order check. WISP_DRIVERS_SKIP_NEGATIVE=1 skips it.
 #
 # Run dirs: .wisp-cache/drivers/<variant>/ (uart1.txt, panel.log, frame.bin, iom.log, renode.log).
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 wisp_require_setup
 
-secs="${WISP_DRIVERS_SECONDS:-3}"
+# The self-test runs before Bluetooth, which then waits 5 s for the absent EM9305.
+secs="${WISP_DRIVERS_SECONDS:-9}"
 # A report the PSoC publishes after boot: worn (byte 0 = 2) + single tap (byte 1 = 0x04, count 1).
 touch_report="02040100000000000000000000000000"
+
+# A pristine checkout of the pinned Zephyr (git worktree of the west repo; the patches live only
+# in the working tree). Same place as scripts/test.sh's.
+pristine_zephyr() {
+	local dir="$CACHE_DIR/unpatched/zephyr"
+	if [[ ! -d "$dir" ]]; then
+		git -C "$ZEPHYR_BASE" worktree prune
+		git -C "$ZEPHYR_BASE" worktree add --detach --force "$dir" HEAD >/dev/null 2>&1
+	fi
+	git -C "$dir" checkout --detach -q "$(git -C "$ZEPHYR_BASE" rev-parse HEAD)"
+	git -C "$dir" reset -q --hard
+	echo "$dir"
+}
+
+# build <dir> <cmake args...>: west build, or (WISP_DRIVERS_ZEPHYR set) plain CMake against
+# that Zephyr tree with the workspace's modules.
+build() {
+	local dir="$1"
+	shift
+	rm -rf "$dir" # always from scratch: a cached configure misses new board .conf files
+	if [[ -z "${WISP_DRIVERS_ZEPHYR:-}" ]]; then
+		WISP_BUILD_DIR="$dir" "$APP_DIR/scripts/build.sh" "$@"
+		return
+	fi
+	local mods
+	mods="$(cd "$WEST_TOP" && west list -f '{abspath}' ambiqhal_ambiq cmsis cmsis_6 mbedtls littlefs | paste -sd';')"
+	ZEPHYR_BASE="$WISP_DRIVERS_ZEPHYR" cmake -GNinja -S "$APP_DIR" -B "$dir" -DBOARD=wisp_g2 \
+		"-DZEPHYR_MODULES=$mods" "$@" && cmake --build "$dir"
+}
 
 run_variant() {
 	local name="$1" variant="$2" expect="$3"
@@ -27,8 +59,7 @@ run_variant() {
 	local build="$CACHE_DIR/build/drivers-$name" run="$CACHE_DIR/drivers/$name"
 
 	printf '\n=== wisp-fw drivers test: %s\n' "$name"
-	WISP_BUILD_DIR="$build" "$APP_DIR/scripts/build.sh" -DWISP_WITH_CORE=ON \
-		"$@" >"$CACHE_DIR/drivers-build-$name.log" 2>&1 || {
+	build "$build" -DWISP_WITH_CORE=ON "$@" >"$CACHE_DIR/drivers-build-$name.log" 2>&1 || {
 		tail -n 40 "$CACHE_DIR/drivers-build-$name.log" >&2
 		echo "FAIL: build $name" >&2
 		exit 1
@@ -65,6 +96,7 @@ run_variant a6ng 1 pass "-DEXTRA_CONF_FILE=$conf"
 run_variant jbd4010 0 pass "-DEXTRA_CONF_FILE=$conf" \
 	"-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/tests/drivers/jbd4010.overlay"
 if [[ "${WISP_DRIVERS_SKIP_NEGATIVE:-}" != 1 ]]; then
-	run_variant a6ng-upstream-i2c 1 fail "-DEXTRA_CONF_FILE=$conf;$APP_DIR/tests/drivers/upstream_i2c.conf"
+	WISP_DRIVERS_ZEPHYR="$(pristine_zephyr)" run_variant a6ng-unpatched-i2c 1 fail \
+		"-DEXTRA_CONF_FILE=$conf;$APP_DIR/tests/drivers/bt_off.conf" -DWISP_PATCHES_TEST_UNPATCHED=ON
 fi
 printf '\n=== wisp-fw drivers test: all passed\n'

@@ -1,11 +1,12 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Wisp native firmware: banner, native HAL bring-up, heartbeat on the debug UART.
+ * Wisp native firmware: banner, native HAL bring-up, Bluetooth with the Wisp GATT service,
+ * heartbeat.
  *
  * The drivers start suspended (panel unpowered, IMU rail off, ALS shut down); nothing is powered
- * until the core asks for it. Wisp Boot (src/boot/) is not wired in yet; the image entry is
- * Zephyr's reset vector at 0x438000.
+ * until the core asks for it. The link (src/ble/, src/link/) carries a wisp-core session. Wisp
+ * Boot (src/boot/) is not wired in; the image entry is Zephyr's reset vector at 0x438000.
  *
  * CONFIG_WISP_DRIVER_SELFTEST (scripts/drivers_test.sh only): after bring-up, compose test frames
  * with wisp-core's compositor, send them through the flush path to the panel, read each sensor
@@ -21,8 +22,10 @@
 #include <zephyr/version.h>
 
 #include "app_version.h"
+#if defined(CONFIG_WISP_NATIVE_HAL)
 #include "wisp_hal.h"
 #include "wisp_native.h"
+#endif
 
 #if defined(CONFIG_WISP_DRIVER_SELFTEST)
 #include <zephyr/device.h>
@@ -38,10 +41,15 @@
 #include <wisp/display.h>
 #endif
 
+#if defined(CONFIG_WISP_BLE)
+#include "wisp_ble.h"
+#endif
+
 #ifndef WISP_FW_GIT_REV
 #define WISP_FW_GIT_REV "unknown"
 #endif
 
+#if defined(CONFIG_WISP_NATIVE_HAL)
 static void bring_up(void)
 {
 	static const struct {
@@ -61,6 +69,7 @@ static void bring_up(void)
 	}
 	printk("wisp: sensors present 0x%02x\n", wisp_hal_sensors_present());
 }
+#endif /* CONFIG_WISP_NATIVE_HAL */
 
 #if defined(CONFIG_WISP_DRIVER_SELFTEST)
 
@@ -177,17 +186,34 @@ static void selftest_sensors(void)
 int main(void)
 {
 	printk("\n*** Wisp native " WISP_FW_VERSION " (" WISP_FW_GIT_REV ") ***\n");
+#if defined(CONFIG_ARCH_POSIX)
+	printk("wisp: board %s, Zephyr %s, Linux process\n", CONFIG_BOARD, KERNEL_VERSION_STRING);
+#else
 	printk("wisp: board %s, Zephyr %s, image @ %p\n", CONFIG_BOARD, KERNEL_VERSION_STRING,
 	       (void *)__rom_region_start);
-	printk("wisp: bluetooth off (safety rule 8)\n");
+#endif
+#if defined(CONFIG_WISP_NATIVE_HAL)
 	bring_up();
-
+#endif
 #if defined(CONFIG_WISP_DRIVER_SELFTEST)
 	selftest_display();
 	selftest_sensors();
 	printk("selftest: done\n");
 #endif
+#if defined(CONFIG_WISP_BLE)
+	printk("wisp: bluetooth: EM9305 update path compiled out (safety rule 8)\n");
+	if (wisp_ble_start() == 0) {
+		printk("wisp: bluetooth up, Wisp GATT service registered\n");
+	} else {
+		printk("wisp: bluetooth unavailable, running without a link\n");
+	}
+#else
+	printk("wisp: bluetooth off\n");
+#endif
 
+	if (CONFIG_WISP_HEARTBEAT_MS == 0) {
+		return 0;
+	}
 	for (uint32_t beat = 1;; beat++) {
 		k_msleep(CONFIG_WISP_HEARTBEAT_MS);
 		printk("wisp: heartbeat %u uptime %lld ms\n", beat, k_uptime_get());

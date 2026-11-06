@@ -1,9 +1,10 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * wisp_g2 pin control. Pads from the stock 2.4.0.24 pin table and UART/I2C pin rows
- * (docs/wisp/hardware.md "Native drivers"): UART1 = GPIO12 TX / GPIO14 RX (the apollo510b_evb
- * uses the same pads; the pinmux names come from the fork's evb pinctrl, Apache-2.0).
+ * wisp_g2 pin control: the debug UART, the EM9305's SPI (IOM6), the I2C buses and the panel's
+ * MSPI0. Pads from the stock 2.4.0.24 pin table and UART/I2C pin rows (docs/wisp/hardware.md
+ * "Native drivers"): UART1 = GPIO12 TX / GPIO14 RX (the apollo510b_evb uses the same pads; the
+ * pinmux names come from the fork's evb pinctrl, Apache-2.0).
  */
 
 #include <apollo510/ambiq-apollo510-pinmux.h>
@@ -23,6 +24,13 @@
 	uart1_sleep: uart1_sleep {
 		group1 {
 			pinmux = <GPIO_P12>, <GPIO_P14>;
+		};
+	};
+
+	/* EM9305 HCI SPI (IOM6). TODO(G2 pins): the evb's pads, see the bt_hci node. */
+	spi6_default: spi6_default {
+		group1 {
+			pinmux = <M6SCK_P61>, <M6MISO_P63>, <M6MOSI_P62>;
 		};
 	};
 };

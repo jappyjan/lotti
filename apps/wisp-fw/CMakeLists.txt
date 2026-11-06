@@ -17,6 +17,9 @@ project(wisp_fw C)
 # The post-build gate (scripts/check_rule8.py) inspects what actually got linked; this one
 # fails early on the Kconfig switches that pull the EM9305 driver in.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/rule8.cmake)
+# Wisp's other patches to the fork (I2C header byte order), checked after rule 8 so a rule 8
+# failure is reported first.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/patches.cmake)
 
 # --- App ----------------------------------------------------------------------------------
 execute_process(
@@ -28,16 +31,19 @@ if(WISP_FW_GIT_REV)
   target_compile_definitions(app PRIVATE WISP_FW_GIT_REV="${WISP_FW_GIT_REV}")
 endif()
 
-target_sources(app PRIVATE src/main.c src/display/wisp_flush.c
-  src/hal/native/power.c src/hal/native/display.c src/hal/native/input.c
-  src/hal/native/sensors.c)
-target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers)
+target_sources(app PRIVATE src/main.c src/display/wisp_flush.c)
+target_sources_ifdef(CONFIG_WISP_NATIVE_HAL app PRIVATE src/hal/native/power.c
+  src/hal/native/display.c src/hal/native/input.c src/hal/native/sensors.c)
+target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers src/link)
+if(CONFIG_WISP_BLE)
+  # The Wisp GATT service (Zephyr, transport only) and the transport adapter (portable C,
+  # host-tested in tests/link/). Both need wisp-core.
+  set(WISP_WITH_CORE ON)
+  target_sources(app PRIVATE src/ble/wisp_ble.c src/link/wisp_link.c)
+  target_include_directories(app PRIVATE src/ble)
+endif()
 
 # --- Drivers (docs/wisp/hardware.md "Native drivers") -------------------------------------
-if(CONFIG_WISP_I2C_AMBIQ)
-  target_sources(app PRIVATE third_party/zephyr/i2c_ambiq.c)
-  target_include_directories(app PRIVATE ${ZEPHYR_BASE}/drivers/i2c)
-endif()
 target_sources_ifdef(CONFIG_WISP_G2_TOUCH app PRIVATE src/drivers/g2_touch.c)
 target_sources_ifdef(CONFIG_WISP_ICM45608 app PRIVATE src/drivers/icm45608.c)
 target_sources_ifdef(CONFIG_WISP_OPT3007 app PRIVATE src/drivers/opt3007.c)
@@ -53,7 +59,7 @@ endif()
 # packages/wisp-core (portable C, owned by its own thread) links in here once it exposes a
 # CMake library target. Point WISP_CORE_DIR at it (default: the monorepo path, if present)
 # and set WISP_WITH_CORE=ON. The core must not depend on Zephyr; it talks to src/hal/.
-option(WISP_WITH_CORE "Link packages/wisp-core into the image" OFF)
+option(WISP_WITH_CORE "Link packages/wisp-core into the image (forced on with CONFIG_WISP_BLE)" OFF)
 set(WISP_CORE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../packages/wisp-core" CACHE PATH
     "Path to the wisp-core source tree (must contain a CMakeLists.txt defining wisp_core)")
 if(WISP_WITH_CORE)
@@ -85,6 +91,10 @@ endif()
 # part of the default target. Either failing fails the build, and the stamp is not written, so
 # they rerun on the next build (zephyr.elf itself stays in the build dir for inspection; the
 # nx build target only reports success when both pass).
+if(NOT CONFIG_BOARD_WISP_G2)
+  # native_sim (tests/ble/) is a Linux process: no MRAM image, no EM9305 driver.
+  return()
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(_wisp_zdir ${CMAKE_BINARY_DIR}/zephyr)
 set(_wisp_stamp ${CMAKE_BINARY_DIR}/wisp_checks.stamp)
@@ -100,7 +110,9 @@ add_custom_command(
           --config ${_wisp_zdir}/.config
           --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json
           --hal ${ZEPHYR_HAL_AMBIQ_MODULE_DIR}
+          --zephyr ${ZEPHYR_BASE}
           --nm ${CMAKE_NM}
+          --objdump ${CMAKE_OBJDUMP}
   COMMAND ${CMAKE_COMMAND} -E touch ${_wisp_stamp}
   DEPENDS ${logical_target_for_zephyr_elf}
           ${_wisp_zdir}/${KERNEL_ELF_NAME}

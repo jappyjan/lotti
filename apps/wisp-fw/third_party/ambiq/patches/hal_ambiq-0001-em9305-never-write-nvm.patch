@@ -1,0 +1,273 @@
+diff --git a/components/bluetooth/am_devices_em9305.c b/components/bluetooth/am_devices_em9305.c
+index b36fd2a..9899f7c 100644
+--- a/components/bluetooth/am_devices_em9305.c
++++ b/components/bluetooth/am_devices_em9305.c
+@@ -54,7 +54,21 @@
+ 
+ #include "am_mcu_apollo.h"
+ #include "am_devices_em9305.h"
+-#include "ble_fw_image_em9305.h"
++/*
++ * Wisp patch (apps/wisp-fw/third_party/ambiq, docs/wisp/safety.md rule 8): this driver never
++ * writes the EM9305's NVM. The firmware update, the NVM recovery reflash, configuration-mode
++ * entry and the HF crystal trim are compiled out, the bundled controller image
++ * (ble_fw_image_em9305.h) is not included, and am_devices_em9305_init() treats every caller
++ * as skip_fw_update = true. WISP_EM9305_NVM_WRITE guards the dead code; defining it is an
++ * error, so no build can bring that code back.
++ */
++#define WISP_EM9305_NO_NVM_WRITE 1
++#if defined(WISP_EM9305_NVM_WRITE)
++#error "Wisp: EM9305 NVM writes are compiled out for good (docs/wisp/safety.md rule 8)"
++#endif
++#if defined(CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM)
++#error "Wisp: the EM9305 HF crystal trim writes NVM info page 2 (docs/wisp/safety.md rule 8)"
++#endif
+ 
+ LOG_MODULE_REGISTER(am_devices_em9305, CONFIG_LOG_DEFAULT_LEVEL);
+ 
+@@ -129,6 +143,7 @@ static struct
+     void (*set_cm)(bool state);
+ } g_gpio_ops;
+ 
++#if defined(WISP_EM9305_NVM_WRITE)
+ //! 30 kHz PWM start/stop callback for firmware-update CM entry
+ static em9305_cm_pwm_ctrl_fun g_cm_pwm_ctrl;
+ 
+@@ -137,6 +152,7 @@ static ImageRecord **g_fw_image_records;
+ static uint8_t g_fw_image_record_size;
+ static NvmPage *g_fw_erase_pages;
+ static uint32_t g_fw_erase_pages_size;
++#endif /* WISP_EM9305_NVM_WRITE */
+ 
+ //*****************************************************************************
+ //
+@@ -607,6 +623,7 @@ int am_devices_em9305_blocking_write(uint8_t *pui8Values, uint16_t ui32NumBytes,
+     return ui32ErrorStatus;
+ }
+ 
++#if defined(WISP_EM9305_NVM_WRITE)
+ //*****************************************************************************
+ //
+ // Firmware update helper: HCI VSC write to NVM address
+@@ -1023,6 +1040,8 @@ static void fw_exit_cm_mode(void)
+     }
+ }
+ 
++#endif /* WISP_EM9305_NVM_WRITE */
++
+ //*****************************************************************************
+ //
+ // Pulse RESET and block until the EM9305 posts its "active state entered"
+@@ -1075,6 +1094,7 @@ static uint32_t em9305_reset_and_wait_active(void)
+     return AM_DEVICES_EM9305_STATUS_SUCCESS;
+ }
+ 
++#if defined(WISP_EM9305_NVM_WRITE)
+ //*****************************************************************************
+ //
+ //! @brief Update EM9305 firmware if bundled image is newer than current.
+@@ -1217,7 +1237,6 @@ static uint32_t em9305_nvm_recovery_reflash(void)
+     return AM_DEVICES_EM9305_STATUS_SUCCESS;
+ }
+ 
+-#if defined(CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM)
+ 
+ /* EM9305 HF-crystal trim register and NVM info-page layout.
+  * The trim value lives in bits 12:7 of REG_RF_XO_SEQ_DIG.
+@@ -1334,7 +1353,8 @@ trim_exit_cm:
+ 
+     return st;
+ }
+-#endif /* CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM */
++
++#endif /* WISP_EM9305_NVM_WRITE */
+ 
+ //*****************************************************************************
+ //
+@@ -1352,36 +1372,21 @@ uint32_t am_devices_em9305_init(am_devices_em9305_callback_t *cb)
+         return AM_DEVICES_EM9305_STATUS_ERROR;
+     }
+ 
++    /* Wisp: skip_fw_update is forced for every caller. The controller runs whatever
++     * firmware is in its NVM; this driver can neither update nor recover it. */
++    cb->skip_fw_update = true;
++
+     // Register the callback functions
+     g_Em9305cb.reset = cb->reset;
+     g_Em9305cb.transceive = cb->transceive;
+     g_transceive = cb->transceive;
+ 
++    /* No NVM recovery: a controller that does not reach active state stays as it is and
++     * Bluetooth stays down. */
+     if (em9305_reset_and_wait_active() != AM_DEVICES_EM9305_STATUS_SUCCESS)
+     {
+-        if (cb->skip_fw_update)
+-        {
+-            return AM_DEVICES_EM9305_STATUS_ERROR;
+-        }
+-
+-        if (em9305_nvm_recovery_reflash() != AM_DEVICES_EM9305_STATUS_SUCCESS)
+-        {
+-            return AM_DEVICES_EM9305_STATUS_ERROR;
+-        }
+-    }
+-
+-#if defined(CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM)
+-    {
+-        uint32_t trim_st = am_devices_em9305_crystal_trim_set(
+-            (uint8_t)CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_TRIM_VALUE, false);
+-
+-        if (trim_st != AM_DEVICES_EM9305_STATUS_SUCCESS)
+-        {
+-            LOG_WRN("EM9305: HF crystal trim set failed (status %u), continuing",
+-                    (unsigned int)trim_st);
+-        }
++        return AM_DEVICES_EM9305_STATUS_ERROR;
+     }
+-#endif /* CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM */
+ 
+     uint32_t image_version = 0;
+     uint32_t ui32Status = am_devices_em9305_get_fw_version(&image_version);
+@@ -1396,57 +1401,6 @@ uint32_t am_devices_em9305_init(am_devices_em9305_callback_t *cb)
+       LOG_WRN("BLE FW version read failed (status %u)", (unsigned int)ui32Status);
+     }
+ 
+-    /* Auto-update when the bundled image is newer, or when the version word
+-     * matches but NVM must be CRC-verified (catches interrupted updates that
+-     * wrote the version before the image was complete).
+-     */
+-    if (!cb->skip_fw_update &&
+-        ((ui32Status != AM_DEVICES_EM9305_STATUS_SUCCESS) ||
+-         (image_version == EM9305_FW_VER_INVALID) ||
+-         (image_version <= ble_fw_image_bin_ver)))
+-    {
+-      if ((ui32Status == AM_DEVICES_EM9305_STATUS_SUCCESS) &&
+-          (image_version == ble_fw_image_bin_ver))
+-      {
+-        LOG_INF("EM9305: verifying bundled FW 0x%08x in NVM...", (unsigned int)ble_fw_image_bin_ver);
+-      }
+-      else if (ui32Status == AM_DEVICES_EM9305_STATUS_SUCCESS)
+-      {
+-        LOG_INF("EM9305: bundled FW 0x%08x > device FW 0x%08x, updating...",
+-                (unsigned int)ble_fw_image_bin_ver, (unsigned int)image_version);
+-      }
+-      else
+-      {
+-        LOG_WRN("EM9305: version unknown; updating to bundled FW 0x%08x",
+-                (unsigned int)ble_fw_image_bin_ver);
+-      }
+-
+-      uint32_t fw_st = am_devices_em9305_update_fw(image_records, IMAGE_RECORDS_SIZE,
+-                                                   erase_pages, erase_pages_size,
+-                                                   ble_fw_image_bin_ver, false);
+-
+-      if (fw_st == AM_DEVICES_EM9305_STATUS_SUCCESS)
+-      {
+-        /* Reflash or verify-only both exit CM with a reset; wait for active
+-         * state before returning to the HCI driver.
+-         */
+-        if (em9305_reset_and_wait_active() != AM_DEVICES_EM9305_STATUS_SUCCESS)
+-        {
+-          LOG_WRN("EM9305: post-update boot failed; attempting NVM recovery");
+-          if (em9305_nvm_recovery_reflash() != AM_DEVICES_EM9305_STATUS_SUCCESS)
+-          {
+-            LOG_ERR("EM9305: NVM recovery failed after update");
+-            return AM_DEVICES_EM9305_STATUS_ERROR;
+-          }
+-        }
+-      }
+-      else
+-      {
+-        LOG_ERR("EM9305: FW update failed (status %u)", (unsigned int)fw_st);
+-        return fw_st;
+-      }
+-    }
+-
+     return AM_DEVICES_EM9305_STATUS_SUCCESS;
+ }
+ 
+@@ -1540,12 +1494,14 @@ uint32_t am_devices_em9305_deinit(void)
+     g_Em9305cb.transceive = NULL;
+     g_transceive = NULL;
+ 
++#if defined(WISP_EM9305_NVM_WRITE)
+     // Clear firmware-update state so a subsequent init() does not see stale
+     // pointers to image data that may have been unmapped/freed.
+     g_fw_image_records = NULL;
+     g_fw_image_record_size = 0;
+     g_fw_erase_pages = NULL;
+     g_fw_erase_pages_size = 0;
++#endif /* WISP_EM9305_NVM_WRITE */
+ 
+     LOG_INF("EM9305 deinitialized");
+ 
+diff --git a/components/bluetooth/am_devices_em9305.h b/components/bluetooth/am_devices_em9305.h
+index e6bb4b5..7bbe4ae 100644
+--- a/components/bluetooth/am_devices_em9305.h
++++ b/components/bluetooth/am_devices_em9305.h
+@@ -132,7 +132,9 @@ typedef int (*bt_spi_transceive_fun)(void *tx, uint32_t tx_len, void *rx, uint32
+ //! and target pin are board-specific and are owned by the HCI driver layer
+ //! so that the device driver stays portable.
+ //
++#if defined(WISP_EM9305_NVM_WRITE) /* Wisp: compiled out, safety rule 8 */
+ typedef void (*em9305_cm_pwm_ctrl_fun)(bool enable);
++#endif
+ 
+ //
+ //! BLE controller callback structure
+@@ -158,10 +160,10 @@ typedef struct
+ 
+     /**
+      *************************************************************************************
+-     * @brief When true, skip bundled-firmware auto-update during init.
++     * @brief Ignored (Wisp patch, safety rule 8): init always sets it to true.
+      *
+-     * Use for early board bring-up (e.g. EXTREF wake) when a later HCI init pass
+-     * will perform the update with full board hooks (CLKREQ, CM PWM, etc.).
++     * The firmware update and NVM recovery paths are compiled out; the
++     * controller keeps the firmware it has.
+      *
+      *************************************************************************************
+      */
+@@ -302,7 +304,9 @@ void am_devices_em9305_controller_reset(void);
+ //! @param set_cm - function to drive cm GPIO (true=assert, false=deassert)
+ //
+ //*****************************************************************************
++#if defined(WISP_EM9305_NVM_WRITE) /* Wisp: compiled out, safety rule 8 */
+ void am_devices_em9305_register_cm_gpio(void (*set_cm)(bool));
++#endif
+ 
+ //*****************************************************************************
+ //
+@@ -319,7 +323,9 @@ void am_devices_em9305_register_cm_gpio(void (*set_cm)(bool));
+ //! @param cm_pwm - function to start (true) or stop (false) the 30 kHz signal
+ //
+ //*****************************************************************************
++#if defined(WISP_EM9305_NVM_WRITE) /* Wisp: compiled out, safety rule 8 */
+ void am_devices_em9305_register_cm_pwm_ops(em9305_cm_pwm_ctrl_fun cm_pwm);
++#endif
+ 
+ //*****************************************************************************
+ //
+@@ -357,9 +363,11 @@ uint32_t am_devices_em9305_sleep_set(bool enable);
+ //! @return AM_DEVICES_EM9305_STATUS_SUCCESS on success
+ //
+ //*****************************************************************************
++#if defined(WISP_EM9305_NVM_WRITE) /* Wisp: compiled out, safety rule 8 */
+ uint32_t am_devices_em9305_update_fw(ImageRecord **pFwImage, uint8_t record_size,
+                                      NvmPage *erase_pages, uint32_t erase_size,
+                                      uint32_t image_ver, bool force);
++#endif
+ 
+ //*****************************************************************************
+ //
+@@ -378,7 +386,9 @@ uint32_t am_devices_em9305_update_fw(ImageRecord **pFwImage, uint8_t record_size
+ //! @return AM_DEVICES_EM9305_STATUS_SUCCESS on success.
+ //
+ //*****************************************************************************
++#if defined(WISP_EM9305_NVM_WRITE) /* Wisp: compiled out, safety rule 8 */
+ uint32_t am_devices_em9305_crystal_trim_set(uint8_t trim_value, bool force_update);
++#endif
+ 
+ #ifdef __cplusplus
+ }

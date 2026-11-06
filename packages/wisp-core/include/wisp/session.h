@@ -12,6 +12,10 @@
 
 #include "msgs.h"
 
+/* The protocol version this core speaks (HELLO proto_major / proto_minor). */
+#define WISP_PROTO_MAJOR 0u
+#define WISP_PROTO_MINOR 2u
+
 #define WISP_SESSION_TIMEOUT_DEFAULT_MS 10000u
 
 typedef enum {

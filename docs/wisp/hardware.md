@@ -53,7 +53,7 @@ Memory detail (hal_ambiq `am_apollo510.h`, g2emu): DTCM is `0x20000000–0x20080
 3. Main app at `0x438000`. **It alone** contains the BLE host (Cordio), GATT, and the OTA service [C]. The bootloader has no BLE [C].
 4. OTA (phone → app): EVENOTA bundle over sid `0xC0/0xC1`; for the main component the app writes the littlefs staging file, verifies its CRC, writes `0x55555555` to the flag and resets after 3 s [C, `findings-hardware-drivers.md:606`].
 
-**Consequences:** single slot, no rollback, no boot counter [C]. A main app that crashes before BLE is up cannot take an OTA any more → SWD-only recovery [C, g2flash README]. SWD pads are undocumented [?]; SBL UART recovery depends on per-device INFO0 provisioning nobody has read yet [?].
+**Consequences:** single slot, no rollback, no boot counter [C]. A main app that crashes before BLE is up cannot take an OTA any more → SWD-only recovery [C, g2flash README]. SWD pads are undocumented [?]; SBL UART recovery depends on per-device INFO0 provisioning nobody has read yet [?]. The stock bootloader has no UART receive path at all ([recovery.md](recovery.md#do-the-charging-pins-carry-anything-besides-power)).
 
 ### What the 2.2.6.10 bootloader does, step by step (rung 3)
 
@@ -213,7 +213,7 @@ Report: byte 0 proximity (1 = not worn, 2 = worn, 0 = no change); byte 1 flags (
 
 The case is detected by VBUS only (no case GPIO in the pin table); the case UART is UART2 (GPIO42/44, 1 Mbaud). Battery: 96 mAh, 3.87 V per temple (FCC report); stock's percent comes from Nordic's closed `nrf_fuel_gauge` (not used by Wisp; Wisp estimates from voltage). Currents [D] ([nPM1300 PS](https://docs.nordicsemi.com/r/bundle/ps_npm1300/page/product_overview.html-sys-el-spec)): ship 370 nA, hibernate 500 nA, active with bucks off 600 nA, one/both bucks in auto 0.8 / 1.1 µA, a buck in forced PWM 4 mA (keep auto).
 
-**Zephyr I2C byte order** (found while wiring the PMIC, not a G2 fact): the fork's `i2c_ambiq.c` copies a write-read header into the IOM offset field little-endian, but the IOM sends offset bytes highest first, so every 16-bit PMIC register read would go to the wrong register. Wisp carries a fixed copy ([apps/wisp-fw/third_party/zephyr/README.md](../../apps/wisp-fw/third_party/zephyr/README.md)); the Renode driver test fails with the unfixed driver.
+**Zephyr I2C byte order** (found while wiring the PMIC, not a G2 fact): the fork's `i2c_ambiq.c` copies a write-read header into the IOM offset field little-endian, but the IOM sends offset bytes highest first, so every 16-bit PMIC register read would go to the wrong register. Wisp patches it ([`zephyr-0002`](../../apps/wisp-fw/third_party/ambiq/README.md), applied by setup and checked at configure time); the Renode driver test fails with the unfixed driver.
 
 ### GX8002 microphone path (facts only, no driver yet)
 
@@ -272,7 +272,7 @@ Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, 
 
 - Which NOR part our temples have (MX25U25643G or GD25LE256H). It decides whether any main app older than 2.2.9.22 is safe to install (Even app device info or a stock log line `Nor flash chip: %s` might tell).
 - How long 2.4.0.24's RESULT_CHECK readback of the staged 3.6 MB file takes (its log line `fs readback verify … cost %d ms`).
-- SWD pad location and a working attach (needed before any native flash, see [safety.md](safety.md)).
+- SWD pad location and a working attach: unlabelled, unmapped, behind a glued pod; see [recovery.md](recovery.md#1-swd-on-the-temples).
 - INFO0/INFOC provisioning (does SBL UART recovery exist on retail units?).
 - Which panel variant our units have (JBD4010 = hw_version 5, A6N-G = hw_version 6). Answered by one stock log line (`[BSP]hw_version: %d`); the init sequences are in [Native drivers](#native-drivers-stock-24024). The power board is answered: stock 2.4.0.24 only drives the nPM1300.
 - Whether the nPM1300 watchdog that stock arms (30.72 s, reset mode) is still running when a new image boots after an Apollo reset. Wisp kicks and stops it at boot either way.

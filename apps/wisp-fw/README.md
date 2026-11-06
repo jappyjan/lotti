@@ -1,6 +1,6 @@
 # wisp-fw — Wisp native firmware (Apollo510B)
 
-The native target of [Wisp](../../docs/wisp/README.md): Zephyr from Ambiq's fork (decision W11) on one G2 temple, emulated in Renode with g2emu's Apollo510 platform (W15). **Milestone M0: build skeleton + Renode boot; rung 3: Wisp Boot, fault-tested in Renode against the real Even bootloader; M6 groundwork: drivers for the panel, touch/wear, IMU, light and PMIC, tested in Renode against bus models. Nothing here has run on glasses, and nothing here can talk to hardware** — the board defines no flash runner, and no script uses J-Link, SWD or BLE.
+The native target of [Wisp](../../docs/wisp/README.md): Zephyr from Ambiq's fork (decision W11) on one G2 temple, emulated in Renode with g2emu's Apollo510 platform (W15). **M0: build skeleton + Renode boot; rung 3: Wisp Boot, fault-tested in Renode against the real Even bootloader; M6 part 1: Bluetooth with the Wisp GATT service carrying a wisp-core session, with the EM9305 driver patched so it can never write the controller's NVM ([Bluetooth](#bluetooth)); drivers for the panel, touch/wear, IMU, light and PMIC, tested in Renode against bus models ([Drivers](#drivers)). Nothing here has run on glasses, and nothing here can talk to hardware** — the board defines no flash runner, and no script uses J-Link, SWD or a real radio (the BLE test runs against a virtual controller).
 
 Read [safety.md](../../docs/wisp/safety.md) before changing anything that ends up in the image.
 
@@ -8,17 +8,17 @@ Read [safety.md](../../docs/wisp/safety.md) before changing anything that ends u
 
 Everything runs on t3-worker (NixOS) as a normal user. The flake in this directory pins the toolchain; the scripts enter it themselves (`nix develop`), so plain `pnpm nx` is enough.
 
-| Target                             | What it does                                                                                                                   |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm nx run wisp-fw:setup`        | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after) |
-| `pnpm nx run wisp-fw:build`        | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                  |
-| `pnpm nx run wisp-fw:sim`          | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                           |
-| `pnpm nx run wisp-fw:test`         | Wisp Boot + flush host tests, gate unit tests, Renode boot test (asserts on UART1), rule 8 negative builds (about 4 min)       |
-| `pnpm nx run wisp-fw:drivers-test` | the drivers in Renode against panel and I2C models, both panels + one negative case ([below](#drivers); about 5 min)           |
-| `pnpm nx run wisp-fw:build-boot`   | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                 |
-| `pnpm nx run wisp-fw:boot-test`    | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)   |
+| Target                             | What it does                                                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm nx run wisp-fw:setup`        | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after)                 |
+| `pnpm nx run wisp-fw:build`        | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                                  |
+| `pnpm nx run wisp-fw:sim`          | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                                           |
+| `pnpm nx run wisp-fw:test`         | Wisp Boot, flush and BLE adapter host tests, gate unit tests, Renode boot test, BLE end to end on native_sim, rule 8 and patch negative builds |
+| `pnpm nx run wisp-fw:drivers-test` | the drivers in Renode against panel and I2C models, both panels + one negative case ([below](#drivers); about 5 min)                           |
+| `pnpm nx run wisp-fw:build-boot`   | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                                 |
+| `pnpm nx run wisp-fw:boot-test`    | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)                   |
 
-Toolchain (from `flake.lock`, nixos-26.05 at `7dcdd87`): gcc-arm-embedded 15.2.rel1 (Zephyr variant `gnuarmemb`), CMake 4.1, Ninja, dtc, west 1.5, Renode 1.16.1. Workspace: `AmbiqMicro/ambiqzephyr` `ambiq-stable` @ `89c8a36` (Zephyr 4.3.0) plus only `ambiqhal_ambiq` @ `d3278ec`, `cmsis`, `cmsis_6`, `mbedtls` (only for the BT negative build) and `littlefs` @ `8f5ca34` (Zephyr's fork of littlefs 2.11, BSD-3-Clause, on-disk format 2.1 like stock; Wisp Boot and the rung-3 tools build it directly, not through Zephyr's FS layer). To move the pin, edit `west.yml`, rerun setup, build, test. A from-scratch setup in an empty cache (`WISP_CACHE_DIR=…`) rebuilt a byte-identical `zephyr.bin` (the git revision string is embedded, so compare at the same commit).
+Toolchain (from `flake.lock`, nixos-26.05 at `7dcdd87`): gcc-arm-embedded 15.2.rel1 (Zephyr variant `gnuarmemb`), CMake 4.1, Ninja, dtc, west 1.5, Renode 1.16.1, Bumble 0.0.228 (the virtual BLE controller of the end-to-end test). Setup applies Wisp's EM9305 patches to the workspace ([third_party/ambiq](third_party/ambiq/README.md)). Workspace: `AmbiqMicro/ambiqzephyr` `ambiq-stable` @ `89c8a36` (Zephyr 4.3.0) plus only `ambiqhal_ambiq` @ `d3278ec`, `cmsis`, `cmsis_6`, `mbedtls` (only for the BT negative build) and `littlefs` @ `8f5ca34` (Zephyr's fork of littlefs 2.11, BSD-3-Clause, on-disk format 2.1 like stock; Wisp Boot and the rung-3 tools build it directly, not through Zephyr's FS layer). To move the pin, edit `west.yml`, rerun setup, build, test. A from-scratch setup in an empty cache (`WISP_CACHE_DIR=…`) rebuilt a byte-identical `zephyr.bin` (the git revision string is embedded, so compare at the same commit).
 
 CI: the GitHub workflow (macOS, no nix) runs `nx run-many -t build test` and would fail on this project; it needs `--exclude=wisp-fw` there (not changed in this PR: the push token has no `workflow` scope). This project is green on t3-worker.
 
@@ -26,14 +26,17 @@ CI: the GitHub workflow (macOS, no nix) runs `nx run-many -t build test` and wou
 
 ```
 boards/even/wisp_g2/   out-of-tree board: Apollo510B, code partition at 0x438000, UART1 console
-src/main.c             banner, native HAL bring-up, heartbeat; the driver self-test (test builds)
+src/main.c             banner, native HAL bring-up, Bluetooth start, heartbeat; the driver
+                       self-test (test builds)
+src/ble/               the Wisp GATT service on Zephyr: transport only (wisp_ble.c)
+src/link/              transport adapter between a GATT link and wisp-core's wisp_conn: chunking,
+                       back-pressure, advertising policy, idle drop (portable C, host-tested)
 src/hal/               the HAL boundary for Wisp core: display, input, sensors, audio, power,
-                       storage, link — declarations, no Zephyr dependency
+                       storage, link — no Zephyr dependency (link: the ops a target provides)
 src/hal/native/        the native HAL on the drivers: display (flush path), input, sensors, power
 src/display/           wisp_flush: core strips -> panel frame -> dirty rows (portable, host-tested)
 src/drivers/           uled (panel), g2_touch (PSoC), icm45608, opt3007 — Wisp's own, MIT
 dts/bindings/          their devicetree bindings (+ vendor prefixes)
-third_party/zephyr/    i2c_ambiq.c from the fork with a header byte-order fix (Apache-2.0)
 src/boot/              Wisp Boot: wisp_boot.* (pure decision, record, image check; host-tested),
                        stage/ (the bare-metal stage at 0x438000: NOR, littlefs, flag, watchdog),
                        CMakeLists.txt (standalone, arm-none-eabi-gcc), wisp_boot_layout.h
@@ -43,59 +46,72 @@ renode/                wisp_g2.repl (derived from g2emu, with the panel and I2C 
                        wisp_g2.resc; rung 3: wisp_g2_boot.repl, boot.resc; models/ (Wisp's C#
                        models: NOR+MSPI, panel+MSPI, IOM+I2C devices, reset, WDT, boot ROM, ...)
 third_party/g2emu/     three g2emu C# peripheral models (MIT, unmodified), see its README
+third_party/ambiq/     Wisp's patches to the fork: the EM9305 driver never writes NVM (rule 8)
+boards/*.conf          per-board additions to prj.conf (wisp_g2; native_sim for the BLE test)
 tests/                 boot/ (C host tests; rung3.py harness, app/ fault apps, tools/wisp_lfs.c),
+                       link/ (adapter host tests), ble/ (end to end: Bumble bridge + SDK test),
                        display/ (flush host test), drivers/ (Renode driver checks, JBD overlay),
                        scripts/ (gate unit tests), sim/ (UART assertions),
-                       rule8/ (negative builds: BT on, BT "allowed" on the unpatched fork, canary)
+                       rule8/ (negative builds: BT not allowed, canary)
 ```
 
-Wisp core hook: `-DWISP_WITH_CORE=ON` (optionally `-DWISP_CORE_DIR=…`, default `packages/wisp-core`) adds the core's CMake project and links `wisp_core` into the app with Zephyr's flags; checked against `t3/wisp-core` @ `b40f049`, which cross-compiles cleanly for the M55 (its `-Wpedantic -Werror` needed Zephyr's headers passed as system includes — done in `CMakeLists.txt`).
+Wisp core: linked whenever `CONFIG_WISP_BLE` is on (the default), or with `-DWISP_WITH_CORE=ON` (optionally `-DWISP_CORE_DIR=…`, default `packages/wisp-core`). It is built as its own CMake project with Zephyr's flags and its own `-Wpedantic -Werror` (Zephyr's headers passed as system includes); `CONFIG_STD_C11` because the core is C11.
 
 ## What boots
 
-`wisp_g2` image: 112.6 KB, linked at `0x438000` (vector table first; initial SP `0x2008a030` in SSRAM, reset vector `0x0043cd2d`). Renode loads the flat `zephyr.bin` at `0x438000` — exactly what the Even bootloader would install — and starts it the way the bootloader hands off (VTOR = `0x438000`, MSP = vector 0, PC = vector 1). The platform has Wisp's I2C and panel models, so the drivers probe their devices; everything stays suspended. UART1 from a `wisp-fw:sim` run:
+`wisp_g2` image: 194 464 bytes (189.9 KiB), linked at `0x438000` (vector table first; initial SP `0x20091e40` in SSRAM, reset vector `0x0043c125`). Renode loads the flat `zephyr.bin` at `0x438000` — exactly what the Even bootloader would install — and starts it the way the bootloader hands off (VTOR = `0x438000`, MSP = vector 0, PC = vector 1). The platform has Wisp's I2C and panel models, so the drivers probe their devices (everything stays suspended); it has no EM9305, so Bluetooth gives up after the driver's 5 s active-state timeout and the app runs on without a link. UART1 from a `wisp-fw:sim` run:
 
 ```
 [00:00:00.114,105] <inf> g2_touch: PSoC firmware 01000202
 [00:00:00.114,196] <inf> g2_touch: long press 1000 ms
 *** Booting Zephyr OS build 4.3.0 ***
 
-*** Wisp native 0.0.0-m0 (3938e0d52a-dirty) ***
+I: PSoC firmware 01000202
+I: long press 1000 ms
+*** Booting Zephyr OS build 4.3.0 ***
+
+*** Wisp native 0.0.0-ble (0aada8bd98-dirty) ***
 wisp: board wisp_g2, Zephyr 4.3.0, image @ 0x438000
-wisp: bluetooth off (safety rule 8)
 wisp: hal power ok (0)
 wisp: hal display ok (0)
 wisp: hal input ok (0)
 wisp: hal sensors ok (0)
 wisp: sensors present 0x1b
-wisp: heartbeat 1 uptime 1122 ms
-wisp: heartbeat 2 uptime 2124 ms
-wisp: heartbeat 3 uptime 3125 ms
+wisp: bluetooth: EM9305 update path compiled out (safety rule 8)
+E: EM9305 active state timeout
+E: BT controller initialization failed: 1
+E: HCI driver open failed (1)
+E: Bluetooth unavailable (1): no Wisp link
+wisp: bluetooth unavailable, running without a link
+wisp: heartbeat 1 uptime 6198 ms
+wisp: heartbeat 2 uptime 7241 ms
+wisp: heartbeat 3 uptime 8285 ms
 ```
 
-The kernel ticks off the STIMER (Renode's Apollo4 system-timer model is register-compatible enough for `ambiq_stimer.c`); heartbeats drift about 1–2 ms per second of virtual time. No Renode warnings at log level 3.
+That is also a rule 8 test: a controller that never reports "active" is exactly when the unpatched driver starts its NVM recovery reflash. `tests/sim/check_uart.py` fails on any of the driver's update / recovery log lines and on a fault. The kernel ticks off the STIMER (Renode's Apollo4 system-timer model is register-compatible enough for `ambiq_stimer.c`); heartbeats drift about 4 % per second of virtual time. No Renode warnings at log level 3.
 
 ## Board `wisp_g2`
 
 - **MRAM partitions** (flash0 starts at `0x410000`, so offsets are relative to it): `even-bootloader` `0x410000–0x438000` read-only (the 32-byte EVEN preamble at `0x437FE0` sits at its end and is added by wisp-ota, never the linker), `wisp` `0x438000–0x7F8000` = `zephyr,code-partition` (3840 KiB; the linker region ends exactly at the ceiling), `even-nv` `0x7F8000–0x800000` read-only (update flag at `0x7FE000`, bonds).
 - **Devices** (every bus, address, pad and sequence from stock 2.4.0.24, with confidence and source in [hardware.md "Native drivers"](../../docs/wisp/hardware.md#native-drivers-stock-24024)): UART1 console on GPIO12/14 at 921600 (as stock); I2C2 OPT3007 `0x45`; I2C4 ICM-45608 `0x69` (INT1 GPIO38, rail GPIO129); I2C5 PSoC touch `0x0C` (attention GPIO27, reset GPIO10); I2C7 nPM1300 `0x6B` (IRQ GPIO4) with BUCK1 (panel rail), BUCK2 3.1 V and LDSW1 1.8 V always-on, LDSW2, charger at stock's values, the PMIC watchdog; MSPI0 the microLED panel on CE0 GPIO199 (`panel = "a6n-g"` by default; `tests/drivers/jbd4010.overlay` for the JBD). Every device starts suspended (`zephyr,pm-device-runtime-auto`).
-- **Disabled:** IOM6 SPI (EM9305 — see rule 8), MSPI1 (NOR, Wisp Boot's for now), PDM0, I2S0 (GX8002), GPU; buzzer, inter-temple and case UARTs as comments.
+- **BLE:** IOM6 SPI with the EM9305 (`ambiq,bt-hci-spi`, `zephyr,bt-hci`), see [Bluetooth](#bluetooth). Its pads and IRQ / reset / CLKREQ / CM pins are the evb's (the EM9305 is inside the Apollo510B package, so probably fixed, but unproven).
+- **Disabled:** MSPI1 (NOR, Wisp Boot's for now), PDM0, I2S0 (GX8002), GPU; buzzer, inter-temple and case UARTs as comments.
 - **Uncached SRAM** `0x20200000–0x20370000` (panel frame, MSPI command queue); it stops below Wisp Boot's RAM (`0x20370000–0x20380000`).
 - **Unverified on the G2:** STIMER clock source; which panel is fitted; I2C pull-ups (internal ones are on).
 - `SOC_APOLLO510B_EM9305_EXTREF_INIT` defaults to n on this board (see below).
 
 ## Drivers
 
-All of them Wisp's own (MIT) except the nPM1300 drivers (Zephyr in-tree) and the I2C controller driver (the fork's, patched). Facts and their confidence: [hardware.md "Native drivers"](../../docs/wisp/hardware.md#native-drivers-stock-24024).
+All of them Wisp's own (MIT) except the nPM1300 drivers (Zephyr in-tree) and the I2C controller driver (the fork's, with Wisp's byte-order patch). Facts and their confidence: [hardware.md "Native drivers"](../../docs/wisp/hardware.md#native-drivers-stock-24024).
 
-| Driver                           | Compatible            | What it does                                                                                                                                                                                                               | Power                                                                                                                    |
-| -------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `src/drivers/uled.c`             | `even,g2-uled`        | both panels: stock's power sequences, init streams, brightness maps, health checks; full frames by DMA (quad 1-1-4), JBD row updates by PIO; owns the 153 602-byte frame in uncached SRAM                                  | PM runtime: resume = rails + init + blank frame, suspend = stock's power-down, rails off (no panel sleep command exists) |
-| `src/drivers/g2_touch.c`         | `even,g2-touch`       | reset, version, long-press threshold, then one 16-byte report per attention edge; gestures, press/release, wear; resets the PSoC on its error flag. **Command allow-list: 2 (DFU) and 7 (EEPROM write) can never be sent** | suspend = attention interrupt off                                                                                        |
-| `src/drivers/icm45608.c`         | `invensense,icm45608` | WHO_AM_I `0x81`, soft reset, ±4 g / ±2000 dps, ODR 25–800 Hz, accel LP up to 400 Hz, data-ready trigger on INT1                                                                                                            | suspend = sensors off + rail off (0 current); resume = rail cycle, reset, restore                                        |
-| `src/drivers/opt3007.c`          | `ti,opt3007`          | one single-shot conversion per fetch (sleeps through the 100 ms integration), lux from the result register                                                                                                                 | shutdown except during a fetch                                                                                           |
-| Zephyr `nordic,npm1300*`         | —                     | MFD, regulators, charger (battery voltage, status, VBUS = case), watchdog                                                                                                                                                  | the native HAL kicks and stops the PMIC watchdog at boot                                                                 |
-| `third_party/zephyr/i2c_ambiq.c` | `ambiq,i2c`           | the fork's driver with multi-byte register headers sent in buffer order ([why](third_party/zephyr/README.md))                                                                                                              | as upstream                                                                                                              |
+| Driver                                                      | Compatible            | What it does                                                                                                                                                                                                               | Power                                                                                                                    |
+| ----------------------------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `src/drivers/uled.c`                                        | `even,g2-uled`        | both panels: stock's power sequences, init streams, brightness maps, health checks; full frames by DMA (quad 1-1-4), JBD row updates by PIO; owns the 153 602-byte frame in uncached SRAM                                  | PM runtime: resume = rails + init + blank frame, suspend = stock's power-down, rails off (no panel sleep command exists) |
+| `src/drivers/g2_touch.c`                                    | `even,g2-touch`       | reset, version, long-press threshold, then one 16-byte report per attention edge; gestures, press/release, wear; resets the PSoC on its error flag. **Command allow-list: 2 (DFU) and 7 (EEPROM write) can never be sent** | suspend = attention interrupt off                                                                                        |
+| `src/drivers/icm45608.c`                                    | `invensense,icm45608` | WHO_AM_I `0x81`, soft reset, ±4 g / ±2000 dps, ODR 25–800 Hz, accel LP up to 400 Hz, data-ready trigger on INT1                                                                                                            | suspend = sensors off + rail off (0 current); resume = rail cycle, reset, restore                                        |
+| `src/drivers/opt3007.c`                                     | `ti,opt3007`          | one single-shot conversion per fetch (sleeps through the 100 ms integration), lux from the result register                                                                                                                 | shutdown except during a fetch                                                                                           |
+| Zephyr `nordic,npm1300*`                                    | —                     | MFD, regulators, charger (battery voltage, status, VBUS = case), watchdog                                                                                                                                                  | the native HAL kicks and stops the PMIC watchdog at boot                                                                 |
+| Zephyr `i2c_ambiq.c` + [patch](third_party/ambiq/README.md) | `ambiq,i2c`           | the fork's driver with Wisp's `zephyr-0002` patch: multi-byte register headers go out in buffer order (upstream reverses them)                                                                                             | as upstream                                                                                                              |
 
 The native HAL (`src/hal/native/`) puts the core on top: `wisp_native_present` / `wisp_native_frame_done` are the engine's `present` / `frame_done`. Strips land in the panel's frame buffer (`src/display/wisp_flush.c`), and at frame end only the dirty rows go out (runs closer than 4 rows merged, more than 240 rows or an A6N-G as one full-frame DMA). Sensors are batched per stream; nothing runs while nothing is configured (no polling loop: the IMU is interrupt-driven, the light sensor is sampled at the requested rate up to 5 Hz, wear is event-driven). The PSoC gives no touch position, so raw touch events carry `pos` 0 and gestures come from the controller (`wisp_hal_input_gestures`).
 
@@ -113,7 +129,7 @@ What the checker asserts, per panel:
 - **Panel:** the exact transaction sequence (opcode or register frame, bus mode, address, length, payload) of power-up, init, blank frame, the full frame, the partial update (JBD: 32 row writes for the 32 changed rows), brightness (values recomputed in Python from stock's formulas), health check; and the frame memory byte for byte against the image computed in Python.
 - **I2C:** the PSoC never received a command outside {1, 3, 4, 5, 6, 8}; the IMU got its ID read, soft reset, INT1 config, ±4 g / 100 Hz, and ends with PWR_MGMT0 = 0; the light sensor starts in shutdown, converts single-shot, never continuous; every PMIC register address has a valid base byte (byte order), BUCK2 3.1 V, LDSW1 1.8 V LDO, the watchdog kick and stop (never a start), BUCK1 on/off around the panel at the variant's voltage, and (JBD) LDSW2 before BUCK1 on and after it off.
 - **UART:** every HAL part came up, every self-test step returned 0, no error or fault.
-- **Negative case:** the same image with the fork's unpatched `i2c_ambiq.c` must fail the PMIC byte-order check.
+- **Negative case:** the same image built against a pristine Zephyr tree (no `zephyr-0002` patch; configure check skipped with the TEST ONLY `WISP_PATCHES_TEST_UNPATCHED`, Bluetooth off) must fail the PMIC byte-order check. `wisp-fw:test` separately proves the configure check fires on that tree.
 
 Result on t3-worker, 2026-11-06: both panels pass (A6N-G 33 panel / 123 I2C transactions, JBD4010 76 / 127), the negative case is rejected (`3404` instead of `0434`). What the models cannot show: timing (every transfer completes at once), GPIO interrupts (the touch report is serviced by a direct call), real panel behaviour beyond the recorded bytes, analog values (battery reads 0 mV).
 
@@ -121,33 +137,112 @@ Result on t3-worker, 2026-11-06: both panels pass (A6N-G 33 panel / 123 I2C tran
 
 All run in every build (`wisp_checks` target, after the link) and fail it:
 
-**Image (rules 1 and 3), `scripts/check_image.py`:** load address = `0x438000`; image end ≤ `0x7F8000`; no loadable segment in MRAM outside `[0x438000, 0x7F8000)` and none outside MRAM; vector[0] (SP) in `(0x20000000, 0x20380000]` and 8-byte aligned; vector[1] (reset) Thumb and inside the image. Output: `check_image: OK load 0x00438000 end 0x004451e4 (3878428 bytes free) SP 0x20081740 reset 0x0043a375`. The constants live in `scripts/wisp_layout.py`; wisp-ota keeps its own copy on purpose (rule 3 wants independent implementations).
+**Image (rules 1 and 3), `scripts/check_image.py`:** load address = `0x438000`; image end ≤ `0x7F8000`; no loadable segment in MRAM outside `[0x438000, 0x7F8000)` and none outside MRAM; vector[0] (SP) in `(0x20000000, 0x20380000]` and 8-byte aligned; vector[1] (reset) Thumb and inside the image. Output: `check_image: OK load 0x00438000 end 0x0045c598 (3783272 bytes free) SP 0x2008dd30 reset 0x00439f55`. The constants live in `scripts/wisp_layout.py`; wisp-ota keeps its own copy on purpose (rule 3 wants independent implementations).
 
-**EM9305 (rule 8), `cmake/rule8.cmake` + `scripts/check_rule8.py`:**
+**EM9305 (rule 8): Wisp's patches ([third_party/ambiq](third_party/ambiq/README.md)) + `cmake/rule8.cmake` + `scripts/check_rule8.py`.** Bluetooth is on, so the proof is about what is in the image, not about a switch:
 
-1. _configure:_ fails on `CONFIG_SOC_APOLLO510B_EM9305_EXTREF_INIT`, `CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM` (writes EM9305 NVM), and on `CONFIG_BT` / `CONFIG_AMBIQ_COMPONENT_USE_BT` unless `CONFIG_WISP_BT_ALLOWED=y` (M6) and `CONFIG_WISP_EM9305_SKIP_FW_UPDATE=y`.
+1. _configure:_ fails on `CONFIG_SOC_APOLLO510B_EM9305_EXTREF_INIT`, `CONFIG_BT_AMBIQ_EM9305_HF_CRYSTAL_CUSTOM_TRIM` (writes EM9305 NVM), `CONFIG_BT_HCI_SET_PUBLIC_ADDR` (vendor command `0xFC43`, persistence unknown), on `CONFIG_BT` / `CONFIG_AMBIQ_COMPONENT_USE_BT` without `CONFIG_WISP_BT_ALLOWED=y` and `CONFIG_WISP_EM9305_SKIP_FW_UPDATE=y`, and on any Wisp patch that is not exactly applied to its project (`git apply --reverse --check`): `EM9305 patch missing`.
 2. _sources_ (`compile_commands.json`): with BT off, no EM9305 driver source is compiled. With BT on, every compiled caller of `am_devices_em9305_init()` must assign `skip_fw_update = true` and nothing else.
-3. _symbols_ (`nm --defined-only`, locals included): no `ble_fw_image_bin_*`, `image_records`, `erase_pages`, `am_devices_em9305_update_fw`, `em9305_nvm_recovery_reflash`, `fw_write_*`, `fw_erase_*`, `fw_update_*`, `fw_enter_cm_mode`, `am_devices_em9305_crystal_trim_set`; with BT off, no `am_devices_em9305_*` at all.
-4. _map + bytes:_ with BT off, no `am_devices_em9305.c.obj` in the linked part of `zephyr.map`; and none of the EM9305 firmware arrays (64-byte windows parsed from the HAL's own `ble_fw_image_em9305.h`, start and middle) occurs in `zephyr.bin` — this still works with symbols stripped or functions inlined.
+3. _units_ (BT on): the driver and every unit that mentions it, **preprocessed with their exact compile commands**, so this is the code the compiler saw: the driver carries the patch marker; no unit includes `ble_fw_image_em9305.h`; none contains an update / recovery / CM / trim identifier or the opcodes `0xFD03` (NVM write), `0xFD06` (erase NVM main), `0xFD07` (erase page), `0xFC43` (public address); every call site forces `skip_fw_update = true` (a macro that hides `false` from a text search is caught here).
+4. _symbols_ (`nm --defined-only`, locals included): none of the update / recovery / NVM-write / CM / trim functions or their state, no `ble_fw_image_bin_*`, `image_records`, `erase_pages`; with BT off, no `am_devices_em9305_*` at all.
+5. _map:_ BT off, no `am_devices_em9305.c.obj` linked; BT on, no input section of a forbidden function or array.
+6. _code_ (BT on): no instruction in the disassembly of the whole ELF loads one of those opcodes as an immediate or literal. A secondary look only: the Ambiq driver writes opcodes byte by byte (`sys_put_le16`), so this one did **not** fire on the unpatched build; look 3 is what catches the opcodes.
+7. _bytes:_ none of the EM9305 firmware arrays (64-byte windows parsed from the HAL's own `ble_fw_image_em9305.h`, start and middle) occurs in `zephyr.bin` — still works with symbols stripped or functions inlined.
 
-How it was verified (all part of `wisp-fw:test`):
+On the shipped image: `check_rule8: OK bt=on, 2667 symbols, no forbidden symbols, map clean, 6 EM9305 image signatures absent, EM9305 units preprocessed clean, no NVM write/erase opcode in 4 checked`. In Renode the patched driver meets a controller that never comes up (the unpatched driver's recovery-reflash case) and gives up without writing anything ([What boots](#what-boots)).
 
-| Build                                                                    | `nm` EM9305 hits                                            | EM9305 objects in map | `zephyr.bin` | Result                                                                                                            |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------- | --------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------- |
-| M0 image                                                                 | 1 (`CONFIG_WISP_EM9305_SKIP_FW_UPDATE`, a Kconfig absolute) | 0                     | 53 732 B     | passes                                                                                                            |
-| `tests/rule8/bt.conf` (BT on)                                            | —                                                           | —                     | —            | configure fails: `WISP SAFETY RULE 8 … Bluetooth / the EM9305 driver is enabled but stays disabled…`              |
-| `tests/rule8/bt_allowed.conf` (BT on, Wisp switches set, unpatched fork) | 38                                                          | 87                    | 377 328 B    | post-build fails on all three: `apollox_blue.c` never sets `skip_fw_update`; update/recovery symbols; image bytes |
-| `-DWISP_RULE8_CANARY=ON` (EM9305 image linked via `SYS_INIT`)            | 5                                                           | 0                     | 289 036 B    | post-build fails: `ble_fw_image_bin_*`, `image_records`, image bytes                                              |
-| canary ELF stripped                                                      | 0                                                           | 0                     | 289 036 B    | byte check alone rejects it                                                                                       |
+How the gate was shown to fire (all part of `wisp-fw:test`, step 6):
 
-In the BT build, `nm -S` shows the bundled controller image as `ble_fw_image_bin_00302400` (`0x39300` = 234 240 bytes) next to `am_devices_em9305_update_fw` and `em9305_nvm_recovery_reflash` — the path that would erase Even's EM9305 firmware. Two of the denylisted functions (`fw_write_image`, `fw_erase_nvm_main`) were inlined there and left no symbol, which is why the byte check exists.
+| Build                                                                                  | Result                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/rule8/bt.conf` (BT on, `CONFIG_WISP_BT_ALLOWED=n`)                              | configure fails: `WISP SAFETY RULE 8 … Bluetooth / the EM9305 driver is enabled without CONFIG_WISP_BT_ALLOWED=y`                                                                                                                                                   |
+| pristine `hal_ambiq` (git worktree of the pinned commit, no patch)                     | configure fails: `EM9305 patch missing: hal_ambiq-0001-em9305-never-write-nvm.patch is not applied`                                                                                                                                                                 |
+| pristine Zephyr                                                                        | configure fails: `EM9305 patch missing: zephyr-0001-em9305-never-write-nvm.patch is not applied`                                                                                                                                                                    |
+| pristine `hal_ambiq`, configure check skipped (`WISP_RULE8_TEST_UNPATCHED`, test only) | builds, then post-build fails with 76 findings: no patch marker, image header included, 28 forbidden identifiers and 3 NVM write/erase opcodes in the compiled units, 11 symbols, 22 map sections, 6 image byte windows (the instruction look finds nothing, see 6) |
+| `-DWISP_RULE8_CANARY=ON` (EM9305 image linked via `SYS_INIT`)                          | post-build fails: `ble_fw_image_bin_*`, `image_records`, image bytes, the header in a unit                                                                                                                                                                          |
+| canary ELF stripped                                                                    | byte check alone rejects it                                                                                                                                                                                                                                         |
+
+`CONFIG_BT_HCI_SET_PUBLIC_ADDR` has no prompt (only SoCs select it), so it has no negative build; its gate is covered by the unit tests. The unit tests (`tests/scripts/test_checks.py`) cover every look on synthetic inputs, including a real preprocessor run.
 
 ### What the fork does with the EM9305 (why the gate is this strict)
 
 - `am_devices_em9305_init()` reflashes when the device version is **≤** the bundled `0x04050100` (equal → CRC verify, reflash on mismatch), when the version can't be read, and when the controller won't boot. Only `skip_fw_update` stops it — a runtime flag, so the image and erase code stay linked either way.
-- `drivers/bluetooth/hci/apollox_blue.c` (`bt_apollo_controller_init`) builds its callback struct without `skip_fw_update` → `false` whenever BT is on.
-- The evb's `board.c` EXTREF init (SoC default y whenever an `ambiq,bt-hci-spi` node is enabled) passes `skip_fw_update = IS_ENABLED(CONFIG_BT)` → `false` with BT off — a board that merely describes the radio in DT and leaves BT off would reflash it at boot. `wisp_g2` has no `board.c`, keeps the node disabled and pins the default to n.
+- `drivers/bluetooth/hci/apollox_blue.c` (`bt_apollo_controller_init`) builds its callback struct without `skip_fw_update` → `false` whenever BT is on. (All of this is the unpatched fork; Wisp's patch removes it.)
+- The evb's `board.c` EXTREF init (SoC default y whenever an `ambiq,bt-hci-spi` node is enabled) passes `skip_fw_update = IS_ENABLED(CONFIG_BT)` → `false` with BT off — a board that merely describes the radio in DT and leaves BT off would reflash it at boot. `wisp_g2` has no `board.c` and pins the default to n; the patch also fixes the evb's.
 - Even's EM9305 version is unknown. If it is ≤ `0x04050100`, any stock-fork BT build reflashes it on first boot.
+
+## Bluetooth
+
+The first piece of the native firmware proper: the Wisp GATT service ([protocol.md](../../docs/wisp/protocol.md#links)), carrying a wisp-core session, so the TypeScript SDK can talk to a native temple.
+
+```
+phone ─ @wisp/sdk ─ GATT ─┐   glasses
+                          ▼
+  src/ble/wisp_ble.c     Zephyr: GATT service, advertising, connection callbacks   transport only
+        │ one work queue thread ("wisp_link"); callbacks only set bits / fill a ring
+  src/link/wisp_link.c   adapter: MTU chunks, back-pressure, advertising mode,      portable C,
+        │                idle drop                                                  host-tested
+  wisp-core wisp_conn    frames, CREDIT / RESYNC, coalesced credits, window queue,  portable C,
+        │                ack timeout, session timeout, deadlines                    host-tested
+  wisp-core wisp_basic   the session: HELLO, PING, TIME_SYNC, BYE; error 1 for every other service
+```
+
+- **Service** `cf099bf1-f34e-49e2-b353-7f20e02243bc`: RX `…bf2` (write without response; plain write is accepted too), TX `…bf3` (notify + CCC). The stream is cut into notifications of ATT MTU − 3 bytes (244 at MTU 247; ACL buffers are 251 bytes so one notification is one link-layer packet). Name `Wisp`, the service UUID in the advertising data.
+- **Protocol logic lives in wisp-core.** `wisp_conn` (new, `packages/wisp-core/include/wisp/conn.h`) is one byte-stream connection: it feeds `wisp_rx`, answers duplicates with CREDIT and gaps with RESYNC, applies control frames in any state, sends coalesced CREDITs (at once when 25 % of the window is consumed or when bytes go out anyway, else 20 ms after the first unacknowledged frame), queues bodies that don't fit the phone's window, runs the ack and session timeouts, and returns one deadline. `wisp_basic` is the session alone; the engine plugs in through the same handler interface once drivers exist. The Zephyr side never parses a byte.
+- **HELLO** answers `fw_name` `wisp-native`, protocol 0.2, `max_frame` 4096, `rx_window` 16384, `caps` 0 (no drivers behind the core yet, so no display, input or sensors are claimed), canvas 640 × 480 × 4 bpp, `session_timeout_ms` 10 000, `lens` from `CONFIG_WISP_LENS` (1; the temple side is not read from the hardware yet).
+- **One connection at a time.** Advertising runs whenever nobody is connected. A connection that has no session for 10 s (`CONFIG_WISP_LINK_IDLE_DROP_MS`: no HELLO after connecting, or after BYE / a session timeout) is dropped, so advertising is only off while a session is up or about to be. A dropped link ends its session like BYE.
+- **EM9305:** the patched driver (rule 8, [third_party/ambiq](third_party/ambiq/README.md)). If the controller does not come up, `bt_enable()` fails, the firmware runs on without a link, and nothing is written to the controller.
+
+### Power choices
+
+| What                  | Choice                                                                                                                                         | Why                                                                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Advertising           | 152.5 ms for 30 s after boot or a disconnect, then 1022.5 ms; off while connected                                                              | Both are Apple's recommended intervals: found within a second or two right after the phone loses the link, then about 1 % of the fast duty cycle while nobody looks. Legacy advertising, one set.                       |
+| Connection parameters | the glasses ask for 30–50 ms, latency 0, supervision 4 s (5 s after connecting; the phone decides)                                             | Stock runs 30 ms. Latency 0 keeps a phone write within one interval of the glasses; the protocol's `LINK_PROFILE` op (not implemented yet) is where idle (higher latency) and bulk (7.5–15 ms) will switch it.          |
+| Link layer            | 251-byte packets (DLE) and 2M PHY when both sides offer them                                                                                   | Less air time per byte, which is most of the radio's energy per transfer.                                                                                                                                               |
+| Firmware              | no polling: the link thread runs on an event or at `wisp_conn`'s next deadline (credit, ack or session timeout, idle drop, advertising switch) | With a session up and the phone quiet, the only wakeups are the phone's keepalive PINGs (every 3.3 s by default) and the connection events themselves. With no connection, only advertising events and the 30 s switch. |
+| Notifications         | at most 3 in flight in the Bluetooth stack (`CONFIG_WISP_LINK_TX_IN_FLIGHT`)                                                                   | A notification never blocks waiting for a buffer; the adapter retries the same chunk after the next completion.                                                                                                         |
+| Heartbeat             | `CONFIG_WISP_HEARTBEAT_MS` 1000 (debug)                                                                                                        | One UART line per second costs power on glasses; set it to 0 for hardware. The Renode test needs it.                                                                                                                    |
+
+Not decided yet: EM9305 sleep (`CONFIG_SOC_AMBIQ_APOLLO5X_BLE_LP`, off as on the evb), `CONFIG_PM` on the Apollo side, and what the glasses do when unworn. Measuring any of it needs hardware.
+
+### Tests without hardware
+
+- **Host unit tests** (`wisp-fw:test` step 2, `tests/link/test_wisp_link.c`): the adapter with a fake GATT target and a phone built from wisp-core's own sender and receiver: advertising modes and their timing; HELLO at ATT MTU 23 and 247 (chunk sizes), answers held until the phone subscribes; notifications refused by a full stack (same bytes retried) or lost (recovered by the ack timeout); the idle drop before HELLO, after BYE and after a session timeout; disconnect mid-session and a reconnect from seq 0. wisp-core's `tests/test_conn.c` covers `wisp_conn` itself, including 20 seeds of 300 PINGs over a link that drops 3 % of chunks both ways.
+- **End to end** (step 5, `tests/ble/`): Renode cannot model the EM9305, so the same app is built for `native_sim/native/64`, where Zephyr's HCI user-channel driver talks H4 over TCP to a virtual controller ([Bumble](https://github.com/google/bumble), Apache-2.0). A second virtual controller on the same virtual link is the phone: `bumble_bridge.py` scans, connects, exchanges MTU 247, discovers the service and subscribes, and `e2e.test.mts` runs the real `@wisp/sdk` (`WispGlasses.connect`) through it. Zephyr's host stack, the GATT service, the adapter and wisp-core run unchanged; only the HCI driver differs from `wisp_g2`. The bridge's controller adds what Bumble's model lacks and a real controller must do: controller-to-host ACL flow control (without it the instant virtual link overran Zephyr's RX buffers) and answers to the connection-update, PHY and data-length procedures (which it reports to the test).
+
+  | Test                                                                             | Checks                                                                                           |
+  | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+  | the firmware advertises the Wisp service; a central connects at ATT MTU 247      | service UUID in the advertising data, MTU 247, RX write-without-response, TX notify, name `Wisp` |
+  | the SDK completes HELLO against the native build                                 | protocol 0.2, `wisp-native`, `max_frame` 4096, timeout 10 s, canvas, caps 0                      |
+  | session requests round-trip; services without drivers answer error 1             | `TIME_SYNC` × 3, `system.info()` → `WispError` 1                                                 |
+  | frames larger than one write, past the receive window, arrive whole and in order | 12 × 3000-byte requests (36 kB, twice the window) → 12 errors in order, no RESYNC needed         |
+  | no advertising while the session is up                                           | a 1.5 s scan sees no Wisp advertisement                                                          |
+  | the firmware asks for its connection parameters                                  | LE Connection Update with 24–40 (30–50 ms), latency 0, 400 (4 s)                                 |
+  | BYE ends the session; advertising resumes                                        | disconnect, then a scan sees it again; firmware log shows the session start and end              |
+  | a connection without a session is dropped after 10 s                             | the firmware disconnects (0x13) 8–13 s after connecting                                          |
+
+  18 s wall. The firmware's log is kept in `.wisp-cache/test/e2e-firmware.log`.
+
+### Size and RAM (wisp_g2, `pnpm nx run wisp-fw:build`)
+
+| Region              | M0 skeleton | With Bluetooth | Of which                                                                                                                                                                                                                     |
+| ------------------- | ----------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MRAM (`zephyr.bin`) | 53 732 B    | 148 888 B      | Zephyr BT host + GATT, the EM9305 HCI driver, PSA crypto from mbedTLS (the host's `bt_rand` needs it), wisp-core's session and frames (`check_image`: 3 783 272 bytes left below `0x7F8000`)                                 |
+| SSRAM, static       | —           | 70 850 B       | Wisp link 23.3 KB (frame buffer 4 106, send ring 8 192, window queue 4 096, RX ring 4 096, thread stack 2 048, adapter state 784); BT host buffers and stacks about 13 KB; Ambiq's IOM handle table 17.9 KB; main stack 2 KB |
+
+The link buffers are Kconfig options (`CONFIG_WISP_LINK_*`); `max_frame` and `rx_window` in HELLO follow them. The main stack is 2 KiB because `bt_enable()` runs the EM9305 bring-up on it (the driver keeps a 258-byte buffer on the stack): with 1 KiB it overflowed in Renode, which does not enforce the M55's MPU stack guard.
+
+### Still missing before a first native boot
+
+Bluetooth was the transport; these are the rest of the way to rung 4 (safety.md), roughly in order:
+
+1. **Hardware facts from the stock image** (none of these can be found in emulation): UART1 pads, the EM9305's SPI and GPIO pins (probably the evb's, unproven), the STIMER clock source, which power board and NOR part the temples have. Whether Even's EM9305 firmware comes up without a patch load from the host (if not, Bluetooth stays off and nothing is written).
+2. **Wisp Boot in front of this app:** link at `0x448000`, keep out of Wisp Boot's RAM, feed the watchdog, confirm the boot after BLE is up and a `HELLO` completed (the adapter knows both), clear the update flag after confirming; then rung 3 with this app instead of the bare-metal fault apps (rule 12).
+3. **The update service** (protocol `0x07`): receive, verify and stage an image through the stock staging file, so a native temple can be updated, and returned to stock, over BLE. Without it a native image can only be left by Wisp Boot's fallback.
+4. **The rescue precondition** (rule 11) and **a proven recovery path** (W17, M5): `wisp/rescue.bin` verified on the temple's NOR, and SWD or a software fallback proven on hardware.
+5. Pairing / encryption of the link (none yet: anyone in range can open a session) and a real entropy source (the TRNG is not enabled on `wisp_g2`, so mbedTLS, which the host uses for `bt_rand`, runs on Zephyr's test-only fake entropy), `LINK_PROFILE`, a wisp-core engine behind `wisp_conn` once there are drivers, `lens` from the hardware.
+6. Power: EM9305 sleep, `CONFIG_PM`, heartbeat off, and measuring all of it.
 
 ## Wisp Boot
 
@@ -278,5 +373,5 @@ Toward rung 4 (hardware), none of which emulation can answer:
 4. Read Wisp Boot's hardware assumptions off the stock image and the glasses: MSPI1 pin mux and clock after the bootloader's hand-off, UART1 state (or build with `WISP_BOOT_LOG=0`), ROM power-up on `MEMPWRSTATUS`, whether the 16 Hz watchdog divider and 8 s window suit the app.
 5. Touchpad rescue hold (PSoC on I2C5 `0x0C`) as a Wisp Boot input.
 6. Zephyr app: link at `0x448000`, feed the watchdog, confirm after BLE + `HELLO`, clear the flag after confirming (stock does that in its OTA init; until then every boot reinstalls the staged image). The board's uncached region already stops below Wisp Boot's RAM; `sram0` and the stack still have to be kept out of it.
-7. Drivers still to write: the GX8002 mic path (UART3 control + I2S0 RX, never its firmware), PDM0, the buzzer (TIMER7 PWM), the magnetometer behind the IMU, the NOR littlefs (storage HAL), the inter-temple UART. A GPIO interrupt model in Renode would let the attention and data-ready paths run there too.
-8. Before M6 (not rung 3): patch the HAL so the EM9305 update/recovery/trim code is compiled out and `apollox_blue.c` forces `skip_fw_update = true`; `CONFIG_WISP_BT_ALLOWED` stays off until `check_rule8.py` passes on that build.
+7. ~~Patch the HAL so the EM9305 update/recovery/trim code is compiled out and `apollox_blue.c` forces `skip_fw_update = true`~~ done 2026-11-06 ([third_party/ambiq](third_party/ambiq/README.md)); Bluetooth is on and `check_rule8.py` passes on the image. What remains toward a native boot: [Bluetooth, still missing](#still-missing-before-a-first-native-boot).
+8. Drivers still to write: the GX8002 mic path (UART3 control + I2S0 RX, never its firmware), PDM0, the buzzer (TIMER7 PWM), the magnetometer behind the IMU, the NOR littlefs (storage HAL), the inter-temple UART. A GPIO interrupt model in Renode would let the attention and data-ready paths run there too.
