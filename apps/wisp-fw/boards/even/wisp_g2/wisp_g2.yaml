@@ -1,0 +1,12 @@
+identifier: wisp_g2
+name: Even G2 temple (Wisp)
+type: mcu
+arch: arm
+ram: 3072
+flash: 3840
+toolchain:
+  - gnuarmemb
+  - zephyr
+supported:
+  - uart
+vendor: ambiq

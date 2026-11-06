@@ -1,0 +1,64 @@
+{
+  "name": "wisp-ota",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/wisp-ota/src",
+  "tags": ["lang:ts", "platform:portable", "scope:wisp"],
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p tsconfig.build.json",
+        "cwd": "packages/wisp-ota"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/package.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        { "externalDependencies": ["typescript", "@types/node"] },
+        "!{projectRoot}/src/**/*.test.ts"
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "tsc -p tsconfig.json --noEmit",
+          "tsc -p tsconfig.portable.json --noEmit"
+        ],
+        "parallel": false,
+        "cwd": "packages/wisp-ota"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/tsconfig*.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        "{projectRoot}/package.json",
+        { "externalDependencies": ["typescript", "@types/node"] }
+      ],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "tsc -p tsconfig.test.json",
+          "node --test --test-force-exit --test-timeout=60000 \"out-tsc/test/**/*.test.js\""
+        ],
+        "parallel": false,
+        "cwd": "packages/wisp-ota"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/package.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        { "externalDependencies": ["typescript", "@types/node"] }
+      ],
+      "cache": true
+    }
+  }
+}

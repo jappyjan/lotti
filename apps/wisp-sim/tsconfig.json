@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "declarationMap": false,
+    "emitDeclarationOnly": false,
+    "importHelpers": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "lib": ["es2023", "dom"],
+    "target": "es2023",
+    "customConditions": [],
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "examples/**/*.ts", "test/**/*.ts"]
+}

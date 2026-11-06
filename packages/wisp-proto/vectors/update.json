@@ -1,0 +1,74 @@
+[
+  {
+    "name": "update/begin-request",
+    "kind": "message",
+    "svc": 7,
+    "op": 1,
+    "mflags": 0,
+    "req": 309,
+    "fields": {
+      "size": 16909060,
+      "sha256": "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0",
+      "version": "version-2"
+    },
+    "hex": "0100350104030201a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc076657273696f6e2d3200000000000000"
+  },
+  {
+    "name": "update/data-request",
+    "kind": "message",
+    "svc": 7,
+    "op": 2,
+    "mflags": 0,
+    "req": 310,
+    "fields": {
+      "offset": 16909060,
+      "data": "f0f1f2f3f4f5"
+    },
+    "hex": "0200360104030201f0f1f2f3f4f5"
+  },
+  {
+    "name": "update/end-request",
+    "kind": "message",
+    "svc": 7,
+    "op": 3,
+    "mflags": 0,
+    "req": 311,
+    "fields": {},
+    "hex": "03003701"
+  },
+  {
+    "name": "update/apply-request",
+    "kind": "message",
+    "svc": 7,
+    "op": 4,
+    "mflags": 0,
+    "req": 312,
+    "fields": {},
+    "hex": "04003801"
+  },
+  {
+    "name": "update/status-request",
+    "kind": "message",
+    "svc": 7,
+    "op": 5,
+    "mflags": 0,
+    "req": 313,
+    "fields": {},
+    "hex": "05003901"
+  },
+  {
+    "name": "update/status-response",
+    "kind": "message",
+    "svc": 7,
+    "op": 5,
+    "mflags": 1,
+    "req": 314,
+    "fields": {
+      "state": 16,
+      "confirmed": 17,
+      "version": "version-2",
+      "rescue_present": 19
+    },
+    "hex": "05013a01101176657273696f6e2d320000000000000013"
+  }
+]

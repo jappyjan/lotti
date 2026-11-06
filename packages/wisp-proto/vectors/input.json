@@ -1,0 +1,47 @@
+[
+  {
+    "name": "input/config-request",
+    "kind": "message",
+    "svc": 4,
+    "op": 1,
+    "mflags": 0,
+    "req": 297,
+    "fields": {
+      "mask": 16,
+      "tap_max_ms": 1029,
+      "double_gap_ms": 1800,
+      "long_ms": 2571
+    },
+    "hex": "0100290110050408070b0a"
+  },
+  {
+    "name": "input/touch-event",
+    "kind": "message",
+    "svc": 4,
+    "op": 2,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "lens": 16,
+      "pad": 17,
+      "phase": 18,
+      "pos": 2571,
+      "t_us": 286133000
+    },
+    "hex": "020400001011120b0a080b0e11"
+  },
+  {
+    "name": "input/gesture-event",
+    "kind": "message",
+    "svc": 4,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "lens": 16,
+      "kind": 17,
+      "t_us": 151521030
+    },
+    "hex": "03040000101106070809"
+  }
+]

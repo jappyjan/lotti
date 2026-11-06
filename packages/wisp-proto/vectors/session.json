@@ -1,0 +1,215 @@
+[
+  {
+    "name": "session/hello-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 256,
+    "fields": {
+      "proto_major": 0,
+      "proto_minor": 2,
+      "max_frame": 4096,
+      "rx_window": 16384,
+      "app_id": "dev.wisp.demo",
+      "client_name": "wisp-sdk-ts"
+    },
+    "hex": "0100000100020010004000006465762e776973702e64656d6f000000776973702d73646b2d74730000000000"
+  },
+  {
+    "name": "session/hello-response",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 1,
+    "req": 257,
+    "fields": {
+      "proto_major": 0,
+      "proto_minor": 2,
+      "max_frame": 4096,
+      "rx_window": 32768,
+      "fw_name": "wisp",
+      "fw_version": "0.1.0",
+      "lens": 2,
+      "caps": 919551,
+      "canvas_w": 640,
+      "canvas_h": 480,
+      "bpp": 4,
+      "max_layers": 16,
+      "res_bytes": 1048576,
+      "persist_bytes": 8388608,
+      "session_timeout_ms": 10000,
+      "l2cap_psm": 128
+    },
+    "hex": "01010101000200100080000077697370000000000000000000000000302e312e30000000000000000000000002ff070e008002e00104100000100000008000102700008000"
+  },
+  {
+    "name": "session/credit-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 2,
+    "mflags": 0,
+    "req": 0,
+    "fields": {
+      "ack_seq": 65535
+    },
+    "hex": "02000000ffff"
+  },
+  {
+    "name": "session/resync-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 3,
+    "mflags": 0,
+    "req": 0,
+    "fields": {
+      "last_good_seq": 41
+    },
+    "hex": "030000002900"
+  },
+  {
+    "name": "session/ping-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 4,
+    "mflags": 0,
+    "req": 260,
+    "fields": {
+      "token": 3735928559
+    },
+    "hex": "04000401efbeadde"
+  },
+  {
+    "name": "session/ping-response",
+    "kind": "message",
+    "svc": 0,
+    "op": 4,
+    "mflags": 1,
+    "req": 261,
+    "fields": {
+      "token": 3735928559
+    },
+    "hex": "04010501efbeadde"
+  },
+  {
+    "name": "session/time-sync-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 5,
+    "mflags": 0,
+    "req": 262,
+    "fields": {
+      "phone_ms": 1762300800123
+    },
+    "hex": "050006017b2c50519a010000"
+  },
+  {
+    "name": "session/time-sync-response",
+    "kind": "message",
+    "svc": 0,
+    "op": 5,
+    "mflags": 1,
+    "req": 263,
+    "fields": {
+      "phone_ms": 1762300800123,
+      "glass_us": 9007199254740991
+    },
+    "hex": "050107017b2c50519a010000ffffffffffff1f00"
+  },
+  {
+    "name": "session/bye-request",
+    "kind": "message",
+    "svc": 0,
+    "op": 6,
+    "mflags": 0,
+    "req": 264,
+    "fields": {},
+    "hex": "06000801"
+  },
+  {
+    "name": "session/hello-request-truncated",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 7,
+    "fields": {
+      "proto_major": 0,
+      "proto_minor": 2,
+      "max_frame": 4096,
+      "rx_window": 16384,
+      "app_id": "",
+      "client_name": ""
+    },
+    "hex": "010007000002001000400000",
+    "decode_only": true
+  },
+  {
+    "name": "session/hello-request-empty",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 8,
+    "fields": {
+      "proto_major": 0,
+      "proto_minor": 0,
+      "max_frame": 0,
+      "rx_window": 0,
+      "app_id": "",
+      "client_name": ""
+    },
+    "hex": "01000800",
+    "decode_only": true
+  },
+  {
+    "name": "session/ping-request-extra-bytes",
+    "kind": "message",
+    "svc": 0,
+    "op": 4,
+    "mflags": 0,
+    "req": 9,
+    "fields": {
+      "token": 16909060
+    },
+    "hex": "0400090004030201aabbccdd",
+    "decode_only": true
+  },
+  {
+    "name": "session/hello-request-full-str16",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 10,
+    "fields": {
+      "proto_major": 0,
+      "proto_minor": 2,
+      "max_frame": 4096,
+      "rx_window": 16384,
+      "app_id": "0123456789abcdef",
+      "client_name": ""
+    },
+    "hex": "01000a0000020010004000003031323334353637383961626364656600000000000000000000000000000000"
+  },
+  {
+    "name": "session/ping-request-field-cut-in-half",
+    "kind": "message",
+    "svc": 0,
+    "op": 4,
+    "mflags": 0,
+    "req": 11,
+    "malformed": true,
+    "hex": "04000b00aabb"
+  },
+  {
+    "name": "session/hello-request-cut-inside-str16",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 12,
+    "malformed": true,
+    "hex": "01000c0000020010004000006465762e77697370"
+  }
+]

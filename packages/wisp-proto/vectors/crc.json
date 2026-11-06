@@ -1,0 +1,128 @@
+[
+  {
+    "name": "crc/crc16-ccitt-false/0-bytes-empty",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "",
+    "hex": "ffff"
+  },
+  {
+    "name": "crc/crc16-ccitt-false/123456789",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "313233343536373839",
+    "hex": "b129"
+  },
+  {
+    "name": "crc/crc16-ccitt-false/1-bytes-00",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "00",
+    "hex": "f0e1"
+  },
+  {
+    "name": "crc/crc16-ccitt-false/4-bytes-ff",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "ffffffff",
+    "hex": "0f1d"
+  },
+  {
+    "name": "crc/crc16-ccitt-false/256-bytes-00",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "hex": "bd3f"
+  },
+  {
+    "name": "crc/crc16-ccitt-false/37-bytes-57",
+    "kind": "crc",
+    "algo": "crc16-ccitt-false",
+    "input_hex": "57575757575757575757575757575757575757575757575757575757575757575757575757",
+    "hex": "1737"
+  },
+  {
+    "name": "crc/crc32c-msb/0-bytes-empty",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "",
+    "hex": "00000000"
+  },
+  {
+    "name": "crc/crc32c-msb/123456789",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "313233343536373839",
+    "hex": "c8a852c0"
+  },
+  {
+    "name": "crc/crc32c-msb/1-bytes-00",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "00",
+    "hex": "00000000"
+  },
+  {
+    "name": "crc/crc32c-msb/4-bytes-ff",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "ffffffff",
+    "hex": "ed192d1c"
+  },
+  {
+    "name": "crc/crc32c-msb/256-bytes-00",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "hex": "1419b9d7"
+  },
+  {
+    "name": "crc/crc32c-msb/37-bytes-57",
+    "kind": "crc",
+    "algo": "crc32c-msb",
+    "input_hex": "57575757575757575757575757575757575757575757575757575757575757575757575757",
+    "hex": "9e62c67a"
+  },
+  {
+    "name": "crc/crc32-zlib/0-bytes-empty",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "",
+    "hex": "00000000"
+  },
+  {
+    "name": "crc/crc32-zlib/123456789",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "313233343536373839",
+    "hex": "2639f4cb"
+  },
+  {
+    "name": "crc/crc32-zlib/1-bytes-00",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "00",
+    "hex": "8def02d2"
+  },
+  {
+    "name": "crc/crc32-zlib/4-bytes-ff",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "ffffffff",
+    "hex": "ffffffff"
+  },
+  {
+    "name": "crc/crc32-zlib/256-bytes-00",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "hex": "738c0529"
+  },
+  {
+    "name": "crc/crc32-zlib/37-bytes-57",
+    "kind": "crc",
+    "algo": "crc32-zlib",
+    "input_hex": "57575757575757575757575757575757575757575757575757575757575757575757575757",
+    "hex": "c5c1f168"
+  }
+]

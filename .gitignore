@@ -61,3 +61,6 @@ __pycache__/
 
 # Audio (wake word training clips, your voice): never in git
 *.wav
+
+# Wisp: local stock firmware cache (never commit Even firmware)
+.wisp-cache/

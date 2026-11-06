@@ -1,0 +1,68 @@
+{
+  "name": "wisp-core",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "packages/wisp-core/src",
+  "tags": ["lang:c", "wisp"],
+  "namedInputs": {
+    "sources": [
+      "{projectRoot}/CMakeLists.txt",
+      "{projectRoot}/include/**/*",
+      "{projectRoot}/src/**/*"
+    ]
+  },
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tools/with-tools.sh cmake:cmake -- sh -c 'cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build --parallel'",
+        "cwd": "packages/wisp-core"
+      },
+      "inputs": ["sources", "{projectRoot}/tests/**/*"],
+      "outputs": ["{projectRoot}/build"],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "tools/with-tools.sh cmake:cmake python3:python3 -- ctest --test-dir build --output-on-failure",
+        "cwd": "packages/wisp-core"
+      },
+      "inputs": [
+        "sources",
+        "{projectRoot}/tests/**/*",
+        "{projectRoot}/tools/**/*",
+        "{workspaceRoot}/packages/wisp-proto/vectors/**/*"
+      ],
+      "cache": true
+    },
+    "build-arm": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tools/with-tools.sh arm-none-eabi-gcc:gcc-arm-embedded -- tools/build-arm.sh",
+        "cwd": "packages/wisp-core"
+      },
+      "inputs": ["sources", "{projectRoot}/tools/build-arm.sh"],
+      "outputs": ["{projectRoot}/build-arm"],
+      "cache": true
+    },
+    "generate": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": ["python3 tools/gen_c.py", "python3 tools/gen_vectors.py"],
+        "parallel": false,
+        "cwd": "packages/wisp-core"
+      },
+      "cache": false
+    },
+    "bench": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tools/bench.sh",
+        "cwd": "packages/wisp-core"
+      },
+      "cache": false
+    }
+  }
+}

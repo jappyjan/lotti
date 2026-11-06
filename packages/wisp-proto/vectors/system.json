@@ -1,0 +1,137 @@
+[
+  {
+    "name": "system/info-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 1,
+    "mflags": 0,
+    "req": 265,
+    "fields": {},
+    "hex": "01000901"
+  },
+  {
+    "name": "system/info-response",
+    "kind": "message",
+    "svc": 1,
+    "op": 1,
+    "mflags": 1,
+    "req": 266,
+    "fields": {
+      "hw_rev": "hw_rev-0",
+      "serial": "serial-1",
+      "panel": 18,
+      "power_board": 19,
+      "lens": 20,
+      "boot_reason": 21,
+      "boot_count": 420744970,
+      "uptime_ms": 488050955,
+      "build": "build-8"
+    },
+    "hex": "01010a0168775f7265762d30000000000000000073657269616c2d310000000000000000121314150a0f14190b11171d6275696c642d38000000000000000000"
+  },
+  {
+    "name": "system/brightness-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 2,
+    "mflags": 0,
+    "req": 267,
+    "fields": {
+      "mode": 16,
+      "level": 17
+    },
+    "hex": "02000b011011"
+  },
+  {
+    "name": "system/display-power-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 3,
+    "mflags": 0,
+    "req": 268,
+    "fields": {
+      "on": 16,
+      "off_when_unworn": 17,
+      "idle_off_ms": 151521030
+    },
+    "hex": "03000c01101106070809"
+  },
+  {
+    "name": "system/link-profile-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 4,
+    "mflags": 0,
+    "req": 269,
+    "fields": {
+      "profile": 16
+    },
+    "hex": "04000d0110"
+  },
+  {
+    "name": "system/reboot-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 5,
+    "mflags": 0,
+    "req": 270,
+    "fields": {
+      "mode": 16
+    },
+    "hex": "05000e0110"
+  },
+  {
+    "name": "system/log-config-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 6,
+    "mflags": 0,
+    "req": 271,
+    "fields": {
+      "level": 16
+    },
+    "hex": "06000f0110"
+  },
+  {
+    "name": "system/log-event",
+    "kind": "message",
+    "svc": 1,
+    "op": 7,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "level": 16,
+      "t_us": 84215045,
+      "utf8": "Wisp ✓ grüße"
+    },
+    "hex": "0704000010050505055769737020e29c93206772c3bcc39f65"
+  },
+  {
+    "name": "system/stats-request",
+    "kind": "message",
+    "svc": 1,
+    "op": 8,
+    "mflags": 0,
+    "req": 273,
+    "fields": {},
+    "hex": "08001101"
+  },
+  {
+    "name": "system/stats-response",
+    "kind": "message",
+    "svc": 1,
+    "op": 8,
+    "mflags": 1,
+    "req": 274,
+    "fields": {
+      "heap_free": 16909060,
+      "heap_min": 84215045,
+      "cpu_pct": 18,
+      "frames": 218827015,
+      "rx_bytes": 286133000,
+      "tx_bytes": 353438985,
+      "resyncs": 4884
+    },
+    "hex": "0801120104030201050505051207090b0d080b0e11090d11151413"
+  }
+]

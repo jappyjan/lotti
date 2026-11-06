@@ -1,0 +1,51 @@
+[
+  {
+    "name": "error/not-allowed-before-hello",
+    "kind": "message",
+    "svc": 2,
+    "op": 3,
+    "mflags": 3,
+    "req": 66,
+    "fields": {
+      "code": 7,
+      "message": ""
+    },
+    "hex": "030342000700"
+  },
+  {
+    "name": "error/unsupported-with-message",
+    "kind": "message",
+    "svc": 0,
+    "op": 127,
+    "mflags": 3,
+    "req": 67,
+    "fields": {
+      "code": 1,
+      "message": "unsupported op"
+    },
+    "hex": "7f0343000100756e737570706f72746564206f70"
+  },
+  {
+    "name": "error/hash-mismatch",
+    "kind": "message",
+    "svc": 3,
+    "op": 3,
+    "mflags": 3,
+    "req": 65535,
+    "fields": {
+      "code": 6,
+      "message": "résumé ✗"
+    },
+    "hex": "0303ffff060072c3a973756dc3a920e29c97"
+  },
+  {
+    "name": "error/code-cut-in-half",
+    "kind": "message",
+    "svc": 2,
+    "op": 3,
+    "mflags": 3,
+    "req": 68,
+    "malformed": true,
+    "hex": "0303440007"
+  }
+]

@@ -276,6 +276,43 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  apps/wisp-sim:
+    dependencies:
+      '@wisp/sdk':
+        specifier: workspace:*
+        version: link:../../packages/wisp-sdk-ts
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.2
+      '@types/ws':
+        specifier: ^8.18.0
+        version: 8.18.2
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+
+  packages/wisp-ota:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+
+  packages/wisp-sdk-ts:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.2
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+
 packages:
 
   '@babel/code-frame@7.29.7':

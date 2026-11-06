@@ -1,0 +1,94 @@
+[
+  {
+    "name": "sensor/subscribe-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 1,
+    "mflags": 0,
+    "req": 300,
+    "fields": {
+      "sensor": 16,
+      "rate_hz": 1029,
+      "batch_ms": 1800
+    },
+    "hex": "01002c011005040807"
+  },
+  {
+    "name": "sensor/unsubscribe-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 2,
+    "mflags": 0,
+    "req": 301,
+    "fields": {
+      "sensor": 16
+    },
+    "hex": "02002d0110"
+  },
+  {
+    "name": "sensor/data-event",
+    "kind": "message",
+    "svc": 5,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "sensor": 16,
+      "count": 2,
+      "t0_us": 151521030,
+      "dt_us": 218827015,
+      "samples": "e0e1e2e3e4e5e6e7e8e9eaeb"
+    },
+    "hex": "0304000010020607080907090b0de0e1e2e3e4e5e6e7e8e9eaeb"
+  },
+  {
+    "name": "sensor/read-request",
+    "kind": "message",
+    "svc": 5,
+    "op": 4,
+    "mflags": 0,
+    "req": 303,
+    "fields": {
+      "sensor": 16
+    },
+    "hex": "04002f0110"
+  },
+  {
+    "name": "sensor/read-response",
+    "kind": "message",
+    "svc": 5,
+    "op": 4,
+    "mflags": 1,
+    "req": 304,
+    "fields": {
+      "sample": "f0f1f2f3f4"
+    },
+    "hex": "04013001f0f1f2f3f4"
+  },
+  {
+    "name": "sensor/data-event-grown-samples",
+    "kind": "message",
+    "svc": 5,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "fields": {
+      "sensor": 1,
+      "count": 2,
+      "t0_us": 5000,
+      "dt_us": 10000,
+      "samples": "0c002cfc2100efbe0a0022fc1f00efbe"
+    },
+    "hex": "03040000010288130000102700000c002cfc2100efbe0a0022fc1f00efbe"
+  },
+  {
+    "name": "sensor/data-event-count-doesnt-divide",
+    "kind": "message",
+    "svc": 5,
+    "op": 3,
+    "mflags": 4,
+    "req": 0,
+    "malformed": true,
+    "hex": "03040000010488130000102700000c002cfc2100"
+  }
+]

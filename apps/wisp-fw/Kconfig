@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+
+mainmenu "Wisp native firmware"
+
+menu "Wisp"
+
+config WISP_HEARTBEAT_MS
+	int "Heartbeat period (ms)"
+	default 1000
+
+config WISP_BT_ALLOWED
+	bool "Allow Bluetooth (milestone M6+)"
+	help
+	  Off in M0. Turning Bluetooth on also needs WISP_EM9305_SKIP_FW_UPDATE and a
+	  HAL whose EM9305 update path is compiled out; scripts/check_rule8.py enforces
+	  both (docs/wisp/safety.md rule 8).
+
+config WISP_EM9305_SKIP_FW_UPDATE
+	bool "Never update or recover the EM9305 firmware"
+	default y
+	help
+	  Asserts that every am_devices_em9305_init() caller sets skip_fw_update = true.
+	  This is a promise checked at build time, not a switch: the fork's apollox_blue.c
+	  leaves skip_fw_update false, so a BT build on the unpatched fork fails.
+
+endmenu
+
+source "Kconfig.zephyr"

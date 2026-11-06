@@ -1,0 +1,103 @@
+// wisp_g2 in Renode: Apollo510B (Cortex-M55) platform for the Wisp native skeleton.
+//
+// Derived from g2emu's apollo510-m1-fast.repl (https://github.com/ithinkthisiscool/g2emu,
+// MIT, see third_party/g2emu/). Same memory map and the same C# models where Wisp needs one;
+// g2emu's ADC board-detect, IOM, MSPI and Nema models are dropped (Wisp M0 touches none of
+// them) and those ranges stay permissive plain memory, as in g2emu. The models are compiled
+// by `include @.../cs/*.cs` in wisp_g2.resc BEFORE this file is loaded.
+//
+// Bases: AmbiqSuite apollo510.h / hal_ambiq dts/apollo510/am_apollo510.h (UART1 0x4003A000,
+// STIMER 0x40008800, PWRCTRL 0x40021000, CLKGEN 0x40004000).
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m55"
+    nvic: nvic
+    PerformanceInMips: 250
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+itcm: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x00040000
+
+// MRAM 0x400000-0x800000 (SBL, Even bootloader, app at 0x438000, NV).
+mram: Memory.MappedMemory @ sysbus 0x00400000
+    size: 0x00400000
+
+// DTCM (512 KiB) + SSRAM (3 MiB) and a little beyond, as in g2emu.
+dtcm_ssram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x00400000
+
+periph_lo0: Memory.MappedMemory @ sysbus 0x40000000
+    size: 0x00004000
+
+// CLKGEN (clock-ready status reads 1s) + running RTC. g2emu model.
+clkgen: G2emu.G2ClkgenRtc @ sysbus 0x40004000
+    size: 0x1000
+
+periph_lo1: Memory.MappedMemory @ sysbus 0x40005000
+    size: 0x00003000
+
+// CTIMER: Renode's Apollo4 model, as in g2emu.
+timer: Timers.AmbiqApollo4_Timer @ sysbus 0x40008000
+    0 -> nvic@67
+    1 -> nvic@68
+    2 -> nvic@69
+    3 -> nvic@70
+    4 -> nvic@71
+    5 -> nvic@72
+    6 -> nvic@73
+    7 -> nvic@74
+    8 -> nvic@75
+    9 -> nvic@76
+    10 -> nvic@77
+    11 -> nvic@78
+    12 -> nvic@79
+    13 -> nvic@80
+    14 -> nvic@81
+    15 -> nvic@82
+
+// STIMER: Zephyr's system clock on Apollo5 (ambiq_stimer.c). Renode's Apollo4 model.
+stimer: Timers.AmbiqApollo4_SystemTimer @ sysbus 0x40008800
+    IRQA -> nvic@32
+    IRQB -> nvic@33
+    IRQC -> nvic@34
+    IRQD -> nvic@35
+    IRQE -> nvic@36
+    IRQF -> nvic@37
+    IRQG -> nvic@38
+    IRQH -> nvic@39
+    IRQI -> nvic@40
+
+// MCUCTRL (0x40020000), GPIO/pinctrl (0x40010000) etc.: permissive plain memory.
+periph_lo2: Memory.MappedMemory @ sysbus 0x40009000
+    size: 0x00018000
+
+// PWRCTRL: each *STATUS mirrors its *EN. g2emu model.
+pwrctrl: G2emu.G2Pwrctrl @ sysbus 0x40021000
+    size: 0x1000
+    domainStatus: true
+
+periph_lo3: Memory.MappedMemory @ sysbus 0x40022000
+    size: 0x00017000
+
+uart0: UART.PL011 @ sysbus 0x40039000
+    -> nvic@15
+
+// UART1 = the debug/log UART (zephyr,console on wisp_g2, and stock's log port).
+// g2emu model: TX completes at once, bytes go to $G2_CAPTURE_OUT/uart1.txt.
+uart1: G2emu.G2Uart1Shell @ sysbus 0x4003A000
+    size: 0x1000
+
+uart2: UART.PL011 @ sysbus 0x4003B000
+    -> nvic@17
+
+uart3: UART.PL011 @ sysbus 0x4003C000
+    -> nvic@18
+
+// IOM, MSPI, GPU, ... : plain memory in M0.
+periph_hi0: Memory.MappedMemory @ sysbus 0x4003D000
+    size: 0x0FFC3000
+
+xip: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x02000000

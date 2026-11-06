@@ -1,0 +1,27 @@
+{
+  "name": "@wisp/sim",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Wisp simulator: the Wisp core (WebAssembly) behind a WebSocket link, with a browser viewer",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/src/index.js",
+  "bin": {
+    "wisp-sim": "dist/src/main.js"
+  },
+  "scripts": {
+    "start": "node dist/src/main.js"
+  },
+  "dependencies": {
+    "@wisp/sdk": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "~6.0.3"
+  }
+}
