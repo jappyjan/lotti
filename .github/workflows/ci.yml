@@ -42,4 +42,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm nx run-many -t build test
+      # Wisp projects run in the Linux job below.
+      - run: pnpm nx run-many -t build test --exclude='tag:wisp,wisp-*'
+
+  wisp:
+    # Wisp (firmware, core, SDK, OTA tool) builds on Linux; Nix provides CMake, the Arm
+    # toolchain, west and Renode. Nothing here talks to hardware.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm nx run-many -t build test typecheck -p 'wisp-*'
+      - run: pnpm nx run wisp-core:build-arm
