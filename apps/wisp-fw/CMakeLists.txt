@@ -29,7 +29,14 @@ if(WISP_FW_GIT_REV)
 endif()
 
 target_sources(app PRIVATE src/main.c)
-target_include_directories(app PRIVATE src src/hal)
+target_include_directories(app PRIVATE src src/hal src/link)
+if(CONFIG_WISP_BLE)
+  # The Wisp GATT service (Zephyr, transport only) and the transport adapter (portable C,
+  # host-tested in tests/link/). Both need wisp-core.
+  set(WISP_WITH_CORE ON)
+  target_sources(app PRIVATE src/ble/wisp_ble.c src/link/wisp_link.c)
+  target_include_directories(app PRIVATE src/ble)
+endif()
 if(CONFIG_NEWLIB_LIBC AND CONFIG_MBEDTLS)
   target_sources(app PRIVATE src/compat/newlib_fini.c)
 endif()
@@ -41,7 +48,7 @@ endif()
 # packages/wisp-core (portable C, owned by its own thread) links in here once it exposes a
 # CMake library target. Point WISP_CORE_DIR at it (default: the monorepo path, if present)
 # and set WISP_WITH_CORE=ON. The core must not depend on Zephyr; it talks to src/hal/.
-option(WISP_WITH_CORE "Link packages/wisp-core into the image" OFF)
+option(WISP_WITH_CORE "Link packages/wisp-core into the image (forced on with CONFIG_WISP_BLE)" OFF)
 set(WISP_CORE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../packages/wisp-core" CACHE PATH
     "Path to the wisp-core source tree (must contain a CMakeLists.txt defining wisp_core)")
 if(WISP_WITH_CORE)
@@ -73,6 +80,10 @@ endif()
 # part of the default target. Either failing fails the build, and the stamp is not written, so
 # they rerun on the next build (zephyr.elf itself stays in the build dir for inspection; the
 # nx build target only reports success when both pass).
+if(NOT CONFIG_BOARD_WISP_G2)
+  # native_sim (tests/ble/) is a Linux process: no MRAM image, no EM9305 driver.
+  return()
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(_wisp_zdir ${CMAKE_BINARY_DIR}/zephyr)
 set(_wisp_stamp ${CMAKE_BINARY_DIR}/wisp_checks.stamp)
@@ -88,7 +99,9 @@ add_custom_command(
           --config ${_wisp_zdir}/.config
           --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json
           --hal ${ZEPHYR_HAL_AMBIQ_MODULE_DIR}
+          --zephyr ${ZEPHYR_BASE}
           --nm ${CMAKE_NM}
+          --objdump ${CMAKE_OBJDUMP}
   COMMAND ${CMAKE_COMMAND} -E touch ${_wisp_stamp}
   DEPENDS ${logical_target_for_zephyr_elf}
           ${_wisp_zdir}/${KERNEL_ELF_NAME}

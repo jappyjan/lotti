@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * wisp_g2 pin control. Only the debug UART is muxed in M0.
+ * wisp_g2 pin control: the debug UART and the EM9305's SPI (IOM6).
  *
  * TODO(G2 pins): UART1 TX/RX pads are NOT verified on the G2 board. These are the
  * apollo510b_evb pads (P12/P14, from the fork's apollo510b_evb-pinctrl.dtsi, Apache-2.0,
@@ -26,6 +26,13 @@
 	uart1_sleep: uart1_sleep {
 		group1 {
 			pinmux = <GPIO_P12>, <GPIO_P14>;
+		};
+	};
+
+	/* EM9305 HCI SPI (IOM6). TODO(G2 pins): the evb's pads, see the bt_hci node. */
+	spi6_default: spi6_default {
+		group1 {
+			pinmux = <M6SCK_P61>, <M6MISO_P63>, <M6MOSI_P62>;
 		};
 	};
 };
