@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: MIT
+description: |
+  TI OPT3007 ambient light sensor (OPT3001 register set, DSBGA without INT or ADDR pins,
+  fixed address 0x45). Wisp driver: single-shot conversions on fetch, shut down otherwise
+  (src/drivers/opt3007.c, docs/wisp/hardware.md "Ambient light").
+
+compatible: "ti,opt3007"
+
+include: [sensor-device.yaml, i2c-device.yaml]
+
+properties:
+  conversion-time-ms:
+    type: int
+    default: 100
+    enum: [100, 800]
+    description: Integration time per conversion (config CT bit).

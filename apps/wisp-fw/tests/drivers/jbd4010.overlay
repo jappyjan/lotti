@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: MIT
+ * wisp_g2 with the JBD4010 panel (stock hw_version 5, DVT2): rails BUCK1 1.1 V + LDSW2, GPIO142
+ * and GPIO68, stock offset (12, 10). Used by scripts/drivers_test.sh. */
+&pmic_buck1 {
+	regulator-min-microvolt = <1100000>;
+	regulator-max-microvolt = <1100000>;
+};
+
+&uled {
+	panel = "jbd4010";
+	vio-supply = <&pmic_ldsw2>;
+	/delete-property/ en-b-gpios;
+	en-c-gpios = <&gpio64_95 4 GPIO_ACTIVE_HIGH>; /* GPIO68 */
+	offset-x = <12>;
+	offset-y = <10>;
+};

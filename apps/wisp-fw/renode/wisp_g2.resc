@@ -5,18 +5,25 @@
 :description: $G2_CAPTURE_OUT/uart1.txt (g2emu's UART1 model). Run by scripts/sim.sh.
 :description:
 :description: Variables (set before including): $bin, $elf (required), $sp, $pc (from the vector
-:description: table; scripts/sim.sh reads them from zephyr.bin), $mips (default 250).
+:description: table; scripts/sim.sh reads them from zephyr.bin), $mips (default 250), $variant
+:description: (panel model: 0 JBD4010, default; 1 A6N-G). The driver test saves `panel SaveLog`,
+:description: `panel SaveFrame` and `iom SaveLog` after the run (scripts/drivers_test.sh).
 
 $mips ?= 250
+$variant ?= 0
 
 include $ORIGIN/../third_party/g2emu/cs/G2ClkgenRtc.cs
 include $ORIGIN/../third_party/g2emu/cs/G2Pwrctrl.cs
 include $ORIGIN/../third_party/g2emu/cs/G2Uart1Shell.cs
+include $ORIGIN/models/WispIom.cs
+include $ORIGIN/models/WispMspiPanel.cs
 
 mach create "wisp_g2"
 machine LoadPlatformDescription $ORIGIN/wisp_g2.repl
 sysbus LoadBinary $bin 0x438000
 sysbus LoadSymbolsFrom $elf
+
+panel Variant $variant
 
 cpu PerformanceInMips $mips
 cpu VectorTableOffset 0x438000

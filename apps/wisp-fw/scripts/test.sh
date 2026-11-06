@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 # wisp-fw:test. Emulation and host only — nothing here talks to hardware.
 #
-#   1. Wisp Boot decision logic, host unit tests (gcc + ASan/UBSan); Wisp Boot build + the
-#      image and rule 8 gates on it (the rung-3 fault tests are wisp-fw:boot-test)
+#   1. Wisp Boot decision logic and the display flush path, host unit tests (gcc + ASan/UBSan);
+#      Wisp Boot build + the image and rule 8 gates on it (the rung-3 fault tests are
+#      wisp-fw:boot-test; the driver tests in Renode are wisp-fw:drivers-test)
 #   2. post-build gate unit tests (synthetic images, configs, maps, symbols)
 #   3. Renode boot of the built image: banner + heartbeats on UART1
 #   4. safety rule 8 negative builds: each must FAIL, with the rule 8 message
@@ -21,11 +22,19 @@ out="$CACHE_DIR/test"
 mkdir -p "$out"
 step() { printf '\n=== wisp-fw test: %s\n' "$*"; }
 
-step "1/4 Wisp Boot host unit tests"
+step "1/4 host unit tests (Wisp Boot, display flush)"
 cc -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-recover=all \
 	-I"$APP_DIR/src/boot" "$APP_DIR/src/boot/wisp_boot.c" "$APP_DIR/tests/boot/test_wisp_boot.c" \
 	-o "$out/test_wisp_boot"
+cc -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+	-I"$APP_DIR/src/display" "$APP_DIR/src/display/wisp_flush.c" "$APP_DIR/tests/display/test_flush.c" \
+	-o "$out/test_flush"
+"$out/test_flush"
 "$out/test_wisp_boot"
+cc -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-recover=all \
+	-I"$APP_DIR/src/display" "$APP_DIR/src/display/wisp_flush.c" "$APP_DIR/tests/display/test_flush.c" \
+	-o "$out/test_flush"
+"$out/test_flush"
 "$APP_DIR/scripts/build_boot.sh" >/dev/null
 echo "ok: Wisp Boot built, check_image + check_rule8 passed"
 

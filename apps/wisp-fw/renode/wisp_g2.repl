@@ -2,9 +2,10 @@
 //
 // Derived from g2emu's apollo510-m1-fast.repl (https://github.com/ithinkthisiscool/g2emu,
 // MIT, see third_party/g2emu/). Same memory map and the same C# models where Wisp needs one;
-// g2emu's ADC board-detect, IOM, MSPI and Nema models are dropped (Wisp M0 touches none of
-// them) and those ranges stay permissive plain memory, as in g2emu. The models are compiled
-// by `include @.../cs/*.cs` in wisp_g2.resc BEFORE this file is loaded.
+// g2emu's ADC board-detect, IOM, MSPI and Nema models are dropped. Wisp's own models stand in
+// for the I2C buses (WispIom) and the panel on MSPI0 (WispMspiPanel); every other range stays
+// permissive plain memory, as in g2emu. The models are compiled by `include @.../*.cs` in
+// wisp_g2.resc BEFORE this file is loaded.
 //
 // Bases: AmbiqSuite apollo510.h / hal_ambiq dts/apollo510/am_apollo510.h (UART1 0x4003A000,
 // STIMER 0x40008800, PWRCTRL 0x40021000, CLKGEN 0x40004000).
@@ -95,9 +96,24 @@ uart2: UART.PL011 @ sysbus 0x4003B000
 uart3: UART.PL011 @ sysbus 0x4003C000
     -> nvic@18
 
-// IOM, MSPI, GPU, ... : plain memory in M0.
 periph_hi0: Memory.MappedMemory @ sysbus 0x4003D000
-    size: 0x0FFC3000
+    size: 0x00013000
+
+// IOM0..7 (I2C): OPT3007 on IOM2, ICM-45608 on IOM4, PSoC touch on IOM5, nPM1300 on IOM7
+// (models/WispIom.cs; offset bytes highest first, as on silicon).
+iom: Wisp.WispIom @ sysbus 0x40050000
+
+periph_hi1: Memory.MappedMemory @ sysbus 0x40058000
+    size: 0x00008000
+
+// MSPI0 + the microLED panel (models/WispMspiPanel.cs): records every command and the frame.
+// JBD4010 unless the .resc sets `panel Variant 1` (A6N-G).
+panel: Wisp.WispMspiPanel @ sysbus 0x40060000
+    IRQ -> nvic@20
+
+// MSPI1.., GPU, ...: plain memory.
+periph_hi2: Memory.MappedMemory @ sysbus 0x40061000
+    size: 0x0FF9F000
 
 xip: Memory.MappedMemory @ sysbus 0x80000000
     size: 0x02000000

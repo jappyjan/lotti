@@ -28,8 +28,20 @@ if(WISP_FW_GIT_REV)
   target_compile_definitions(app PRIVATE WISP_FW_GIT_REV="${WISP_FW_GIT_REV}")
 endif()
 
-target_sources(app PRIVATE src/main.c)
-target_include_directories(app PRIVATE src src/hal)
+target_sources(app PRIVATE src/main.c src/display/wisp_flush.c
+  src/hal/native/power.c src/hal/native/display.c src/hal/native/input.c
+  src/hal/native/sensors.c)
+target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers)
+
+# --- Drivers (docs/wisp/hardware.md "Native drivers") -------------------------------------
+if(CONFIG_WISP_I2C_AMBIQ)
+  target_sources(app PRIVATE third_party/zephyr/i2c_ambiq.c)
+  target_include_directories(app PRIVATE ${ZEPHYR_BASE}/drivers/i2c)
+endif()
+target_sources_ifdef(CONFIG_WISP_G2_TOUCH app PRIVATE src/drivers/g2_touch.c)
+target_sources_ifdef(CONFIG_WISP_ICM45608 app PRIVATE src/drivers/icm45608.c)
+target_sources_ifdef(CONFIG_WISP_OPT3007 app PRIVATE src/drivers/opt3007.c)
+target_sources_ifdef(CONFIG_WISP_ULED app PRIVATE src/drivers/uled.c)
 if(CONFIG_NEWLIB_LIBC AND CONFIG_MBEDTLS)
   target_sources(app PRIVATE src/compat/newlib_fini.c)
 endif()

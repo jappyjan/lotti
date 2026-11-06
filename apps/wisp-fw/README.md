@@ -1,6 +1,6 @@
 # wisp-fw — Wisp native firmware (Apollo510B)
 
-The native target of [Wisp](../../docs/wisp/README.md): Zephyr from Ambiq's fork (decision W11) on one G2 temple, emulated in Renode with g2emu's Apollo510 platform (W15). **Milestone M0: build skeleton + Renode boot; rung 3: Wisp Boot, fault-tested in Renode against the real Even bootloader. Nothing here has run on glasses, and nothing here can talk to hardware** — the board defines no flash runner, and no script uses J-Link, SWD or BLE.
+The native target of [Wisp](../../docs/wisp/README.md): Zephyr from Ambiq's fork (decision W11) on one G2 temple, emulated in Renode with g2emu's Apollo510 platform (W15). **Milestone M0: build skeleton + Renode boot; rung 3: Wisp Boot, fault-tested in Renode against the real Even bootloader; M6 groundwork: drivers for the panel, touch/wear, IMU, light and PMIC, tested in Renode against bus models. Nothing here has run on glasses, and nothing here can talk to hardware** — the board defines no flash runner, and no script uses J-Link, SWD or BLE.
 
 Read [safety.md](../../docs/wisp/safety.md) before changing anything that ends up in the image.
 
@@ -8,14 +8,15 @@ Read [safety.md](../../docs/wisp/safety.md) before changing anything that ends u
 
 Everything runs on t3-worker (NixOS) as a normal user. The flake in this directory pins the toolchain; the scripts enter it themselves (`nix develop`), so plain `pnpm nx` is enough.
 
-| Target                           | What it does                                                                                                                   |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm nx run wisp-fw:setup`      | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after) |
-| `pnpm nx run wisp-fw:build`      | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                  |
-| `pnpm nx run wisp-fw:sim`        | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                           |
-| `pnpm nx run wisp-fw:test`       | Wisp Boot host tests, gate unit tests, Renode boot test (asserts on UART1), rule 8 negative builds (about 1 min)               |
-| `pnpm nx run wisp-fw:build-boot` | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                 |
-| `pnpm nx run wisp-fw:boot-test`  | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)   |
+| Target                             | What it does                                                                                                                   |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm nx run wisp-fw:setup`        | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after) |
+| `pnpm nx run wisp-fw:build`        | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                  |
+| `pnpm nx run wisp-fw:sim`          | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                           |
+| `pnpm nx run wisp-fw:test`         | Wisp Boot + flush host tests, gate unit tests, Renode boot test (asserts on UART1), rule 8 negative builds (about 4 min)       |
+| `pnpm nx run wisp-fw:drivers-test` | the drivers in Renode against panel and I2C models, both panels + one negative case ([below](#drivers); about 5 min)           |
+| `pnpm nx run wisp-fw:build-boot`   | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                 |
+| `pnpm nx run wisp-fw:boot-test`    | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)   |
 
 Toolchain (from `flake.lock`, nixos-26.05 at `7dcdd87`): gcc-arm-embedded 15.2.rel1 (Zephyr variant `gnuarmemb`), CMake 4.1, Ninja, dtc, west 1.5, Renode 1.16.1. Workspace: `AmbiqMicro/ambiqzephyr` `ambiq-stable` @ `89c8a36` (Zephyr 4.3.0) plus only `ambiqhal_ambiq` @ `d3278ec`, `cmsis`, `cmsis_6`, `mbedtls` (only for the BT negative build) and `littlefs` @ `8f5ca34` (Zephyr's fork of littlefs 2.11, BSD-3-Clause, on-disk format 2.1 like stock; Wisp Boot and the rung-3 tools build it directly, not through Zephyr's FS layer). To move the pin, edit `west.yml`, rerun setup, build, test. A from-scratch setup in an empty cache (`WISP_CACHE_DIR=…`) rebuilt a byte-identical `zephyr.bin` (the git revision string is embedded, so compare at the same commit).
 
@@ -25,18 +26,25 @@ CI: the GitHub workflow (macOS, no nix) runs `nx run-many -t build test` and wou
 
 ```
 boards/even/wisp_g2/   out-of-tree board: Apollo510B, code partition at 0x438000, UART1 console
-src/main.c             banner + heartbeat (M0 app)
+src/main.c             banner, native HAL bring-up, heartbeat; the driver self-test (test builds)
 src/hal/               the HAL boundary for Wisp core: display, input, sensors, audio, power,
-                       storage, link — declarations only, no Zephyr dependency
+                       storage, link — declarations, no Zephyr dependency
+src/hal/native/        the native HAL on the drivers: display (flush path), input, sensors, power
+src/display/           wisp_flush: core strips -> panel frame -> dirty rows (portable, host-tested)
+src/drivers/           uled (panel), g2_touch (PSoC), icm45608, opt3007 — Wisp's own, MIT
+dts/bindings/          their devicetree bindings (+ vendor prefixes)
+third_party/zephyr/    i2c_ambiq.c from the fork with a header byte-order fix (Apache-2.0)
 src/boot/              Wisp Boot: wisp_boot.* (pure decision, record, image check; host-tested),
                        stage/ (the bare-metal stage at 0x438000: NOR, littlefs, flag, watchdog),
                        CMakeLists.txt (standalone, arm-none-eabi-gcc), wisp_boot_layout.h
 cmake/rule8.cmake      configure-time rule 8 gate
 scripts/               setup/build/sim/test, check_image.py, check_rule8.py, wisp_layout.py
-renode/                wisp_g2.repl (derived from g2emu) + wisp_g2.resc; rung 3: wisp_g2_boot.repl,
-                       boot.resc, models/ (Wisp's C# models: NOR+MSPI, reset, WDT, boot ROM, ...)
+renode/                wisp_g2.repl (derived from g2emu, with the panel and I2C models) +
+                       wisp_g2.resc; rung 3: wisp_g2_boot.repl, boot.resc; models/ (Wisp's C#
+                       models: NOR+MSPI, panel+MSPI, IOM+I2C devices, reset, WDT, boot ROM, ...)
 third_party/g2emu/     three g2emu C# peripheral models (MIT, unmodified), see its README
 tests/                 boot/ (C host tests; rung3.py harness, app/ fault apps, tools/wisp_lfs.c),
+                       display/ (flush host test), drivers/ (Renode driver checks, JBD overlay),
                        scripts/ (gate unit tests), sim/ (UART assertions),
                        rule8/ (negative builds: BT on, BT "allowed" on the unpatched fork, canary)
 ```
@@ -45,19 +53,24 @@ Wisp core hook: `-DWISP_WITH_CORE=ON` (optionally `-DWISP_CORE_DIR=…`, default
 
 ## What boots
 
-`wisp_g2` image: 53.7 KB, linked at `0x438000` (vector table first; initial SP `0x20081740` in SSRAM, reset vector `0x0043a375`). Renode loads the flat `zephyr.bin` at `0x438000` — exactly what the Even bootloader would install — and starts it the way the bootloader hands off (VTOR = `0x438000`, MSP = vector 0, PC = vector 1). UART1 from a `wisp-fw:test` run:
+`wisp_g2` image: 112.6 KB, linked at `0x438000` (vector table first; initial SP `0x2008a030` in SSRAM, reset vector `0x0043cd2d`). Renode loads the flat `zephyr.bin` at `0x438000` — exactly what the Even bootloader would install — and starts it the way the bootloader hands off (VTOR = `0x438000`, MSP = vector 0, PC = vector 1). The platform has Wisp's I2C and panel models, so the drivers probe their devices; everything stays suspended. UART1 from a `wisp-fw:sim` run:
 
 ```
+[00:00:00.114,105] <inf> g2_touch: PSoC firmware 01000202
+[00:00:00.114,196] <inf> g2_touch: long press 1000 ms
 *** Booting Zephyr OS build 4.3.0 ***
 
-*** Wisp native 0.0.0-m0 (1d0d616da1-dirty) ***
+*** Wisp native 0.0.0-m0 (3938e0d52a-dirty) ***
 wisp: board wisp_g2, Zephyr 4.3.0, image @ 0x438000
-wisp: M0 skeleton, bluetooth off (safety rule 8)
-wisp: heartbeat 1 uptime 1000 ms
-wisp: heartbeat 2 uptime 2001 ms
-wisp: heartbeat 3 uptime 3002 ms
-wisp: heartbeat 4 uptime 4005 ms
-wisp: heartbeat 5 uptime 5007 ms
+wisp: bluetooth off (safety rule 8)
+wisp: hal power ok (0)
+wisp: hal display ok (0)
+wisp: hal input ok (0)
+wisp: hal sensors ok (0)
+wisp: sensors present 0x1b
+wisp: heartbeat 1 uptime 1122 ms
+wisp: heartbeat 2 uptime 2124 ms
+wisp: heartbeat 3 uptime 3125 ms
 ```
 
 The kernel ticks off the STIMER (Renode's Apollo4 system-timer model is register-compatible enough for `ambiq_stimer.c`); heartbeats drift about 1–2 ms per second of virtual time. No Renode warnings at log level 3.
@@ -65,10 +78,44 @@ The kernel ticks off the STIMER (Renode's Apollo4 system-timer model is register
 ## Board `wisp_g2`
 
 - **MRAM partitions** (flash0 starts at `0x410000`, so offsets are relative to it): `even-bootloader` `0x410000–0x438000` read-only (the 32-byte EVEN preamble at `0x437FE0` sits at its end and is added by wisp-ota, never the linker), `wisp` `0x438000–0x7F8000` = `zephyr,code-partition` (3840 KiB; the linker region ends exactly at the ceiling), `even-nv` `0x7F8000–0x800000` read-only (update flag at `0x7FE000`, bonds).
-- **Enabled:** UART1 at 115200 (console), STIMER, pinctrl. Watchdog, PM and everything else off.
-- **Disabled, with TODOs from hardware.md:** I2C4 (ICM-45608 `0x69`, magnetometer `0x1E`), I2C5 (PSoC 4000T `0x0C`), IOM6 SPI (EM9305 — see rule 8), I2C7 (nPM1300 `0x6B` or BQ25180 `0x6A` + BQ27427 `0x55`, OPT3007 `0x45`), MSPI0 (panel), MSPI1 (NOR, instance unconfirmed), PDM0, I2S0 (GX8002), GPU; buzzer GPIO145, inter-temple and case UARTs as comments.
-- **Unverified on the G2:** UART1 pads (the evb's P12/P14 are used as placeholders), STIMER clock source. Both must come from the stock image before anything runs on glasses.
+- **Devices** (every bus, address, pad and sequence from stock 2.4.0.24, with confidence and source in [hardware.md "Native drivers"](../../docs/wisp/hardware.md#native-drivers-stock-24024)): UART1 console on GPIO12/14 at 921600 (as stock); I2C2 OPT3007 `0x45`; I2C4 ICM-45608 `0x69` (INT1 GPIO38, rail GPIO129); I2C5 PSoC touch `0x0C` (attention GPIO27, reset GPIO10); I2C7 nPM1300 `0x6B` (IRQ GPIO4) with BUCK1 (panel rail), BUCK2 3.1 V and LDSW1 1.8 V always-on, LDSW2, charger at stock's values, the PMIC watchdog; MSPI0 the microLED panel on CE0 GPIO199 (`panel = "a6n-g"` by default; `tests/drivers/jbd4010.overlay` for the JBD). Every device starts suspended (`zephyr,pm-device-runtime-auto`).
+- **Disabled:** IOM6 SPI (EM9305 — see rule 8), MSPI1 (NOR, Wisp Boot's for now), PDM0, I2S0 (GX8002), GPU; buzzer, inter-temple and case UARTs as comments.
+- **Uncached SRAM** `0x20200000–0x20370000` (panel frame, MSPI command queue); it stops below Wisp Boot's RAM (`0x20370000–0x20380000`).
+- **Unverified on the G2:** STIMER clock source; which panel is fitted; I2C pull-ups (internal ones are on).
 - `SOC_APOLLO510B_EM9305_EXTREF_INIT` defaults to n on this board (see below).
+
+## Drivers
+
+All of them Wisp's own (MIT) except the nPM1300 drivers (Zephyr in-tree) and the I2C controller driver (the fork's, patched). Facts and their confidence: [hardware.md "Native drivers"](../../docs/wisp/hardware.md#native-drivers-stock-24024).
+
+| Driver                           | Compatible            | What it does                                                                                                                                                                                                               | Power                                                                                                                    |
+| -------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `src/drivers/uled.c`             | `even,g2-uled`        | both panels: stock's power sequences, init streams, brightness maps, health checks; full frames by DMA (quad 1-1-4), JBD row updates by PIO; owns the 153 602-byte frame in uncached SRAM                                  | PM runtime: resume = rails + init + blank frame, suspend = stock's power-down, rails off (no panel sleep command exists) |
+| `src/drivers/g2_touch.c`         | `even,g2-touch`       | reset, version, long-press threshold, then one 16-byte report per attention edge; gestures, press/release, wear; resets the PSoC on its error flag. **Command allow-list: 2 (DFU) and 7 (EEPROM write) can never be sent** | suspend = attention interrupt off                                                                                        |
+| `src/drivers/icm45608.c`         | `invensense,icm45608` | WHO_AM_I `0x81`, soft reset, ±4 g / ±2000 dps, ODR 25–800 Hz, accel LP up to 400 Hz, data-ready trigger on INT1                                                                                                            | suspend = sensors off + rail off (0 current); resume = rail cycle, reset, restore                                        |
+| `src/drivers/opt3007.c`          | `ti,opt3007`          | one single-shot conversion per fetch (sleeps through the 100 ms integration), lux from the result register                                                                                                                 | shutdown except during a fetch                                                                                           |
+| Zephyr `nordic,npm1300*`         | —                     | MFD, regulators, charger (battery voltage, status, VBUS = case), watchdog                                                                                                                                                  | the native HAL kicks and stops the PMIC watchdog at boot                                                                 |
+| `third_party/zephyr/i2c_ambiq.c` | `ambiq,i2c`           | the fork's driver with multi-byte register headers sent in buffer order ([why](third_party/zephyr/README.md))                                                                                                              | as upstream                                                                                                              |
+
+The native HAL (`src/hal/native/`) puts the core on top: `wisp_native_present` / `wisp_native_frame_done` are the engine's `present` / `frame_done`. Strips land in the panel's frame buffer (`src/display/wisp_flush.c`), and at frame end only the dirty rows go out (runs closer than 4 rows merged, more than 240 rows or an A6N-G as one full-frame DMA). Sensors are batched per stream; nothing runs while nothing is configured (no polling loop: the IMU is interrupt-driven, the light sensor is sampled at the requested rate up to 5 Hz, wear is event-driven). The PSoC gives no touch position, so raw touch events carry `pos` 0 and gestures come from the controller (`wisp_hal_input_gestures`).
+
+### Driver test in Renode (`wisp-fw:drivers-test`)
+
+`scripts/drivers_test.sh` builds the image with wisp-core linked and `tests/drivers/selftest.conf` (the self-test in `main.c`), runs it on `renode/wisp_g2.repl` (the same platform as `wisp-fw:sim`), and checks the run with `tests/drivers/check_drivers.py`. The self-test powers the panel, composes two frames with wisp-core's compositor (16 grey bands with a box; then only the box changes), sets brightness, runs the health check, powers the panel off, reads the IMU and the light sensor once, services one touch report, reads the battery.
+
+Models (MIT, written for this; register maps from hal_ambiq's `apollo510.h`):
+
+- `WispMspiPanel` — MSPI0 (PIO, DMA, command queue, as hal_ambiq drives them) + a recording panel: logs every transaction with its bus mode (`DEVCFG0/XIPMIXED`: `1/0` serial, `1/5` quad 1-1-4), answers like a healthy JBD4010 or A6N-G, and keeps the frame the pixel writes produce.
+- `WispIom` — IOM0..7 as I2C masters (offset bytes highest first, as the datasheet says) with the G2's devices: nPM1300 register file, ICM-45608 (ID, soft reset, a sample), OPT3007 (IDs, single-shot), PSoC (the command protocol, counts forbidden commands).
+
+What the checker asserts, per panel:
+
+- **Panel:** the exact transaction sequence (opcode or register frame, bus mode, address, length, payload) of power-up, init, blank frame, the full frame, the partial update (JBD: 32 row writes for the 32 changed rows), brightness (values recomputed in Python from stock's formulas), health check; and the frame memory byte for byte against the image computed in Python.
+- **I2C:** the PSoC never received a command outside {1, 3, 4, 5, 6, 8}; the IMU got its ID read, soft reset, INT1 config, ±4 g / 100 Hz, and ends with PWR_MGMT0 = 0; the light sensor starts in shutdown, converts single-shot, never continuous; every PMIC register address has a valid base byte (byte order), BUCK2 3.1 V, LDSW1 1.8 V LDO, the watchdog kick and stop (never a start), BUCK1 on/off around the panel at the variant's voltage, and (JBD) LDSW2 before BUCK1 on and after it off.
+- **UART:** every HAL part came up, every self-test step returned 0, no error or fault.
+- **Negative case:** the same image with the fork's unpatched `i2c_ambiq.c` must fail the PMIC byte-order check.
+
+Result on t3-worker, 2026-11-06: both panels pass (A6N-G 33 panel / 123 I2C transactions, JBD4010 76 / 127), the negative case is rejected (`3404` instead of `0434`). What the models cannot show: timing (every transfer completes at once), GPIO interrupts (the touch report is serviced by a direct call), real panel behaviour beyond the recorded bytes, analog values (battery reads 0 mV).
 
 ## Checks in place
 
@@ -230,5 +277,6 @@ Toward rung 4 (hardware), none of which emulation can answer:
 
 4. Read Wisp Boot's hardware assumptions off the stock image and the glasses: MSPI1 pin mux and clock after the bootloader's hand-off, UART1 state (or build with `WISP_BOOT_LOG=0`), ROM power-up on `MEMPWRSTATUS`, whether the 16 Hz watchdog divider and 8 s window suit the app.
 5. Touchpad rescue hold (PSoC on I2C5 `0x0C`) as a Wisp Boot input.
-6. Zephyr app: keep out of Wisp Boot's RAM (`0x20370000–0x20380000`) in the board DTS, link at `0x448000`, feed the watchdog, confirm after BLE + `HELLO`, clear the flag after confirming (stock does that in its OTA init; until then every boot reinstalls the staged image).
-7. Before M6 (not rung 3): patch the HAL so the EM9305 update/recovery/trim code is compiled out and `apollox_blue.c` forces `skip_fw_update = true`; `CONFIG_WISP_BT_ALLOWED` stays off until `check_rule8.py` passes on that build.
+6. Zephyr app: link at `0x448000`, feed the watchdog, confirm after BLE + `HELLO`, clear the flag after confirming (stock does that in its OTA init; until then every boot reinstalls the staged image). The board's uncached region already stops below Wisp Boot's RAM; `sram0` and the stack still have to be kept out of it.
+7. Drivers still to write: the GX8002 mic path (UART3 control + I2S0 RX, never its firmware), PDM0, the buzzer (TIMER7 PWM), the magnetometer behind the IMU, the NOR littlefs (storage HAL), the inter-temple UART. A GPIO interrupt model in Renode would let the attention and data-ready paths run there too.
+8. Before M6 (not rung 3): patch the HAL so the EM9305 update/recovery/trim code is compiled out and `apollox_blue.c` forces `skip_fw_update = true`; `CONFIG_WISP_BT_ALLOWED` stays off until `check_rule8.py` passes on that build.

@@ -11,7 +11,8 @@ def check(text: str, min_beats: int) -> list[str]:
     errors = []
     for needle in ("*** Booting Zephyr OS build", "*** Wisp native ",
                    "wisp: board wisp_g2, Zephyr ", "image @ 0x438000",
-                   "bluetooth off (safety rule 8)"):
+                   "bluetooth off (safety rule 8)", "wisp: hal power ok", "wisp: hal display ok",
+                   "wisp: hal input ok", "wisp: hal sensors ok"):
         if needle not in text:
             errors.append(f"missing {needle!r}")
     if "FATAL" in text or "fault" in text.lower():
@@ -25,9 +26,11 @@ def check(text: str, min_beats: int) -> list[str]:
         if n != i + 1:
             errors.append(f"heartbeat #{i + 1} numbered {n}")
             break
-        # k_msleep(1000) then print: about 1000 ms apart in virtual time
-        if not (n * 1000 <= t <= n * 1000 + 50 * n):
-            errors.append(f"heartbeat {n} at {t} ms, want {n * 1000}..{n * 1050}")
+        # k_msleep(1000) then print: about 1000 ms apart in virtual time, the first one after
+        # the bring-up (well under a second: touch reset 110 ms, I2C probes)
+        lo, hi = (1000, 1500) if i == 0 else (beats[i - 1][1] + 1000, beats[i - 1][1] + 1050)
+        if not lo <= t <= hi:
+            errors.append(f"heartbeat {n} at {t} ms, want {lo}..{hi}")
             break
     return errors
 
