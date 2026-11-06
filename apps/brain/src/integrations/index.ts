@@ -48,6 +48,8 @@ export interface MailMessage {
   from: string;
   subject: string;
   snippet: string;
+  /** Readable body text (cleaned, cut to a few thousand characters); unread mail carries it for triage. */
+  text?: string;
   receivedAt: number;
   unread?: boolean;
 }

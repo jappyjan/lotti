@@ -1,6 +1,7 @@
 import type { App } from '../app.ts';
 import { MIN, humanLocal } from '../util/clock.ts';
-import { extractJson } from '../util/text.ts';
+import type { MailMessage } from '../integrations/index.ts';
+import { clip, extractJson, mailGist, stripHtml } from '../util/text.ts';
 
 export interface BuiltinJob {
   key: string;
@@ -84,33 +85,20 @@ export const builtinJobs: BuiltinJob[] = [
         done();
         return 'No new mail.';
       }
-      const raw = await app.providers.text(
-        'You triage new mail for the user. Return ONLY JSON: [{"id": string, "important": boolean, "title": string, "summary": string}]. ' +
-          'Important = needs attention soon (personal, deadlines, money, appointments, security). Not important = newsletters, promos, notifications.',
-        msgs
-          .map(
-            (m) =>
-              `id=${m.id}\nfrom=${m.from}\nsubject=${m.subject}\n${m.snippet}`,
-          )
-          .join('\n---\n'),
-      );
-      const j = extractJson(raw);
+      const verdicts = await triageMail(app, msgs);
       let n = 0;
-      if (Array.isArray(j)) {
-        for (const r of j) {
-          if (r?.important && typeof r.id === 'string') {
-            const m = msgs.find((x) => x.id === r.id);
-            app.inbox.create({
-              kind: 'mail',
-              title: String(r.title ?? m?.subject ?? 'Mail'),
-              summary: String(r.summary ?? ''),
-              body: m?.snippet ?? '',
-              sourceRef: `mail:${r.id}`,
-              dedupe: true,
-            });
-            n++;
-          }
-        }
+      for (const v of verdicts) {
+        const m = msgs.find((x) => x.id === v.id);
+        if (!v.important || !m) continue;
+        app.inbox.create({
+          kind: 'mail',
+          title: v.title || m.subject || 'Mail',
+          summary: v.summary,
+          body: mailOriginal(m),
+          sourceRef: `mail:${m.id}`,
+          dedupe: true,
+        });
+        n++;
       }
       done();
       return `${msgs.length} new mail(s), ${n} important.`;
@@ -133,3 +121,69 @@ export const builtinJobs: BuiltinJob[] = [
     },
   },
 ];
+
+/** Words that find what the user told Lotti about mail (senders to skip, topics that matter). */
+const MAIL_MEMORY_QUERY =
+  'mail email e-mail newsletter inbox posteingang absender sender wichtig unwichtig ignore ignorieren';
+
+export interface MailVerdict {
+  id: string;
+  important: boolean;
+  title: string;
+  summary: string;
+}
+
+/** AI text for a one-line screen: plain text only, even when the model echoes markup. */
+const plain = (v: unknown, max: number): string =>
+  clip(stripHtml(String(v ?? '')).replace(/\s+/g, ' ').trim(), max);
+
+/** One AI call: which new mail matters, with a short title and a readable summary for each. */
+export async function triageMail(
+  app: App,
+  msgs: MailMessage[],
+): Promise<MailVerdict[]> {
+  const lang = app.settings.lastLocale() === 'de' ? 'German' : 'English';
+  const notes = app.memory.search(MAIL_MEMORY_QUERY, 8);
+  const raw = await app.providers.text(
+    'You triage new mail for the user and write what they see on their glasses. ' +
+      'Return ONLY JSON, one entry per mail: [{"id": string, "important": boolean, "title": string, "summary": string}].\n' +
+      'important = true only when the user should see it soon: a person writing to them personally, a deadline, ' +
+      'a bill or payment that needs action, an appointment or travel change, a security alert, something they must reply to or do. ' +
+      'important = false for newsletters, marketing, promotions, social media, digests, mailing lists, surveys, ' +
+      'automatic notifications, receipts, order or shipping confirmations that need no action, and anything the user said they do not want.\n' +
+      `title: who and what, at most 40 characters (e.g. "Anna: dinner Friday?"). summary: at most 2 short sentences, at most 160 characters, in ${lang}: ` +
+      'what it is about and what the user should do, with the key facts (dates, times, amounts). ' +
+      'Plain text only: no HTML, markdown, links, greetings or quoted text. Never copy the mail; say it in your own words.' +
+      (notes.length
+        ? '\nWhat the user told you before (use what is about mail, ignore the rest):\n' +
+          notes.map((m) => `- ${m.text}`).join('\n')
+        : ''),
+    msgs
+      .map(
+        (m) =>
+          `id=${m.id}\nfrom=${m.from}\nsubject=${m.subject}\n${mailGist(m.text || m.snippet, 1500)}`,
+      )
+      .join('\n---\n'),
+  );
+  const j = extractJson(raw);
+  if (!Array.isArray(j)) {
+    app.log.warn('mail triage: no JSON list in the answer', clip(raw, 200));
+    return [];
+  }
+  return j
+    .filter((r) => r && typeof r.id === 'string')
+    .map((r) => ({
+      id: r.id,
+      important: r.important === true,
+      title: plain(r.title, 60),
+      summary: plain(r.summary, 240),
+    }));
+}
+
+/** The "Original" of a mail item: sender and the readable text, without links and quoted replies. */
+export function mailOriginal(m: MailMessage): string {
+  const text = mailGist(m.text || m.snippet, 2000);
+  return [`From: ${m.from}`, m.subject && `Subject: ${m.subject}`, text]
+    .filter(Boolean)
+    .join('\n');
+}

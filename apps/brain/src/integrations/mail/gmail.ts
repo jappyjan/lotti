@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import type { App } from '../../app.ts';
-import { stripHtml } from '../../util/text.ts';
+import { decodeEntities, mailText } from '../../util/text.ts';
 import { googleFetch } from '../google/oauth.ts';
 import type { AccountRow, MailFull, MailMessage } from '../index.ts';
 import type { MailBackend, ReplyArgs } from './source.ts';
@@ -17,7 +17,8 @@ function toMessage(acc: AccountRow, m: any): MailMessage {
     id: `${acc.id}:${m.id}`,
     from: header(m, 'From'),
     subject: header(m, 'Subject'),
-    snippet: String(m.snippet ?? ''),
+    // Gmail's snippet is HTML-escaped (&#39;, &amp;).
+    snippet: decodeEntities(String(m.snippet ?? '')),
     receivedAt: Number(m.internalDate ?? 0),
     unread: (m.labelIds ?? []).includes('UNREAD'),
   };
@@ -39,7 +40,12 @@ function bodyOf(part: any): { plain: string; html: string } {
 }
 
 export function gmailBackend(app: App, acc: AccountRow): MailBackend {
-  const list = async (q: string, limit: number): Promise<MailMessage[]> => {
+  /** With `full`, each message comes with its body text (for triage). */
+  const list = async (
+    q: string,
+    limit: number,
+    full = false,
+  ): Promise<MailMessage[]> => {
     const j = await googleFetch(
       app,
       acc.id,
@@ -50,15 +56,26 @@ export function gmailBackend(app: App, acc: AccountRow): MailBackend {
       const m = await googleFetch(
         app,
         acc.id,
-        `${G}/messages/${r.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+        full
+          ? `${G}/messages/${r.id}?format=full`
+          : `${G}/messages/${r.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
       );
-      out.push(toMessage(acc, m));
+      const msg = toMessage(acc, m);
+      if (full) {
+        const b = bodyOf(m.payload);
+        msg.text = (mailText(b.plain, b.html) || msg.snippet).slice(0, 4000);
+      }
+      out.push(msg);
     }
     return out;
   };
   return {
     unread: (since) =>
-      list(`is:unread in:inbox -from:me after:${Math.floor(since / 1000)}`, 25),
+      list(
+        `is:unread in:inbox -from:me after:${Math.floor(since / 1000)}`,
+        25,
+        true,
+      ),
     search: (q, limit) => list(q || 'in:inbox', limit),
     async read(nativeId): Promise<MailFull> {
       const m = await googleFetch(
@@ -70,7 +87,7 @@ export function gmailBackend(app: App, acc: AccountRow): MailBackend {
       return {
         ...toMessage(acc, m),
         to: header(m, 'To'),
-        body: b.plain || stripHtml(b.html) || String(m.snippet ?? ''),
+        body: mailText(b.plain, b.html) || decodeEntities(String(m.snippet ?? '')),
       };
     },
     async reply(nativeId, a: ReplyArgs) {

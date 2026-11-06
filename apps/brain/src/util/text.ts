@@ -34,18 +34,85 @@ export function extractJson(text: string): unknown | undefined {
   return undefined;
 }
 
-export function stripHtml(html: string): string {
-  return html
-    .replace(/<(script|style|noscript)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr)>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/[ \t]+/g, ' ')
-    .replace(/\n\s*\n+/g, '\n')
+const NAMED: Record<string, string> = {
+  nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+  ndash: '–', mdash: '—', hellip: '…', bull: '•', middot: '·',
+  lsquo: '‘', rsquo: '’', sbquo: '‚', ldquo: '“', rdquo: '”', bdquo: '„',
+  laquo: '«', raquo: '»', euro: '€', pound: '£', copy: '©', reg: '®', trade: '™',
+  auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß',
+  eacute: 'é', egrave: 'è', agrave: 'à', aacute: 'á', ccedil: 'ç',
+};
+
+/** `&amp;`, `&#8217;`, `&#x200C;` … → characters. Unknown named entities are dropped. */
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z][a-z0-9]*);/gi, (_, e: string) => {
+    if (e[0] === '#') {
+      const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1));
+      return n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '';
+    }
+    return NAMED[e] ?? NAMED[e.toLowerCase()] ?? '';
+  });
+}
+
+/** Zero-width and other invisible characters that newsletters pad their preview text with. */
+const INVISIBLE =
+  /[­͏؜ᅟᅠ឴឵᠎​-‏‪-‮⁠-⁤⁪-⁯ㅤ﻿ﾠ]/g;
+
+/** Invisible characters out, spaces collapsed, at most one blank line in a row. */
+export function tidyText(s: string): string {
+  return s
+    .replace(INVISIBLE, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t ]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+/** HTML → plain text. Copes with cut-off HTML (an unclosed style block or tag at the end is dropped). */
+export function stripHtml(html: string): string {
+  return tidyText(
+    decodeEntities(
+      html
+        .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+        .replace(/<head[\s>][\s\S]*?(?:<\/head\s*>|$)/gi, ' ')
+        .replace(
+          /<(script|style|noscript|title|template|svg)\b[\s\S]*?(?:<\/\1\s*>|$)/gi,
+          ' ',
+        )
+        .replace(/<br\s*\/?>|<\/(p|div|li|h\d|tr|table|blockquote)\s*>/gi, '\n')
+        .replace(/<[a-z!/?][^>]*(?:>|$)/gi, ' '),
+    ),
+  );
+}
+
+/** Does this "plain text" actually hold HTML markup? (Some senders put HTML in the text part.) */
+export function looksLikeHtml(s: string): boolean {
+  if (/<!doctype html|<html[\s>]/i.test(s)) return true;
+  const tags = s.match(
+    /<\/?(?:body|div|table|tr|td|span|p|br|a|img|style|meta|font|center|b|strong)\b[^>]*>/gi,
+  );
+  return (tags?.length ?? 0) >= 3;
+}
+
+/** The readable text of a mail from its text and HTML parts. */
+export function mailText(text?: string | null, html?: string | null): string {
+  const t = (text ?? '').trim();
+  if (t && !looksLikeHtml(t)) return tidyText(decodeEntities(t));
+  return stripHtml(html || t);
+}
+
+/** Mail text for the AI and the inbox: no quoted replies, no long (tracking) links, no image placeholders. */
+export function mailGist(text: string, max: number): string {
+  return clip(
+    tidyText(
+      text
+        .split('\n')
+        .filter((l) => !/^\s*>/.test(l))
+        .join('\n')
+        .replace(/<?https?:\/\/\S{30,}>?/g, '')
+        .replace(/\[(?:image|bild)[^\]]*\]/gi, ''),
+    ),
+    max,
+  );
 }
