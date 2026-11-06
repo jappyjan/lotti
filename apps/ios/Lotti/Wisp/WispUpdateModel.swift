@@ -44,6 +44,21 @@ final class WispUpdateModel {
     var evenAppAcknowledged = false
     /// Jan types the temple name ("left") — per send.
     var typedTemple = ""
+    /// The last open of this temple was refused because the arm is already connected to the
+    /// phone (`connectedElsewhere`), with Lotti and the Even app closed: iOS itself holds it.
+    private(set) var systemConnectionSeen = false
+    /// "Lotti and the Even app are both closed; iOS itself holds this connection." Applies to the
+    /// next open attempt only (a read, or a send's own open) and the session it creates; reset
+    /// after that attempt, on temple change and when the screen closes. Not a send gate: it
+    /// replaces none of them.
+    var systemConnectionAccepted = false {
+        didSet {
+            guard systemConnectionAccepted != oldValue, !resettingAcceptance else { return }
+            log.add("system connection: user \(systemConnectionAccepted ? "ACCEPTED" : "withdrew acceptance of") "
+                + "iOS's own connection to the \(temple) temple, for the next open only")
+        }
+    }
+    @ObservationIgnored private var resettingAcceptance = false
     private(set) var busy: String?
     private(set) var error: String?
     private(set) var progress: WispOtaEngine.Progress?
@@ -64,6 +79,8 @@ final class WispUpdateModel {
         guard transfer == nil else { return }
         self.access = access
         readback = nil
+        resetSystemAcceptance("temple access changed")
+        systemConnectionSeen = false
     }
 
     // MARK: Derived
@@ -148,8 +165,7 @@ final class WispUpdateModel {
     func readVersion() async {
         await run("Reading the \(temple) temple") {
             let side = temple
-            log.add("read: opening the \(side) temple")
-            let session = try await access.open(side)
+            let session = try await open(side, for: "read")
             defer { session.close() }
             let rb = try await session.readStatus()
             readback = rb
@@ -215,6 +231,7 @@ final class WispUpdateModel {
         guard canSend, let prepared, let digest = preparedSHA256 else {
             let failed = gates.filter { !$0.ok }.map(\.title).joined(separator: ", ")
             log.add("send: refused (\(failed.isEmpty ? "busy" : failed))")
+            resetSystemAcceptance("send refused")
             error = "Not all checks pass: \(failed)."
             return
         }
@@ -228,7 +245,7 @@ final class WispUpdateModel {
         log.add("send: requested to the \(side) temple, bundle SHA-256 \(digest) (\(prepared.info.kind.rawValue) \(prepared.info.toVersion))")
         let session: any WispTempleSession
         do {
-            session = try await access.open(side)
+            session = try await open(side, for: "send")
         } catch {
             fail("send: could not open the \(side) temple: \(error.localizedDescription)")
             return
@@ -310,7 +327,38 @@ final class WispUpdateModel {
         typedTemple = ""
         evenAppAcknowledged = false
         final = nil
+        resetSystemAcceptance("temple changed")
+        systemConnectionSeen = false
         log.add("temple: \(temple) selected")
+    }
+
+    /// The screen went away: no acceptance carries over to a later visit.
+    func screenClosed() {
+        resetSystemAcceptance("screen closed")
+    }
+
+    /// The one place a temple is opened. Uses the system-connection acceptance for exactly this
+    /// attempt and resets it right away, whatever the outcome.
+    private func open(_ side: G2Side, for step: String) async throws -> any WispTempleSession {
+        let accept = systemConnectionAccepted
+        resetSystemAcceptance("used by this \(step)")
+        log.add("\(step): opening the \(side) temple\(accept ? " (system connection accepted by user for this attempt)" : "")")
+        do {
+            let session = try await access.open(side, acceptSystemConnection: accept)
+            if !accept { systemConnectionSeen = false }
+            return session
+        } catch G2ExclusiveArmError.connectedElsewhere(let arm) {
+            systemConnectionSeen = true
+            throw G2ExclusiveArmError.connectedElsewhere(arm)
+        }
+    }
+
+    private func resetSystemAcceptance(_ reason: String) {
+        guard systemConnectionAccepted else { return }
+        resettingAcceptance = true
+        systemConnectionAccepted = false
+        resettingAcceptance = false
+        log.add("system connection: acceptance reset (\(reason))")
     }
 
     private struct Problem: LocalizedError {

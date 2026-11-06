@@ -939,17 +939,30 @@ public enum G2ExclusiveArmError: LocalizedError, Equatable {
         case .unknownArm(let side):
             "The \(side) arm isn't known yet. Connect the glasses in Lotti once so the app learns both arms, then end that session."
         case .connectedElsewhere(let side):
-            "The \(side) arm is already connected to this phone by another app (the Even app?). Force-quit it, wait a few seconds and try again."
+            "The \(side) arm is already connected to this phone by another app (the Even app?) or by iOS itself. Force-quit the Even app, wait a few seconds and try again."
         }
+    }
+
+    /// The system-connection check of `openExclusiveArm`, on its own so it can be tested without
+    /// Bluetooth. `retrieveConnectedPeripherals` can't tell iOS itself (a bonded arm it keeps
+    /// connected, e.g. for notifications) apart from another app, so only the user can accept it,
+    /// per open attempt. Returns whether an existing system connection was accepted.
+    public static func checkSystemConnection(_ side: G2Side, systemConnected: Bool,
+                                             acceptSystemConnection: Bool) throws -> Bool {
+        guard systemConnected else { return false }
+        guard acceptSystemConnection else { throw connectedElsewhere(side) }
+        return true
     }
 }
 
 extension G2Link {
     /// Opens one arm for the Wisp update screen, with nothing else on it: no auth handshake with
     /// the other arm, no heartbeat, no page, no mic. Refuses while a Lotti session is connecting
-    /// or connected, and while the arm is connected to the phone by another app. While open,
-    /// `connect` and scanning are no-ops (`isBusy`).
-    public func openExclusiveArm(_ side: G2Side) async throws -> G2ExclusiveArm {
+    /// or connected, and while the arm is connected to the phone by another app or by iOS, unless
+    /// the user accepted that system connection for this one attempt (`acceptSystemConnection`):
+    /// then it connects on top of it, as the normal session does. While open, `connect` and
+    /// scanning are no-ops (`isBusy`).
+    public func openExclusiveArm(_ side: G2Side, acceptSystemConnection: Bool = false) async throws -> G2ExclusiveArm {
         guard exclusive == nil else { throw G2ExclusiveArmError.alreadyOpen }
         switch status {
         case .disconnected, .failed, .bluetoothUnavailable: break
@@ -960,8 +973,10 @@ extension G2Link {
         guard let id = lastGlasses?.armID(side) else { throw G2ExclusiveArmError.unknownArm(side) }
         await poweredOn()
         let systemConnected = central.retrieveConnectedPeripherals(withServices: Self.connectedServices)
-        if systemConnected.contains(where: { $0.identifier == id }) {
-            throw G2ExclusiveArmError.connectedElsewhere(side)
+        if try G2ExclusiveArmError.checkSystemConnection(
+            side, systemConnected: systemConnected.contains(where: { $0.identifier == id }),
+            acceptSystemConnection: acceptSystemConnection) {
+            log("\(side) arm already connected at system level; accepted by user")
         }
         let session = G2ExclusiveArm(link: self, temple: side)
         exclusive = session  // blocks `connect` from here on
@@ -1083,7 +1098,7 @@ public final class G2TempleAccess: WispTempleAccess {
         }
     }
 
-    public func open(_ side: G2Side) async throws -> any WispTempleSession {
-        try await link.openExclusiveArm(side)
+    public func open(_ side: G2Side, acceptSystemConnection: Bool) async throws -> any WispTempleSession {
+        try await link.openExclusiveArm(side, acceptSystemConnection: acceptSystemConnection)
     }
 }

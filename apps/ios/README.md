@@ -49,7 +49,13 @@ structural diff, and sends it to that one temple with the stock OTA sender, or s
 - **Send gates** (all required, shown as a checklist): guard report sendable, no Lotti glasses session, the
   installed version fits the bundle, battery of that temple above 80 % (unreadable = refused), the Even app
   acknowledged as force-quit, and the temple name typed (`left`). Right before sending the temple is read
-  again on the same connection. The acknowledgement and the typed name are used up by each send. One temple
+  again on the same connection. The acknowledgement and the typed name are used up by each send.
+- **iOS holds the arm.** `openExclusiveArm` refuses an arm that is already connected to the phone
+  (`connectedElsewhere`): CoreBluetooth can't tell iOS's own connection to a bonded arm from another app's.
+  After such a refusal the screen offers a confirmation toggle ("iOS itself holds this connection"); with it on,
+  the next open (`acceptSystemConnection: true`) connects on top, as a normal Lotti session does. It covers that
+  one open attempt only (a read, or the send's own open), resets on temple change, after each send and when the
+  screen closes, and is logged with its time. It is not a gate and replaces none. One temple
   per send; there is no "both".
 - **While sending** the screen keeps the phone awake and hides Back. Abort works until RESULT_CHECK (the
   sender refuses later). The end state is **Success** (staged; the temple resets and installs it),
@@ -68,17 +74,23 @@ structural diff, and sends it to that one temple with the stock OTA sender, or s
 4. Settings → Developer → turn on **Wisp update screen** → **Wisp update (rung 1)**. Temple: **Left**.
 5. **Read version and battery.** Note the version. If the read fails, stop: the left arm didn't answer the
    settings query, and the screen won't send without a battery reading.
+   **Exception, "already connected to this phone":** with Lotti and the Even app both closed, iOS itself holds
+   the bonded arm (Settings → Bluetooth shows the glasses as **Connected**). Check that, then turn on "Lotti and
+   the Even app are both closed. iOS itself holds this connection" and **Retry read**. The toggle covers that one
+   open only and turns itself off; it also resets on temple change and when the screen closes, and is logged.
+   It replaces no send gate.
 6. **Get stock <version>** (needs internet). It must say "Pinned ✓ matches the catalog".
 7. **Repack for rung 1** (default: last digit changed, e.g. 2.2.6.10 → 2.2.6.19). The guard report must say
    **SENDABLE**; open the diff: only the version strings and the CRCs.
 8. Jan gives the "go" in chat for this flash (rule 4).
-9. Turn on the Even-app acknowledgement, type `left`, **Send to the left temple**. Keep Lotti in the foreground
+9. Turn on the Even-app acknowledgement, type `left` (and, if step 5 needed it, the iOS-connection toggle
+   again: the send opens its own connection), **Send to the left temple**. Keep Lotti in the foreground
    and the phone next to the glasses until the result shows.
 10. **Success:** wait about 2 minutes, then **Read version**: it must show the repack version. Check the temple
     boots, advertises and the Even app works (then force-quit it again).
     **Failed, stock intact:** read the version (unchanged), export the log, report.
     **Result unknown:** touch nothing for 3 minutes, then read the version and report.
 11. Round trip: **Read version** (shows the repack, stock base known) → **Get stock** → **Prepare pure stock** →
-    a new "go" → acknowledgement, `left` → **Send**. After 2 minutes **Read version** must show stock again.
+    a new "go" → acknowledgement, `left` (iOS-connection toggle before each read and send if needed) → **Send**. After 2 minutes **Read version** must show stock again.
 12. **Export log**, add the rows to the hardware log in safety.md, turn the developer setting off again.
     The right temple stays on stock until the left one has passed this round trip (rule 5).

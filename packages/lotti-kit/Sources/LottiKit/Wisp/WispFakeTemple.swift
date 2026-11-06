@@ -18,6 +18,11 @@ public final class WispFakeTempleAccess: WispTempleAccess {
     /// False makes `readStatus` time out, like an arm that never answers.
     public var answersStatus = true
     public var blocker: String?
+    /// Arms the simulated phone already holds at system level (iOS's own connection): `open`
+    /// refuses them with `connectedElsewhere` unless the attempt accepts it, like `G2Link`.
+    public var systemConnected: Set<G2Side> = []
+    /// Every `open` attempt and whether it accepted a system connection, for tests.
+    public private(set) var openAttempts: [(side: G2Side, acceptSystemConnection: Bool)] = []
     /// Fault options for the next temple (wisp-ota-jsc `FaultSpec`), e.g. `["dropVerdict": true]`.
     public var faults: [String: Any] = [:]
     public var restartDelayMs = 50
@@ -52,8 +57,11 @@ public final class WispFakeTempleAccess: WispTempleAccess {
         versions[crc32c.lowercased()] = version
     }
 
-    public func open(_ side: G2Side) async throws -> any WispTempleSession {
+    public func open(_ side: G2Side, acceptSystemConnection: Bool) async throws -> any WispTempleSession {
+        openAttempts.append((side, acceptSystemConnection))
         if let blocker { throw WispSessionError.blocked(blocker) }
+        _ = try G2ExclusiveArmError.checkSystemConnection(side, systemConnected: systemConnected.contains(side),
+                                                          acceptSystemConnection: acceptSystemConnection)
         let id = temples[side] ?? createTemple(side)
         temples[side] = id
         let session = WispFakeTempleSession(access: self, templeID: id, temple: side)

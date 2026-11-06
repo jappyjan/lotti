@@ -65,7 +65,10 @@ struct WispUpdateScreen: View {
         .font(.subheadline)
         .navigationBarBackButtonHidden(model.isSending)
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
-        .onDisappear { if !model.isSending { UIApplication.shared.isIdleTimerDisabled = false } }
+        .onDisappear {
+            model.screenClosed()
+            if !model.isSending { UIApplication.shared.isIdleTimerDisabled = false }
+        }
         .scrollDismissesKeyboard(.interactively)
     }
 
@@ -110,6 +113,15 @@ struct WispUpdateScreen: View {
                 Label("Read version and battery", systemImage: "info.circle")
             }
             .disabled(model.busy != nil || model.isSending)
+            if model.systemConnectionSeen {
+                systemConnection
+                Button {
+                    Task { await model.readVersion() }
+                } label: {
+                    Label("Retry read", systemImage: "arrow.clockwise")
+                }
+                .disabled(model.busy != nil || model.isSending)
+            }
             if let rb = model.readback {
                 LabeledContent("\(model.temple.rawValue.capitalized) version", value: rb.version(of: model.temple) ?? "–")
                 LabeledContent("Battery", value: rb.battery.map { "\($0) %\(rb.charging ? " (charging)" : "")" } ?? "unreadable")
@@ -197,6 +209,9 @@ struct WispUpdateScreen: View {
                     }
                 }
             }
+            if model.systemConnectionSeen {
+                systemConnection
+            }
             Toggle(isOn: $model.evenAppAcknowledged) {
                 Text("The Even app is force-quit and won't reconnect during the update")
             }
@@ -233,6 +248,20 @@ struct WispUpdateScreen: View {
         } footer: {
             Text("Right before sending, the temple is read again on the same connection: battery and version must still pass. Abort works only until RESULT_CHECK.")
         }
+    }
+
+    /// Shown after an open was refused because the arm is already connected to the phone. The
+    /// toggle is for the next open attempt only (a read, or the send's own open).
+    @ViewBuilder private var systemConnection: some View {
+        Text("The \(model.temple.rawValue) arm is already connected to this phone. If Lotti and the Even app are both closed, iOS itself holds the connection (Settings → Bluetooth shows the glasses as Connected), and Lotti can connect on top of it.")
+            .foregroundStyle(.orange)
+        Toggle(isOn: $model.systemConnectionAccepted) {
+            Text("Lotti and the Even app are both closed. iOS itself holds this connection (Settings → Bluetooth shows it as Connected).")
+        }
+        .disabled(model.isSending || model.busy != nil)
+        Text("Applies to the next open only (one read, or one send), then turns off again.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 
     private var progressView: some View {

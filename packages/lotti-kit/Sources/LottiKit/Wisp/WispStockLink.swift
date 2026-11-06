@@ -36,5 +36,14 @@ public protocol WispTempleSession: WispStockLink {
 public protocol WispTempleAccess: AnyObject {
     /// Why a session can't be opened right now (e.g. a Lotti glasses session is running), or nil.
     var blocker: String? { get }
-    func open(_ side: G2Side) async throws -> any WispTempleSession
+    /// `acceptSystemConnection`: the user confirmed, for this one attempt, that the arm's existing
+    /// connection to the phone is iOS's own (see `G2ExclusiveArmError.connectedElsewhere`).
+    func open(_ side: G2Side, acceptSystemConnection: Bool) async throws -> any WispTempleSession
+}
+
+extension WispTempleAccess {
+    /// Opens without accepting a system connection.
+    public func open(_ side: G2Side) async throws -> any WispTempleSession {
+        try await open(side, acceptSystemConnection: false)
+    }
 }
