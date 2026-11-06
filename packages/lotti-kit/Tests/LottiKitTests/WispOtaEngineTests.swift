@@ -101,7 +101,8 @@ struct WispOtaEngineTests {
         #expect(progress.contains { $0.state == "file" && $0.bytesAcked == $0.totalBytes })
         try await Task.sleep(for: .milliseconds(150))  // the fake resets 20 ms after NOTIFY
         #expect(fake.state(.left)?.installed.name == "staged image")
-        let session = try await fake.open(.left)
+        // Status comes from the right arm, which reports both temples.
+        let session = try await fake.open(.right)
         #expect(try await session.readStatus().leftVersion == "2.2.6.19")
         session.close()
 
@@ -110,7 +111,9 @@ struct WispOtaEngineTests {
         let (second, _, _) = try await send(back.bytes)
         #expect(second == .success(version: "2.2.6.10", restartNotified: true))
         try await Task.sleep(for: .milliseconds(150))
-        #expect(try await fake.open(.left).readStatus().leftVersion == "2.2.6.10")
+        let again = try await fake.open(.right)
+        #expect(try await again.readStatus().leftVersion == "2.2.6.10")
+        again.close()
     }
 
     @Test func abortBeforeResultCheckLeavesStockIntact() async throws {

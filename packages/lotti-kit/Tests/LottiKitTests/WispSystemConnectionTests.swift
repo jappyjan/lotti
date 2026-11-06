@@ -39,11 +39,42 @@ struct WispSystemConnectionTests {
             _ = try await access.open(.left, acceptSystemConnection: false)
         }
         let session = try await access.open(.left, acceptSystemConnection: true)
-        #expect(try await session.readStatus().leftVersion == "2.2.6.10")
+        #expect(access.openArms == [.left])
         session.close()
         // The other temple isn't system-connected: opens without the flag.
         try await access.open(.right).close()
         #expect(access.openAttempts.map(\.acceptSystemConnection) == [false, false, true, false])
+    }
+
+    // MARK: The fake behaves like the real glasses (hardware.md, 2026-11-06)
+
+    @Test func fakeLeftArmIgnoresTheStatusRead() async throws {
+        let access = try fake()
+        let left = try await access.open(.left)
+        await #expect(throws: GlassesLinkError.self) { _ = try await left.readStatus() }
+        left.close()
+    }
+
+    @Test func fakeRightArmReportsBothTemples() async throws {
+        let access = try fake()
+        access.battery = 94
+        let right = try await access.open(.right)
+        let rb = try await right.readStatus()
+        right.close()
+        #expect(rb.leftVersion == "2.2.6.10" && rb.rightVersion == "2.2.6.10" && rb.battery == 94)
+        #expect(access.events == ["open right", "read right", "close right"])
+    }
+
+    @Test func fakeOpensOneArmAtATimeLikeG2Link() async throws {
+        let access = try fake()
+        let right = try await access.open(.right)
+        await #expect(throws: G2ExclusiveArmError.alreadyOpen) { _ = try await access.open(.left) }
+        #expect(access.openArms == [.right])
+        right.close()
+        let left = try await access.open(.left)
+        #expect(access.openArms == [.left])
+        left.close()
+        #expect(access.openArms.isEmpty)
     }
 
     @Test func acceptanceDoesNotPassTheSessionBlocker() async throws {

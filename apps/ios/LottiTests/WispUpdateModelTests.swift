@@ -66,6 +66,12 @@ struct WispUpdateModelTests {
 
     private func gate(_ id: String) -> WispUpdateModel.Gate? { model.gates.first { $0.id == id } }
 
+    /// OTA packets the left temple has received (0 when it was never opened).
+    private var leftPackets: Int { fake.state(.left)?.packetsWritten ?? 0 }
+
+    /// The fake's arm events since `start`.
+    private func events(since start: Int) -> [String] { Array(fake.events.dropFirst(start)) }
+
     @Test func developerSettingIsOffByDefaultAndLeftIsTheDefaultTemple() {
         UserDefaults.standard.removeObject(forKey: Settings.wispUpdateKey)
         #expect(Settings.wispUpdateEnabled == false)
@@ -78,7 +84,106 @@ struct WispUpdateModelTests {
         #expect(model.readback?.battery == 95)
         #expect(model.stockVersion == "2.2.6.10")
         #expect(model.rung1Version == "2.2.6.19")
-        #expect(fake.state(.left)?.packetsWritten == 0)  // reading sends no OTA packet
+        #expect(leftPackets == 0)  // reading sends no OTA packet
+        #expect(fake.state(.right)?.packetsWritten == 0)
+    }
+
+    // MARK: Status via the right arm (the left arm ignores sid 0x09)
+
+    @Test func readGoesThroughTheRightArmOnly() async {
+        await model.readVersion()
+        #expect(fake.events == ["open right", "read right", "close right"])
+        #expect(fake.openAttempts.map(\.side) == [.right])
+        #expect(fake.openArms.isEmpty)
+        #expect(logText.contains("read (status): sending sid 0x09 READ_BASIC to the right temple"))
+        #expect(logText.contains("read (status): the right temple closed"))
+        #expect(gate("battery")?.title == "Battery (as reported by the right temple) above 80 %")
+    }
+
+    @Test func readFailsWhenTheRightArmDoesNotAnswer() async {
+        fake.statusArms = [.left]  // only the left would answer: the screen never asks it
+        await model.readVersion()
+        #expect(model.readback == nil && model.error != nil)
+        #expect(fake.events == ["open right", "read right", "close right"])
+        #expect(fake.openArms.isEmpty)
+    }
+
+    @Test func versionIsPickedPerTarget() async throws {
+        // Put a different image on the left temple only.
+        let other = try model.engine.prepareRung1(stock: stock, version: "2.2.6.18")
+        fake.register(crc32c: other.info.mainCrc32c, version: "2.2.6.18")
+        let link = try await fake.open(.left)
+        let outcome: WispOtaEngine.Outcome = await withCheckedContinuation { c in
+            _ = try? model.engine.startTransfer(temple: .left, bundle: other.bytes, link: link, timing: Self.timing,
+                                                onProgress: { _ in }, onFinished: { c.resume(returning: $0) })
+        }
+        link.close()
+        guard case .success = outcome else { Issue.record("setup: \(outcome)"); return }
+        try await Task.sleep(for: .milliseconds(150))
+
+        await model.readVersion()
+        #expect(model.installedVersion == "2.2.6.18")
+        model.temple = .right
+        await model.readVersion()
+        #expect(model.installedVersion == "2.2.6.10")
+        #expect(fake.openAttempts.dropFirst().allSatisfy { $0.side == .right })  // both reads via right
+    }
+
+    @Test func leftSendReReadsViaRightThenOpensLeftNeverBoth() async {
+        await readyRung1()
+        #expect(model.canSend)
+        let start = fake.events.count
+        await model.send()
+        #expect(model.isSending, "\(String(describing: model.error))")
+        #expect(events(since: start) == ["open right", "read right", "close right", "open left"])
+        #expect(fake.openArms == [.left])
+        let log = logText
+        for line in ["send (status): opening the right temple exclusively", "send (status): sending sid 0x09 READ_BASIC",
+                     "send (status): the right temple closed", "send: re-read via the right temple: left version 2.2.6.10",
+                     "send: opening the left temple exclusively", "send: the left temple is open", "send: transfer started"] {
+            #expect(log.contains(line), "\(line)")
+        }
+        await waitForResult()
+        guard case .success = model.final else { Issue.record("\(String(describing: model.final))"); return }
+        #expect(fake.state(.right)?.packetsWritten == 0)  // nothing ever went to the right temple
+        #expect(!fake.events.contains { $0.hasPrefix("refused") })  // never two arms at once
+    }
+
+    @Test func leftSendRefusedWhenTheRightReReadFails() async {
+        await readyRung1()
+        fake.statusArms = []
+        let start = fake.events.count
+        await model.send()
+        #expect(model.error?.contains("re-read via the right temple failed") == true)
+        #expect(events(since: start) == ["open right", "read right", "close right"])  // left never opened
+        #expect(leftPackets == 0 && model.final == nil)
+    }
+
+    @Test func leftSendRefusedOnTheRightReReadsBatteryBeforeOpeningLeft() async {
+        await readyRung1()
+        fake.battery = 80
+        let start = fake.events.count
+        await model.send()
+        #expect(model.error?.contains("as reported by the right temple") == true)
+        #expect(!events(since: start).contains("open left"))
+        #expect(leftPackets == 0)
+    }
+
+    @Test func rightSendReadsAndSendsOnTheRightArm() async {
+        model.temple = .right
+        await model.readVersion()
+        await model.fetchStock()
+        await model.prepareRung1()
+        model.evenAppAcknowledged = true
+        model.typedTemple = "right"
+        #expect(model.canSend, "\(model.gates.filter { !$0.ok })")
+        let start = fake.events.count
+        await model.send()
+        #expect(model.isSending)
+        #expect(events(since: start) == ["open right", "read right"])  // same connection for the send
+        await waitForResult()
+        guard case .success = model.final else { Issue.record("\(String(describing: model.final))"); return }
+        #expect(!fake.events.contains { $0.contains("left") })
     }
 
     @Test func fullRung1SendAndRoundTripBack() async throws {
@@ -126,7 +231,7 @@ struct WispUpdateModelTests {
         model.typedTemple = "Left"
         await model.send()
         #expect(model.final == nil && !model.isSending)
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
     }
 
     @Test func refusesWithoutTheEvenAppAcknowledgement() async {
@@ -155,7 +260,7 @@ struct WispUpdateModelTests {
         await model.send()
         #expect(model.error?.contains("79 %") == true)
         #expect(model.final == nil)
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
     }
 
     @Test func refusesWhenTheTempleDoesNotAnswer() async {
@@ -163,7 +268,7 @@ struct WispUpdateModelTests {
         fake.answersStatus = false
         await model.send()
         #expect(model.error != nil)
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
     }
 
     @Test func refusesWhileALottiSessionIsActive() async {
@@ -198,13 +303,16 @@ struct WispUpdateModelTests {
             _ = try? model.engine.startTransfer(temple: .left, bundle: other.bytes, link: link, timing: Self.timing,
                                                 onProgress: { _ in }, onFinished: { c.resume(returning: $0) })
         }
+        link.close()
         guard case .success = outcome else { Issue.record("setup: \(outcome)"); return }
         try await Task.sleep(for: .milliseconds(150))
         model.typedTemple = "left"
         model.evenAppAcknowledged = true
-        await model.send()  // re-read says 2.2.6.18, repack is built from 2.2.6.10
+        let start = fake.events.count
+        await model.send()  // the right arm's re-read says the left runs 2.2.6.18, repack is built from 2.2.6.10
         #expect(model.error?.contains("2.2.6.18") == true)
         #expect(model.final == nil)
+        #expect(!events(since: start).contains("open left"))
     }
 
     @Test func switchingTempleClearsTheReadAndConfirmations() async {
@@ -258,7 +366,7 @@ struct WispUpdateModelTests {
     private var logText: String { model.log.entries.map(\.text).joined(separator: "\n") }
 
     @Test func systemConnectedArmIsRefusedByDefault() async {
-        fake.systemConnected = [.left]
+        fake.systemConnected = [.right]
         await model.readVersion()
         #expect(model.readback == nil)
         #expect(model.error?.contains("iOS") == true)
@@ -268,7 +376,7 @@ struct WispUpdateModelTests {
     }
 
     @Test func acceptedSystemConnectionPassesForOneAttemptOnly() async {
-        fake.systemConnected = [.left]
+        fake.systemConnected = [.right]
         await model.readVersion()
         model.systemConnectionAccepted = true
         await model.readVersion()  // the retry
@@ -277,7 +385,7 @@ struct WispUpdateModelTests {
         #expect(!model.systemConnectionAccepted)  // used up by that attempt
         #expect(model.systemConnectionSeen)  // still shown, for the send
         #expect(fake.openAttempts.map(\.acceptSystemConnection) == [false, true])
-        #expect(logText.contains("user ACCEPTED iOS's own connection to the left temple"))
+        #expect(logText.contains("user ACCEPTED iOS's own connection to the right and left arms"))
         #expect(logText.contains("acceptance reset (used by this read)"))
         // Every log line carries its timestamp.
         let line = model.log.entries.first { $0.text.contains("user ACCEPTED") }?.text ?? ""
@@ -301,7 +409,7 @@ struct WispUpdateModelTests {
     }
 
     @Test func closingTheScreenResetsTheAcceptance() async {
-        fake.systemConnected = [.left]
+        fake.systemConnected = [.right]
         await model.readVersion()
         model.systemConnectionAccepted = true
         model.screenClosed()
@@ -309,9 +417,9 @@ struct WispUpdateModelTests {
         #expect(logText.contains("acceptance reset (screen closed)"))
     }
 
-    /// Steps 1–3 with a system-connected left arm, accepted for the read.
+    /// Steps 1–3 with both arms system-connected, accepted for the read (the right arm's open).
     private func readySystemConnected() async {
-        fake.systemConnected = [.left]
+        fake.systemConnected = [.left, .right]
         await model.readVersion()
         model.systemConnectionAccepted = true
         await model.readVersion()
@@ -325,18 +433,22 @@ struct WispUpdateModelTests {
         await readySystemConnected()
         #expect(model.readback != nil)
         #expect(model.canSend)  // the acceptance is not a gate…
-        await model.send()  // …but the send's own open is refused without it
-        #expect(model.error?.contains("could not open") == true)
+        await model.send()  // …but the send's opens are refused without it
+        #expect(model.error?.contains("re-read via the right temple failed") == true)
         #expect(!model.isSending && model.final == nil)
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
 
         model.evenAppAcknowledged = true
         model.typedTemple = "left"
         model.systemConnectionAccepted = true
+        let attempts = fake.openAttempts.count
         await model.send()
         #expect(model.isSending)
         #expect(!model.systemConnectionAccepted)  // reset after the send
-        #expect(fake.openAttempts.last?.acceptSystemConnection == true)
+        // One acceptance covers both opens of this send: the right re-read, then the left.
+        #expect(fake.openAttempts.dropFirst(attempts).map(\.side) == [.right, .left])
+        #expect(fake.openAttempts.dropFirst(attempts).allSatisfy { $0.acceptSystemConnection })
+        #expect(logText.contains("covers the right and left arms"))
         #expect(logText.contains("acceptance reset (used by this send)"))
         await waitForResult()
         guard case .success = model.final else { Issue.record("\(String(describing: model.final))"); return }
@@ -365,7 +477,7 @@ struct WispUpdateModelTests {
             #expect(!model.isSending)
         }
         fake.blocker = nil
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
     }
 
     @Test func acceptanceDoesNotReplaceTheBatteryOrVersionReRead() async throws {
@@ -375,10 +487,23 @@ struct WispUpdateModelTests {
         await model.send()
         #expect(model.error?.contains("79 %") == true)
         #expect(model.final == nil)
-        #expect(fake.state(.left)?.packetsWritten == 0)
+        #expect(leftPackets == 0)
         // Below 80 % the battery gate itself now fails.
         model.evenAppAcknowledged = true
         model.typedTemple = "left"
         #expect(gate("battery")?.ok == false && !model.canSend)
+    }
+
+    @Test func leftOnlySystemConnectionIsFoundAtTheSendsLeftOpen() async {
+        fake.systemConnected = [.left]
+        await readyRung1()  // the read only opens the right arm: no acceptance needed
+        #expect(model.readback != nil && !model.systemConnectionSeen)
+        let start = fake.events.count
+        await model.send()
+        #expect(model.error?.contains("could not open the left temple") == true)
+        #expect(events(since: start) == ["open right", "read right", "close right",
+                                         "refused left: \(G2ExclusiveArmError.connectedElsewhere(.left).localizedDescription)"])
+        #expect(model.systemConnectedArms == [.left])
+        #expect(leftPackets == 0 && !model.isSending)
     }
 }

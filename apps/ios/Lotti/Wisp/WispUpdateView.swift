@@ -40,7 +40,7 @@ struct WispUpdateView: View {
     static func access(for app: AppModel) throws -> any WispTempleAccess {
         #if targetEnvironment(simulator)
         // No Bluetooth in the Simulator: wisp-ota's fake stock temple (Simulator builds only).
-        if let fake = try? WispFakeTempleAccess(bundle: .main, stockVersion: "2.2.6.10") { return fake }
+        if let fake = try? WispFakeTempleAccess(bundle: .main, stockVersion: "2.4.0.24") { return fake }
         #endif
         guard let link = app.link as? G2Link else { throw WispOtaEngine.EngineError.javaScript("No G2 link in this build.") }
         return G2TempleAccess(link: link)
@@ -124,7 +124,7 @@ struct WispUpdateScreen: View {
             }
             if let rb = model.readback {
                 LabeledContent("\(model.temple.rawValue.capitalized) version", value: rb.version(of: model.temple) ?? "–")
-                LabeledContent("Battery", value: rb.battery.map { "\($0) %\(rb.charging ? " (charging)" : "")" } ?? "unreadable")
+                LabeledContent("Battery (as reported by the right temple)", value: rb.battery.map { "\($0) %\(rb.charging ? " (charging)" : "")" } ?? "unreadable")
                 if let stock = model.stockVersion {
                     LabeledContent("Stock base", value: stock)
                 }
@@ -132,7 +132,7 @@ struct WispUpdateScreen: View {
         } header: {
             Text("1 · Read")
         } footer: {
-            Text("Read-only: opens only this arm, asks for its settings (sid 0x09), closes it again.")
+            Text("Read-only: opens only the right arm, asks for its settings (sid 0x09), closes it again. The right arm reports both temples' versions and one battery value; the left arm doesn't answer this read.")
         }
     }
 
@@ -246,20 +246,22 @@ struct WispUpdateScreen: View {
         } header: {
             Text("4 · Send")
         } footer: {
-            Text("Right before sending, the temple is read again on the same connection: battery and version must still pass. Abort works only until RESULT_CHECK.")
+            Text("Right before sending, the status is read again through the right arm: battery and version must still pass. For the left temple the right arm is closed again before the left arm is opened; never both at once. Abort works only until RESULT_CHECK.")
         }
     }
 
     /// Shown after an open was refused because the arm is already connected to the phone. The
-    /// toggle is for the next open attempt only (a read, or the send's own open).
+    /// toggle is for the next attempt only: one read (right arm), or one send (right arm for the
+    /// re-read, then the target arm).
     @ViewBuilder private var systemConnection: some View {
-        Text("The \(model.temple.rawValue) arm is already connected to this phone. If Lotti and the Even app are both closed, iOS itself holds the connection (Settings → Bluetooth shows the glasses as Connected), and Lotti can connect on top of it.")
+        let arms = model.systemConnectedArms.map(\.rawValue).sorted()
+        Text("The \(arms.joined(separator: " and ")) \(arms.count > 1 ? "arms are" : "arm is") already connected to this phone. If Lotti and the Even app are both closed, iOS itself holds the connection (Settings → Bluetooth shows the glasses as Connected), and Lotti can connect on top of it.")
             .foregroundStyle(.orange)
         Toggle(isOn: $model.systemConnectionAccepted) {
             Text("Lotti and the Even app are both closed. iOS itself holds this connection (Settings → Bluetooth shows it as Connected).")
         }
         .disabled(model.isSending || model.busy != nil)
-        Text("Applies to the next open only (one read, or one send), then turns off again.")
+        Text("Applies to the next attempt only, then turns off again: one read (opens the right arm), or one send (opens the right arm for the re-read, closes it, then opens the \(model.temple.rawValue) arm).")
             .font(.caption)
             .foregroundStyle(.secondary)
     }

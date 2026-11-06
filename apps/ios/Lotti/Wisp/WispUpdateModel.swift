@@ -7,6 +7,10 @@ import Observation
 /// guard report, and send it to that one temple with wisp-ota's stock OTA sender — or send pure
 /// stock back. The guards and the sender run in JavaScriptCore (`WispOtaEngine`); this model only
 /// sequences the steps and holds the gates. Every step is logged with its SHA-256s.
+///
+/// Status (sid 0x09 READ_BASIC) is always read through the right arm: it is the master and reports
+/// both temples' versions plus one battery value; the left arm doesn't answer it (hardware.md,
+/// 2026-11-06). The send goes only to the chosen temple. Only one arm is ever open at a time.
 @MainActor
 @Observable
 final class WispUpdateModel {
@@ -17,8 +21,12 @@ final class WispUpdateModel {
         case resultUnknown(String)
     }
 
-    /// Battery must be above this, on the temple being flashed (safety.md rule 6).
+    /// Battery must be above this (safety.md rule 6). Checked against the one battery value the
+    /// right temple reports; whether it is per pair or the right arm's own is unknown.
     static let minimumBattery = 80
+
+    /// The arm that answers the status read (sid 0x09).
+    static let statusArm: G2Side = .right
 
     // MARK: Dependencies
 
@@ -44,18 +52,20 @@ final class WispUpdateModel {
     var evenAppAcknowledged = false
     /// Jan types the temple name ("left") — per send.
     var typedTemple = ""
-    /// The last open of this temple was refused because the arm is already connected to the
-    /// phone (`connectedElsewhere`), with Lotti and the Even app closed: iOS itself holds it.
-    private(set) var systemConnectionSeen = false
-    /// "Lotti and the Even app are both closed; iOS itself holds this connection." Applies to the
-    /// next open attempt only (a read, or a send's own open) and the session it creates; reset
-    /// after that attempt, on temple change and when the screen closes. Not a send gate: it
-    /// replaces none of them.
+    /// Arms whose last open was refused because they are already connected to the phone
+    /// (`connectedElsewhere`), with Lotti and the Even app closed: iOS itself holds them.
+    private(set) var systemConnectedArms: Set<G2Side> = []
+    var systemConnectionSeen: Bool { !systemConnectedArms.isEmpty }
+    /// "Lotti and the Even app are both closed; iOS itself holds these connections." Applies to the
+    /// next attempt only: one read (the right arm's open), or one send (the right arm's open for
+    /// the re-read, then the target arm's open for the send), and the sessions they create. Reset
+    /// as soon as that attempt starts, on temple change and when the screen closes. Not a send
+    /// gate: it replaces none of them.
     var systemConnectionAccepted = false {
         didSet {
             guard systemConnectionAccepted != oldValue, !resettingAcceptance else { return }
             log.add("system connection: user \(systemConnectionAccepted ? "ACCEPTED" : "withdrew acceptance of") "
-                + "iOS's own connection to the \(temple) temple, for the next open only")
+                + "iOS's own connection to \(armsText(for: temple)), for the next read or send only")
         }
     }
     @ObservationIgnored private var resettingAcceptance = false
@@ -80,7 +90,7 @@ final class WispUpdateModel {
         self.access = access
         readback = nil
         resetSystemAcceptance("temple access changed")
-        systemConnectionSeen = false
+        systemConnectedArms = []
     }
 
     // MARK: Derived
@@ -123,10 +133,10 @@ final class WispUpdateModel {
 
     private func batteryProblem(_ readback: G2Settings.Readback?) -> String? {
         guard let battery = readback?.battery else {
-            return "The \(temple) temple's battery is unreadable: refusing."
+            return "The battery (as reported by the right temple) is unreadable: refusing."
         }
         if battery <= Self.minimumBattery {
-            return "The \(temple) temple's battery is \(battery) %, it must be above \(Self.minimumBattery) %."
+            return "The battery (as reported by the right temple) is \(battery) %, it must be above \(Self.minimumBattery) %."
         }
         return nil
     }
@@ -149,7 +159,7 @@ final class WispUpdateModel {
             Gate(id: "version", title: "Installed version matches the bundle",
                  ok: prepared.map { versionProblem(installed: installedVersion, for: $0) == nil } ?? false,
                  detail: prepared.flatMap { versionProblem(installed: installedVersion, for: $0) }),
-            Gate(id: "battery", title: "\(temple.rawValue.capitalized) battery above \(Self.minimumBattery) %",
+            Gate(id: "battery", title: "Battery (as reported by the right temple) above \(Self.minimumBattery) %",
                  ok: batteryProblem(readback) == nil,
                  detail: readback == nil ? "Read the temple first." : batteryProblem(readback)),
             Gate(id: "even", title: "Even app force-quit (acknowledged)", ok: evenAppAcknowledged, detail: nil),
@@ -161,17 +171,18 @@ final class WispUpdateModel {
 
     // MARK: Steps
 
-    /// Step 1: read-only. Opens the temple, sid 0x09 READ, closes it again.
+    /// Step 1: read-only. Opens the right arm, sid 0x09 READ, closes it again. The reply carries
+    /// both temples' versions; the screen uses the selected temple's.
     func readVersion() async {
-        await run("Reading the \(temple) temple") {
+        await run("Reading via the right temple") {
             let side = temple
-            let session = try await open(side, for: "read")
-            defer { session.close() }
-            let rb = try await session.readStatus()
+            let accept = takeSystemAcceptance(for: "read")
+            let rb = try await readStatusViaRight(for: "read", accept: accept)
             readback = rb
             readAt = .now
-            log.add("read: \(side) temple reports left \(rb.leftVersion ?? "–"), right \(rb.rightVersion ?? "–"), "
-                + "battery \(rb.battery.map { "\($0) %" } ?? "unreadable")\(rb.charging ? " (charging)" : "")")
+            log.add("read: right temple reports left \(rb.leftVersion ?? "–"), right \(rb.rightVersion ?? "–"), "
+                + "battery (as reported by the right temple) \(rb.battery.map { "\($0) %" } ?? "unreadable")"
+                + "\(rb.charging ? " (charging)" : ""); the \(side) temple's version is \(rb.version(of: side) ?? "–")")
             if let version = stockVersion, rung1Version.isEmpty || prepared == nil {
                 rung1Version = (try? engine.defaultRung1Version(version)) ?? ""
             }
@@ -225,8 +236,10 @@ final class WispUpdateModel {
             + (p.info.versionSites.isEmpty ? "" : ", \(p.info.versionSites.count) version strings changed"))
     }
 
-    /// Step 4. Re-reads the temple on the same connection right before sending: the battery and
-    /// the version must still pass. The typed confirmation and the acknowledgement are used up.
+    /// Step 4. Re-reads the status through the right arm right before sending: the battery and the
+    /// target's version must still pass. For a right send that is the same connection the send
+    /// uses; for a left send the right arm is closed again before the left arm is opened. The
+    /// typed confirmation, the acknowledgement and the system-connection acceptance are used up.
     func send() async {
         guard canSend, let prepared, let digest = preparedSHA256 else {
             let failed = gates.filter { !$0.ok }.map(\.title).joined(separator: ", ")
@@ -241,26 +254,54 @@ final class WispUpdateModel {
         final = nil
         progress = nil
         error = nil
-        busy = "Opening the \(side) temple"
         log.add("send: requested to the \(side) temple, bundle SHA-256 \(digest) (\(prepared.info.kind.rawValue) \(prepared.info.toVersion))")
+        let accept = takeSystemAcceptance(for: "send")
         let session: any WispTempleSession
-        do {
-            session = try await open(side, for: "send")
-        } catch {
-            fail("send: could not open the \(side) temple: \(error.localizedDescription)")
-            return
-        }
-        do {
-            busy = "Checking the \(side) temple"
-            let rb = try await session.readStatus()
-            readback = rb
-            readAt = .now
-            log.add("send: re-read \(side): version \(rb.version(of: side) ?? "–"), battery \(rb.battery.map { "\($0) %" } ?? "unreadable")")
-            if let problem = batteryProblem(rb) ?? versionProblem(installed: rb.version(of: side), for: prepared) {
+        if side == Self.statusArm {
+            // The right temple: re-read and send on the same connection.
+            busy = "Opening the \(side) temple"
+            do {
+                session = try await open(side, for: "send", accept: accept)
+            } catch {
+                fail("send: could not open the \(side) temple: \(error.localizedDescription)")
+                return
+            }
+            do {
+                busy = "Checking the \(side) temple"
+                let rb = try await session.readStatus()
+                if let problem = recheck(rb, side: side, prepared: prepared) {
+                    session.close()
+                    fail("send: refused: \(problem)")
+                    return
+                }
+            } catch {
                 session.close()
+                fail("send: refused before any firmware byte was sent: \(error.localizedDescription)")
+                return
+            }
+        } else {
+            // The left temple: re-read through the right arm (closed again), then open the left.
+            busy = "Checking via the right temple"
+            let rb: G2Settings.Readback
+            do {
+                rb = try await readStatusViaRight(for: "send", accept: accept)
+            } catch {
+                fail("send: refused before any firmware byte was sent: re-read via the right temple failed: \(error.localizedDescription)")
+                return
+            }
+            if let problem = recheck(rb, side: side, prepared: prepared) {
                 fail("send: refused: \(problem)")
                 return
             }
+            busy = "Opening the \(side) temple"
+            do {
+                session = try await open(side, for: "send", accept: accept)
+            } catch {
+                fail("send: could not open the \(side) temple: \(error.localizedDescription)")
+                return
+            }
+        }
+        do {
             busy = nil
             transfer = try engine.startTransfer(
                 temple: side, bundle: prepared.bytes, link: session, timing: timing,
@@ -290,6 +331,15 @@ final class WispUpdateModel {
     var canAbort: Bool {
         guard transfer != nil, let state = progress?.state else { return transfer != nil }
         return !["result-check", "notify", "staged"].contains(state)
+    }
+
+    /// The pre-send re-read: stores it, logs it, returns why the send must not go, or nil.
+    private func recheck(_ rb: G2Settings.Readback, side: G2Side, prepared: WispOtaEngine.Prepared) -> String? {
+        readback = rb
+        readAt = .now
+        log.add("send: re-read via the right temple: \(side) version \(rb.version(of: side) ?? "–"), "
+            + "battery (as reported by the right temple) \(rb.battery.map { "\($0) %" } ?? "unreadable")")
+        return batteryProblem(rb) ?? versionProblem(installed: rb.version(of: side), for: prepared)
     }
 
     private func finished(_ outcome: WispOtaEngine.Outcome, side: G2Side, prepared: WispOtaEngine.Prepared, digest: String) {
@@ -328,7 +378,7 @@ final class WispUpdateModel {
         evenAppAcknowledged = false
         final = nil
         resetSystemAcceptance("temple changed")
-        systemConnectionSeen = false
+        systemConnectedArms = []
         log.add("temple: \(temple) selected")
     }
 
@@ -337,18 +387,43 @@ final class WispUpdateModel {
         resetSystemAcceptance("screen closed")
     }
 
-    /// The one place a temple is opened. Uses the system-connection acceptance for exactly this
-    /// attempt and resets it right away, whatever the outcome.
-    private func open(_ side: G2Side, for step: String) async throws -> any WispTempleSession {
+    /// "the right arm" or "the right and left arms": what one read or send of `side` opens.
+    private func armsText(for side: G2Side) -> String {
+        side == Self.statusArm ? "the \(side) arm" : "the \(Self.statusArm) and \(side) arms"
+    }
+
+    /// Takes the system-connection acceptance for one attempt (a read, or a send with its re-read)
+    /// and resets the toggle right away, whatever the outcome.
+    private func takeSystemAcceptance(for step: String) -> Bool {
         let accept = systemConnectionAccepted
+        if accept {
+            log.add("\(step): system connection accepted by user for this attempt only (covers \(step == "read" ? "the right arm" : armsText(for: temple)))")
+        }
         resetSystemAcceptance("used by this \(step)")
-        log.add("\(step): opening the \(side) temple\(accept ? " (system connection accepted by user for this attempt)" : "")")
+        return accept
+    }
+
+    /// Opens the right arm, reads sid 0x09, closes it again (also when the read fails).
+    private func readStatusViaRight(for step: String, accept: Bool) async throws -> G2Settings.Readback {
+        let session = try await open(Self.statusArm, for: "\(step) (status)", accept: accept)
+        defer {
+            session.close()
+            log.add("\(step) (status): the \(Self.statusArm) temple closed")
+        }
+        log.add("\(step) (status): sending sid 0x09 READ_BASIC to the \(Self.statusArm) temple")
+        return try await session.readStatus()
+    }
+
+    /// The one place a temple is opened. `accept` is the acceptance taken for this attempt.
+    private func open(_ side: G2Side, for step: String, accept: Bool) async throws -> any WispTempleSession {
+        log.add("\(step): opening the \(side) temple exclusively\(accept ? " (system connection accepted by user for this attempt)" : "")")
         do {
             let session = try await access.open(side, acceptSystemConnection: accept)
-            if !accept { systemConnectionSeen = false }
+            if !accept { systemConnectedArms.remove(side) }
+            log.add("\(step): the \(side) temple is open")
             return session
         } catch G2ExclusiveArmError.connectedElsewhere(let arm) {
-            systemConnectionSeen = true
+            systemConnectedArms.insert(arm)
             throw G2ExclusiveArmError.connectedElsewhere(arm)
         }
     }
