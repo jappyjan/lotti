@@ -31,7 +31,7 @@ Each rung must pass before the next one may start. A rung is "passed" when its e
 
 **Decision 2026-11-06 (Jan, README W17):** rung 2 is dropped. Rung 3 needs no further work: Wisp Boot stays as built. The requirement for rung 4 is a temple that can always be unbricked, either by a proven SWD repair (if the hardware access is easy) or by a software fallback proven on hardware (back to stock or to our own firmware).
 
-Rung 4 stays closed until one such recovery path is proven on real hardware. That is the price of not bricking; there is no clever way around it for the first native flash.
+Rung 4 stays closed until one such recovery path is proven on real hardware. The options, their gaps and the recommended first proof are in [recovery.md](recovery.md). That is the price of not bricking; there is no clever way around it for the first native flash.
 
 ## Fallback-to-stock (designed into native mode)
 

@@ -7,6 +7,7 @@ Status: M0 foundation landed (2026-11-06): `wisp-core` (C, 131 golden vectors), 
 - [Protocol v0](protocol.md) — the wire contract (firmware ⇄ SDK)
 - [Safety policy](safety.md) — brick rules and the flashing ladder
 - [Hardware reference](hardware.md) — what's in the glasses, with sources
+- [Recovery](recovery.md) — how a bricked temple comes back: SWD, the case UART, Wisp Boot, the proposed W18
 - [Host mode](host-mode.md) — running the core inside stock 2.2.6.10 (rung 2): where to hook, the lease, the hook ladder
 
 ## Why
@@ -114,7 +115,7 @@ All Nx projects, runnable with `pnpm nx run-many -t build test` on Linux (t3-wor
 | M2  | **Rung 1** — stock repacked by `wisp-ota`, flashed to the left temple and back                                                                                                                                                       | round trip logged in [safety.md](safety.md#hardware-log)     | yes, with Jan's go |
 | M3  | ~~**Host mode**~~ dropped (W17) — the core inside stock (rung 2): display + resources + input over the real link; throughput and battery measured                                                                                    | SDK example runs on real glasses                             | yes                |
 | M4  | **Wisp Boot proven in Renode** (rung 3)                                                                                                                                                                                              | fault injection: every fault ends in stock                   | no                 |
-| M5  | **Recovery path** — SWD access (pads found, read-only attach, INFO0 dumped), or, if the cable route is hard, a proven software fallback                                                                                              | a documented recovery procedure                              | yes                |
+| M5  | **Recovery path** — SWD access (pads found, read-only attach, INFO0 dumped), or, if the cable route is hard, a proven software fallback                                                                                              | a documented recovery procedure ([options](recovery.md))     | yes                |
 | M6  | **Native** (rung 4) — drivers, BLE, update service; first native boot on the left temple                                                                                                                                             | ladder exit check                                            | yes                |
 | M7  | **Swift SDK + Lotti on Wisp**                                                                                                                                                                                                        | Lotti uses Wisp when present, stock otherwise                | yes                |
 
