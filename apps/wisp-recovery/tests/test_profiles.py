@@ -102,6 +102,10 @@ class RunWithJansBaseline(unittest.TestCase):
         self.assertEqual([e for e in case.rom_log if e[0] == "go"], [("go", pins.BRIDGE_ADDRESS)] * 2)
         self.assertEqual(case.temples["left"].received, [bytes.fromhex("24000100a7")])
         self.assertEqual(bytes(case.yhm).hex(), JAN_BASELINE)
+        # Each bridge_loaded line names the hash of the bytes that went into SRAM.
+        loaded = [e["bridge_loaded"] for e in report["events"] if "bridge_loaded" in e]
+        self.assertEqual(loaded, [hashlib.sha256(b).hexdigest() for b in self.bridge_loads(case)])
+        self.assertEqual(loaded, [pins.BRIDGE_SHA256, pins.BRIDGE_VARIANTS[pins.PROFILE_OBSERVED_33][2]])
         self.assertEqual(case.mode, "normal")
         for base, length in pins.SRAM_WRITE_REGIONS:
             self.assertEqual(bytes(case.uc.mem_read(base, length)), bytes(length))

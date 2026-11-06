@@ -10,6 +10,8 @@ writes flash, writes option bytes, or changes read/write protection.
 
 from __future__ import annotations
 
+import hashlib
+
 from . import pins
 
 
@@ -152,7 +154,9 @@ class RomLoader:
         self.write_verified(pins.RESULT_ADDRESS, bytes(pins.RESULT_LENGTH))
         self.write_verified(pins.BRIDGE_ADDRESS, self.bridge)
         self.bridge_verified = True
-        self.log({"bridge_loaded": pins.BRIDGE_SHA256})
+        # The hash of the bytes just written and read back, not a constant: with the
+        # observed-33 variant this is 3ca8ed1d..., not the reviewed e30e143d....
+        self.log({"bridge_loaded": hashlib.sha256(self.bridge).hexdigest()})
 
     def clear_sram(self) -> None:
         """Zero every region this tool ever wrote, and read it back."""

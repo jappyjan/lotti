@@ -47,6 +47,17 @@ class RomCommandAllowlist(unittest.TestCase):
         self.assertEqual(port.written, b"")
 
 
+class LoadLog(unittest.TestCase):
+    def test_bridge_loaded_logs_the_hash_of_the_loaded_bytes(self):
+        for profile in (pins.PROFILE_REVIEWED_22, pins.PROFILE_OBSERVED_33):
+            image = pins.bridge_image(profile)
+            events = []
+            loader = RomLoader(RecordingPort(), image, events.append)
+            loader.write_verified = lambda address, data: None  # no device to read back from
+            loader.load_bridge()
+            self.assertEqual(events, [{"bridge_loaded": pins.BRIDGE_VARIANTS[profile][2]}])
+
+
 class SramWriteAllowlist(unittest.TestCase):
     def refused(self, address, data):
         with self.assertRaises(RefusedError):
