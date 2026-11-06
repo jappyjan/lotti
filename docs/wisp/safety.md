@@ -29,7 +29,9 @@ Each rung must pass before the next one may start. A rung is "passed" when its e
 | 3    | **Wisp Boot dry-run in Renode** with the real Even bootloader and a littlefs image: fallback-to-stock proven in emulation | none                                                                                  | 100 % of injected boot faults end in a stock install                                         | rung 0                                                                                          |
 | 4    | **Native Wisp** (Wisp Boot + native app) on the left temple                                                               | **high** for the first flash                                                          | as rung 2, plus fallback-to-stock exercised on hardware by a forced fault                    | rung 3 **and** SWD access proven on a temple (pads found, read-only attach and INFO0 dump done) |
 
-Rung 4 stays closed until SWD works. That is the price of not bricking; there is no clever way around it for the first native flash.
+**Decision 2026-11-06 (Jan, README W17):** rung 2 is dropped. Rung 3 needs no further work: Wisp Boot stays as built. The requirement for rung 4 is a temple that can always be unbricked, either by a proven SWD repair (if the hardware access is easy) or by a software fallback proven on hardware (back to stock or to our own firmware).
+
+Rung 4 stays closed until one such recovery path is proven on real hardware. That is the price of not bricking; there is no clever way around it for the first native flash.
 
 ## Fallback-to-stock (designed into native mode)
 
