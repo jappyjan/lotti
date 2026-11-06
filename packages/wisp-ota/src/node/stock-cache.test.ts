@@ -167,4 +167,15 @@ describe('pinned catalog', () => {
     const r = STOCK_RELEASES.find((x) => x.version === '2.3.0.24')!;
     assert.equal(r.md5, '1dbdf37b03a1169c384945e94d671371');
   });
+
+  it("agrees with even-g2-thai's record for 2.4.0.24 (not in webflasher's catalog)", () => {
+    const r = STOCK_RELEASES.find((x) => x.version === '2.4.0.24')!;
+    assert.equal(r.md5, 'a0d486afe862a9121657477b98667c95');
+    assert.equal(r.size, 4482361);
+    assert.equal(
+      r.sha256,
+      '363198f8d543a5c1181d8a213e9077285cb865700a1885c8dc7c1b9324fd0e05',
+    );
+    assert.equal(r.mainAppEnd, 0x7bf564);
+  });
 });

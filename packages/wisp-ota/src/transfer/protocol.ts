@@ -9,6 +9,13 @@
 //        (`OTA_ReceivePacket` 0x48d8d8, `OTA_SendPacket` 0x48de40)
 //   P  = openCFW `g2/docs/reference/protocols.md` §5–6
 //   W  = webflasher (MIT) `src/lib/g2BleOta.js` (G2BleOtaSession, hardware-validated on 2.2.6.10)
+//
+// Re-checked statically on stock 2.4.0.24, the version Jan's temples run
+// (docs/wisp/hardware.md "Stock OTA receiver 2.4.0.24"): same UUIDs, staging
+// path, reply set, 1500 ms RX timer and 3000 ms reset. New there: RESULT_CHECK
+// re-reads the whole staged file before it answers (a slower verdict; past
+// `controlAckTimeoutMs` it ends in 'result-unknown'), and a 90 s OTA idle
+// watchdog, far above any gap this sender leaves.
 
 /** Control: `[subcommand, …]`, always a single packet [C T: `rx_single_frame`]. */
 export const SID_OTA_CONTROL = 0xc0;

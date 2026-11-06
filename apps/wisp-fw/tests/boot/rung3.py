@@ -34,7 +34,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parents[1]
 REPO = APP_DIR.parents[1]
-STOCK_VERSION = "2.2.6.10"
+STOCK_VERSION = "2.4.0.24"
 MAIN_BASE = 0x438000
 FLAG = 0x7FE000
 FLAG_SET = [0x55555555, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF]

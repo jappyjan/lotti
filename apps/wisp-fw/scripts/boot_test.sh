@@ -3,7 +3,7 @@
 # wisp-fw:boot-test — rung 3 (docs/wisp/safety.md): Wisp Boot fallback-to-stock in Renode with
 # the REAL Even bootloader. Emulation only; nothing here talks to hardware.
 #
-#   1. stock bundle (2.2.6.10, or $WISP_STOCK_VERSION) in the git-ignored .wisp-cache/stock/
+#   1. stock bundle (2.4.0.24, the version on Jan's temples, or $WISP_STOCK_VERSION) in the git-ignored .wisp-cache/stock/
 #      (wisp-ota fetch if missing; SHA-256 pinned). Even's firmware never leaves .wisp-cache.
 #   2. Wisp Boot + the fault apps (scripts/build_boot.sh -DWISP_BOOT_TEST_APPS=ON), with the
 #      image and rule 8 gates
@@ -20,7 +20,7 @@ if [[ ! -f "$ota" ]]; then
 	echo "wisp-fw: build wisp-ota first: pnpm nx run wisp-ota:build" >&2
 	exit 1
 fi
-stock="${WISP_STOCK_VERSION:-2.2.6.10}"
+stock="${WISP_STOCK_VERSION:-2.4.0.24}"
 if [[ ! -f "$CACHE_DIR/stock/g2-$stock.bin" ]]; then
 	(cd "$REPO_ROOT" && node "$ota" fetch "$stock")
 fi

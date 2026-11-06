@@ -6,6 +6,15 @@
 // URL as below). `mainAppEnd` is webflasher's independently computed install
 // end of the main app, cross-checked by `wisp-ota fetch`.
 //
+// 2.4.0.24 is not in webflasher's catalog (still generated 2026-10-09). Its
+// md5 and size come from Even's update metadata (DeviceOtaInfo) as recorded by
+// rayriffy/even-g2-thai (MIT, `docs/rebases/2.4.0.24.json`); that repo's
+// SHA-256 and main end (`0x7BF564`) are its own measurement. We downloaded the
+// bundle from cdn.evenreal.co and cdn-az.evenrealities.com on 2026-11-06: both
+// byte-identical, and md5, size, SHA-256 and the main end all match. There is
+// no second catalog attesting this release; it is the version both of Jan's
+// temples report.
+//
 // We never commit or redistribute these bundles (safety.md rule 9).
 
 export interface StockRelease {
@@ -21,6 +30,13 @@ export interface StockRelease {
 export const STOCK_CDN_BASE = 'https://cdn.evenreal.co/firmware';
 
 export const STOCK_RELEASES: readonly StockRelease[] = [
+  {
+    version: '2.4.0.24',
+    md5: 'a0d486afe862a9121657477b98667c95',
+    size: 4482361,
+    sha256: '363198f8d543a5c1181d8a213e9077285cb865700a1885c8dc7c1b9324fd0e05',
+    mainAppEnd: 0x7bf564,
+  },
   {
     version: '2.3.2.14',
     md5: '7892790e40cffbae6db8a635b335e17f',

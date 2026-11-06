@@ -30,6 +30,34 @@ the disassembly), **[I]** inferred, **[?]** open gap. Treat every **[I]** and
 **[?]** as something to confirm against a live symbol or a capture before any
 hook depends on it.
 
+### 2.2.6.10 vs the installed 2.4.0.24 (2026-11-06)
+
+Jan's temples run **stock 2.4.0.24**, not 2.2.6.10
+([hardware.md](hardware.md#stock-24024-installed-on-jans-temples)). **Every
+address in this document is 2.2.6.10-only and must be redone for 2.4.0.24.**
+That covers the TPL/router hooks, the display, input, sensor, audio and UART
+tables, the heap and the task list. The 2.4 main app is a new build whose
+functions moved independently; the openCFW symbols (2.2.6.10) do not apply.
+What was re-checked on 2.4.0.24, and still holds: the OTA receiver protocol, the
+GATT UUIDs, the staging path, the flag address and values, and the vector-table
+layout (SP `0x2007FB00`).
+
+Before host mode is built on 2.2.6.10 as W16 decided, two facts now count:
+
+- **Installing 2.2.6.10 is a downgrade.** Nothing found on the glasses blocks it:
+  no version check in the 2.4.0.24 bootloader or OTA receiver [C, static]. But
+  it is a separate flash with its own risk.
+- **2.2.6.10 knows only the MX25U25643G NOR.** Stock added the GD25LE256H in
+  2.2.9.22. If a temple has the GD part, a 2.2.6.10 app may not mount the
+  littlefs its own OTA stages into, which leaves no way back over BLE [I].
+  Host mode on 2.2.6.10 therefore waits until the NOR part on both temples is
+  known.
+
+The alternative is to redo the hooks on 2.4.0.24. It leaves **232 092 B
+(226.7 KiB)** below the `0x7F8000` ceiling (`[0x7BF564, 0x7F8000)`), against
+399 KiB on 2.2.6.10. That is a little over half. The core's size is not
+budgeted yet, so whether it fits is open. It needs no downgrade.
+
 ```sh
 # Fetch (git-ignored) and locate the main image.
 node packages/wisp-ota/dist/cli.js fetch 2.2.6.10
