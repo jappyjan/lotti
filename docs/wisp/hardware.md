@@ -123,6 +123,10 @@ Rung 3 ran this bootloader unmodified in Renode (the NOR model answers MX): see 
   - **OTA idle watchdog**: checked every 10 s (`0x44AE5E`). It aborts a session with no OTA RX for **90 s** (300 s while the glasses process locally). The sender's longest gap is the 8 s control timeout.
   - An interface lock: BLE OTA messages are dropped while an OTA session runs over UART (the case). Abort requests are refused while traffic is fresh. A transport abort on disconnect. The per-block "read data != write data" log string is gone; the whole-file readback looks like its replacement [I].
 
+### Bootloader component install (type 1) in the 2.4.0.24 app
+
+[C, static analysis; details and the W18 risk window in [recovery.md](recovery.md#how-the-install-works-stock-24024-app-static-analysis-c)] `FILE_CHECK` with type 1 and storage 3 stages `ota/s200_bootloader.bin` on the NOR littlefs and records MRAM target `0x410000` (`0x446A1C`). `END` re-reads the staged file (size, CRC-32C) and answers status 8. **After** that reply the OTA task copies the file to MRAM itself (`_evenOtaBootloaderWriteFile2MRAM`, `0x446E38`): 4 KiB chunks, lowest address first, each programmed and then compared by the app's MRAM device layer (`0x446B74`/`0x446AB4`). The read and verify results are ignored and the function always returns 0. No reset and no flag change follow. Neither the app nor the bootloader exposes a bootloader version or hash, so which bootloader is in MRAM can't be read without code on the temple. The 2.3.2.14 and 2.4.0.24 bootloaders differ only by relocation and one NOR helper parameter that is always 0 ([recovery.md](recovery.md#what-gets-installed)).
+
 ### Which hooks and facts are 2.2.6.10-only
 
 All addresses in [host-mode.md](host-mode.md), and the openCFW citations (openCFW reconstructs 2.2.6.10), are 2.2.6.10 run addresses. None carry over to 2.4.0.24: the 2.4 main app is a new build, and even-g2-thai's rebase shows its functions moved independently (for example, the font chain builder `0x471238` → `0x4758F0`). The protocol facts above were re-checked; the hook addresses were not.
