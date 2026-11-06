@@ -47,7 +47,7 @@
     "mflags": 0,
     "req": 308,
     "fields": {
-      "count": 16,
+      "count": 2,
       "steps": [
         {
           "freq_hz": 1029,
@@ -61,6 +61,46 @@
         }
       ]
     },
-    "hex": "0400340110050408071308070b0a14"
+    "hex": "0400340102050408071308070b0a14"
+  },
+  {
+    "name": "audio/tone-request-grown-steps",
+    "kind": "message",
+    "svc": 6,
+    "op": 4,
+    "mflags": 0,
+    "req": 769,
+    "fields": {
+      "count": 3,
+      "steps": [
+        {
+          "freq_hz": 2000,
+          "duration_ms": 100,
+          "duty": 50
+        },
+        {
+          "freq_hz": 0,
+          "duration_ms": 50,
+          "duty": 0
+        },
+        {
+          "freq_hz": 3000,
+          "duration_ms": 200,
+          "duty": 30
+        }
+      ]
+    },
+    "hex": "0400010303d007640032a0a1a20000320000a0a1a2b80bc8001ea0a1a2",
+    "decode_only": true
+  },
+  {
+    "name": "audio/tone-request-count-doesnt-divide",
+    "kind": "message",
+    "svc": 6,
+    "op": 4,
+    "mflags": 0,
+    "req": 770,
+    "malformed": true,
+    "hex": "0400020302d00764003200003200"
   }
 ]

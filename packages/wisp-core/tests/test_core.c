@@ -39,8 +39,10 @@ static bool body_ok(const wisp_frame *f, uint32_t i) {
 
 static void test_frame_basics(void) {
     uint8_t out[32], buf[64];
-    CHECK(wisp_frame_encode(out, 12, 0, 0, 0, (const uint8_t *)"abc", 3) == WISP_E_SPACE);
-    CHECK(wisp_frame_encode(out, sizeof out, 1, 2, 3, (const uint8_t *)"abc", 3) == 13);
+    CHECK(wisp_frame_encode(out, 12, 0, 0, 0, 0, (const uint8_t *)"abc", 3) == WISP_E_SPACE);
+    CHECK(wisp_frame_encode(out, sizeof out, 1, 2, 0, 3, (const uint8_t *)"abc", 3) == 13);
+    CHECK(wisp_frame_encode(out, sizeof out, 1, 0x10, 0, 3, NULL, 0) == WISP_E_ARG); /* reserved route bits */
+    CHECK(wisp_frame_encode(out, sizeof out, 1, 0, 0x02, 3, NULL, 0) == WISP_E_ARG); /* reserved fflags bits */
 
     /* seq wraps through 0xFFFF */
     wisp_rx rx;
@@ -49,22 +51,46 @@ static void test_frame_basics(void) {
     wisp_rx_init(&rx, buf, sizeof buf);
     rx.last_good_seq = 0xFFFE;
     for (uint32_t s = 0xFFFF; s <= 0x10001; s++) {
-        int n = wisp_frame_encode(out, sizeof out, 0, 0, (uint16_t)s, NULL, 0);
+        int n = wisp_frame_encode(out, sizeof out, 0, 0, 0, (uint16_t)s, NULL, 0);
         CHECK(wisp_rx_feed(&rx, out, (size_t)n, &ev, &f) == (size_t)n && ev == WISP_RX_FRAME && f.seq == (uint16_t)s);
     }
 
-    /* Up to 0x7FFF past the expected seq is a gap (RESYNC); anything else a duplicate (silent). */
+    /* Up to 0x7FFF past the expected seq is a gap (RESYNC); anything else a duplicate (CREDIT). */
     wisp_rx_init(&rx, buf, sizeof buf);
     rx.last_good_seq = 0; /* expects 1 */
-    int k = wisp_frame_encode(out, sizeof out, 0, 0, 0x8001, NULL, 0);
-    CHECK(wisp_rx_feed(&rx, out, (size_t)k, &ev, &f) == (size_t)k && ev == WISP_RX_NONE && rx.dups == 1);
-    k = wisp_frame_encode(out, sizeof out, 0, 0, 0x8000, NULL, 0);
+    int k = wisp_frame_encode(out, sizeof out, 0, 0, 0, 0x8001, NULL, 0);
+    CHECK(wisp_rx_feed(&rx, out, (size_t)k, &ev, &f) == (size_t)k && ev == WISP_RX_DUPLICATE && rx.dups == 1);
+    CHECK(wisp_rx_feed(&rx, out, 0, &ev, &f) == 0 && ev == WISP_RX_NONE);
+    k = wisp_frame_encode(out, sizeof out, 0, 0, 0, 0x8000, NULL, 0);
     CHECK(wisp_rx_feed(&rx, out, (size_t)k, &ev, &f) == (size_t)k && ev == WISP_RX_RESYNC && rx.gaps == 1);
+
+    /* While recovering, control frames still come through, whatever their seq; data frames don't. */
+    const uint8_t credit[] = {WISP_OP_SESSION_CREDIT, 0, 0, 0, 0x34, 0x12};
+    k = wisp_frame_encode(out, sizeof out, 0, 0, WISP_FF_CTRL, 0x4321, credit, sizeof credit);
+    CHECK(wisp_rx_feed(&rx, out, (size_t)k, &ev, &f) == (size_t)k && ev == WISP_RX_CONTROL && rx.recovering);
+    uint16_t cseq = 0;
+    CHECK(wisp_ctrl_decode(&f, &cseq) == WISP_OP_SESSION_CREDIT && cseq == 0x1234 && rx.last_good_seq == 0);
+    f.fflags = 0;
+    CHECK(wisp_ctrl_decode(&f, &cseq) == WISP_E_MALFORMED);
+    k = wisp_frame_encode(out, sizeof out, 0, 0, 0, 2, NULL, 0);
+    CHECK(wisp_rx_feed(&rx, out, (size_t)k, &ev, &f) == (size_t)k && ev == WISP_RX_NONE && rx.gaps == 2);
+
+    /* Reserved bits make a frame bad even with a valid CRC. */
+    for (int byte = 2; byte <= 3; byte++) {
+        wisp_rx_init(&rx, buf, sizeof buf);
+        k = wisp_frame_encode(out, sizeof out, 0, 0, 0, 0, NULL, 0);
+        out[byte] = byte == 2 ? 0x40 : 0x80;
+        wisp_put16(out + 8, wisp_crc16(WISP_CRC16_INIT, out, 8));
+        size_t got = wisp_rx_feed(&rx, out, (size_t)k, &ev, &f);
+        CHECK(ev == WISP_RX_RESYNC && rx.last_good_seq == 0xFFFF);
+        wisp_rx_feed(&rx, out + got, (size_t)k - got, &ev, &f);
+        CHECK(ev == WISP_RX_NONE && rx.frames == 0);
+    }
 
     /* a frame longer than the receive buffer is discarded and asks for RESYNC */
     uint8_t big[100], zeros[60] = {0};
     wisp_rx_init(&rx, buf, sizeof buf);
-    int n = wisp_frame_encode(big, sizeof big, 0, 0, 0, zeros, sizeof zeros);
+    int n = wisp_frame_encode(big, sizeof big, 0, 0, 0, 0, zeros, sizeof zeros);
     size_t used = wisp_rx_feed(&rx, big, (size_t)n, &ev, &f);
     CHECK(ev == WISP_RX_RESYNC && rx.last_good_seq == 0xFFFF);
     while (used < (size_t)n) {
@@ -81,7 +107,7 @@ static void test_rx_chunking(uint32_t seed) {
     while (len < sizeof stream - 1100) {
         uint8_t body[1024];
         size_t n = make_body(count, rnd(&seed) % 1024, body);
-        len += (size_t)wisp_frame_encode(stream + len, sizeof stream - len, 0, 0, (uint16_t)count, body, n);
+        len += (size_t)wisp_frame_encode(stream + len, sizeof stream - len, 0, 0, 0, (uint16_t)count, body, n);
         count++;
     }
     wisp_rx rx;
@@ -106,64 +132,117 @@ static void test_rx_chunking(uint32_t seed) {
     CHECK(got == count && rx.bad_bytes == 0);
 }
 
-/* Sender and receiver over a link that corrupts, truncates and drops chunks;
- * CREDIT and RESYNC travel back on an ideal channel. Every message must
- * arrive exactly once, in order. */
-static void test_lossy_link(uint32_t seed, uint32_t count, unsigned max_body, unsigned corrupt_pm, unsigned drop_pm) {
-    static uint8_t ring[8192], buf[1024 + WISP_FRAME_OVERHEAD];
+/* One side of a link: its sender, its receiver, and the test's bookkeeping. */
+typedef struct {
     wisp_tx tx;
     wisp_rx rx;
-    wisp_tx_init(&tx, ring, sizeof ring);
-    wisp_tx_set_peer(&tx, 1024, 6000);
-    wisp_rx_init(&rx, buf, sizeof buf);
-    uint32_t sent = 0, got = 0, idle = 0;
-    for (long iter = 0; got < count && iter < 50L * count + 100000; iter++) {
-        while (sent < count) {
-            uint8_t body[1024];
-            size_t n = make_body(sent, rnd(&seed) % max_body, body);
-            int r = wisp_tx_send(&tx, 0, 0, body, n);
-            if (r == WISP_E_WINDOW) break;
-            CHECK(r == (uint16_t)sent);
-            sent++;
-        }
-        uint8_t chunk[256];
-        size_t n = wisp_tx_pull(&tx, chunk, 1 + rnd(&seed) % sizeof chunk);
-        if (n) {
-            idle = 0;
-        } else if (++idle > 2) {
-            wisp_tx_resend_all(&tx); /* ack timeout */
-            idle = 0;
-        }
-        if (n && rnd(&seed) % 1000 < drop_pm) n = rnd(&seed) % 2 ? 0 : rnd(&seed) % n; /* lost or cut short */
-        if (n && rnd(&seed) % 1000 < corrupt_pm) chunk[rnd(&seed) % n] ^= (uint8_t)(1u << rnd(&seed) % 8);
+    uint8_t ring[8192], buf[1024 + WISP_FRAME_OVERHEAD];
+    uint32_t sent, got, consumed; /* messages queued, delivered; frames delivered since our last CREDIT */
+    uint32_t credit_ms;
+} endpoint;
 
-        const uint8_t *p = chunk;
-        wisp_rx_event ev;
-        wisp_frame f;
-        do {
-            size_t used = wisp_rx_feed(&rx, p, n, &ev, &f);
-            p += used;
-            n -= used;
-            if (ev == WISP_RX_FRAME) {
-                if (!body_ok(&f, got)) {
-                    CHECK(!"wrong frame delivered");
-                    return;
-                }
-                got++;
-            } else if (ev == WISP_RX_RESYNC) {
-                wisp_tx_resync(&tx, rx.last_good_seq);
+static void ep_init(endpoint *e) {
+    wisp_tx_init(&e->tx, e->ring, sizeof e->ring);
+    wisp_tx_set_peer(&e->tx, 1024, 6000);
+    e->tx.ack_timeout_ms = 40;
+    wisp_rx_init(&e->rx, e->buf, sizeof e->buf);
+    e->sent = e->got = e->consumed = e->credit_ms = 0;
+}
+
+/* What the link delivered to `e`. Returns false on a wrong frame. */
+static bool ep_receive(endpoint *e, const uint8_t *p, size_t n) {
+    wisp_rx_event ev;
+    wisp_frame f;
+    do {
+        size_t used = wisp_rx_feed(&e->rx, p, n, &ev, &f);
+        p += used;
+        n -= used;
+        if (ev == WISP_RX_FRAME) {
+            if (!body_ok(&f, e->got)) return false;
+            e->got++;
+            e->consumed++;
+        } else if (ev == WISP_RX_CONTROL) {
+            wisp_tx_control(&e->tx, &f);
+        } else if (ev == WISP_RX_DUPLICATE) {
+            wisp_tx_queue_credit(&e->tx, e->rx.last_good_seq);
+        } else if (ev == WISP_RX_RESYNC) {
+            wisp_tx_queue_resync(&e->tx, e->rx.last_good_seq);
+        }
+    } while (ev != WISP_RX_NONE);
+    return true;
+}
+
+/* Two endpoints over a link that corrupts, truncates and drops chunks in both
+ * directions, so CREDIT and RESYNC control frames get lost and damaged too.
+ * Recovery relies only on the protocol: RESYNC, CREDIT for duplicates and the
+ * ack timeout. Every message must arrive exactly once, in order. */
+static void test_lossy_link(uint32_t seed, uint32_t count, unsigned max_body, unsigned corrupt_pm, unsigned drop_pm,
+                            bool both_ways) {
+    static endpoint ep[2];
+    ep_init(&ep[0]);
+    ep_init(&ep[1]);
+    uint32_t want[2] = {count, both_ways ? count : 0};
+    for (uint32_t now = 1; now < 60u * count + 100000u; now++) {
+        if (ep[1].got == want[0] && ep[0].got == want[1]) break;
+        for (int side = 0; side < 2; side++) {
+            endpoint *e = &ep[side], *peer = &ep[!side];
+            while (e->sent < want[side]) {
+                uint8_t body[1024];
+                size_t n = make_body(e->sent, rnd(&seed) % max_body, body);
+                int r = wisp_tx_send(&e->tx, 0, 0, body, n);
+                if (r == WISP_E_WINDOW) break;
+                CHECK(r == (uint16_t)e->sent);
+                e->sent++;
             }
-        } while (ev != WISP_RX_NONE);
-        if (rnd(&seed) % 3 == 0) wisp_tx_ack(&tx, rx.last_good_seq); /* coalesced CREDIT */
+            /* Coalesced CREDIT: after a few frames, or a few ms after the first. */
+            if (e->consumed && (e->consumed >= 4 || now - e->credit_ms >= 3)) {
+                wisp_tx_queue_credit(&e->tx, e->rx.last_good_seq);
+                e->consumed = 0;
+            }
+            if (!e->consumed) e->credit_ms = now;
+
+            uint8_t chunk[256];
+            size_t n = wisp_tx_pull(&e->tx, chunk, 1 + rnd(&seed) % sizeof chunk);
+            if (n && rnd(&seed) % 1000 < drop_pm) n = rnd(&seed) % 2 ? 0 : rnd(&seed) % n; /* lost or cut short */
+            if (n && rnd(&seed) % 1000 < corrupt_pm) chunk[rnd(&seed) % n] ^= (uint8_t)(1u << rnd(&seed) % 8);
+            if (!ep_receive(peer, chunk, n)) {
+                CHECK(!"wrong frame delivered");
+                return;
+            }
+            wisp_tx_tick(&e->tx, now);
+        }
     }
-    CHECK(got == count);
-    if (got != count) fprintf(stderr, "lossy link seed %u: %u of %u delivered\n", seed, got, count);
+    CHECK(ep[1].got == want[0] && ep[0].got == want[1]);
+    if (ep[1].got != want[0] || ep[0].got != want[1])
+        fprintf(stderr, "lossy link seed %u: %u/%u and %u/%u delivered\n", seed, ep[1].got, want[0], ep[0].got, want[1]);
+}
+
+/* A lost CREDIT with a full window: the ack timeout resends, the duplicates bring a fresh CREDIT. */
+static void test_lost_credit(void) {
+    static endpoint a, b;
+    uint8_t chunk[8192], body[600];
+    ep_init(&a);
+    ep_init(&b);
+    while (wisp_tx_send(&a.tx, 0, 0, body, make_body(a.sent, 590, body)) >= 0) a.sent++;
+    CHECK(a.sent == 10); /* 10 x 600 = 6000: the window is full */
+    size_t n = wisp_tx_pull(&a.tx, chunk, sizeof chunk);
+    CHECK(ep_receive(&b, chunk, n) && b.got == 10);
+    wisp_tx_queue_credit(&b.tx, b.rx.last_good_seq);
+    CHECK(wisp_tx_pull(&b.tx, chunk, sizeof chunk) == WISP_CTRL_FRAME); /* ... and lost */
+    CHECK(wisp_tx_send(&a.tx, 0, 0, body, 10) == WISP_E_WINDOW);
+    CHECK(!wisp_tx_tick(&a.tx, 0) && !wisp_tx_tick(&a.tx, 39) && wisp_tx_tick(&a.tx, 40) && a.tx.timeouts == 1);
+    n = wisp_tx_pull(&a.tx, chunk, sizeof chunk);
+    CHECK(n == 6000 && ep_receive(&b, chunk, n) && b.got == 10 && b.rx.dups == 10);
+    n = wisp_tx_pull(&b.tx, chunk, sizeof chunk);
+    CHECK(n == WISP_CTRL_FRAME && ep_receive(&a, chunk, n) && a.tx.nframes == 0);
+    CHECK(wisp_tx_send(&a.tx, 0, 0, body, 10) == 10);
 }
 
 static void test_tx_window(void) {
     uint8_t ring[256], out[512], body[100] = {0};
     wisp_tx tx;
     wisp_tx_init(&tx, ring, sizeof ring);
+    CHECK(tx.window == WISP_PEER_WINDOW_INITIAL && tx.max_body == WISP_MAX_FRAME_DEFAULT);
     wisp_tx_set_peer(&tx, 64, 150);
     CHECK(wisp_tx_send(&tx, 0, 0, body, 65) == WISP_E_TOO_BIG); /* > max_frame */
     CHECK(wisp_tx_send(&tx, 0, 0, body, 50) == 0);
@@ -176,26 +255,79 @@ static void test_tx_window(void) {
     wisp_tx_ack(&tx, 0);
     CHECK(tx.nframes == 1 && wisp_tx_send(&tx, 0, 0, body, 50) == 2);
 
-    /* RESYNC rewinds to the frame after last_good_seq; resend_all to the oldest */
-    wisp_tx_resync(&tx, 1);
-    CHECK(wisp_tx_pending(&tx) == 60);
+    /* resend_all rewinds to the oldest frame; RESYNC to the one after last_good_seq, which it acks */
     wisp_tx_resend_all(&tx);
-    CHECK(wisp_tx_pending(&tx) == 120);
+    CHECK(wisp_tx_pending(&tx) == 120 && wisp_tx_pull(&tx, out, sizeof out) == 120);
+    wisp_tx_resync(&tx, 1);
+    CHECK(wisp_tx_pending(&tx) == 60 && tx.nframes == 1);
+    CHECK(wisp_tx_send(&tx, 0, 0, body, 50) == 3 && wisp_tx_pending(&tx) == 120);
 
     /* A RESYNC mid-frame waits for the frame boundary: the link never carries half a frame. */
     CHECK(wisp_tx_pull(&tx, out, 25) == 25);
-    wisp_tx_resync(&tx, 0);
+    wisp_tx_resync(&tx, 1);
     size_t n = wisp_tx_pull(&tx, out + 25, sizeof out - 25);
     CHECK(n == 35 + 120);
-    CHECK(wisp_get16(out + 6) == 1 && wisp_get16(out + 60 + 6) == 1 && wisp_get16(out + 120 + 6) == 2);
+    CHECK(wisp_get16(out + 6) == 2 && wisp_get16(out + 60 + 6) == 2 && wisp_get16(out + 120 + 6) == 3);
 
     /* Same for a CREDIT that covers the frame being resent: it's finished first. */
     wisp_tx_resend_all(&tx);
     CHECK(wisp_tx_pull(&tx, out, 25) == 25);
-    wisp_tx_ack(&tx, 1);
+    wisp_tx_ack(&tx, 2);
     n = wisp_tx_pull(&tx, out + 25, sizeof out - 25);
-    CHECK(n == 35 + 60 && wisp_get16(out + 6) == 1 && wisp_get16(out + 60 + 6) == 2);
+    CHECK(n == 35 + 60 && wisp_get16(out + 6) == 2 && wisp_get16(out + 60 + 6) == 3);
     CHECK(wisp_crc16(WISP_CRC16_INIT, out, 58) == wisp_get16(out + 58));
+
+    /* Control frames: the latest CREDIT and RESYNC go out at the next frame boundary, ahead of
+     * data, outside the window and the ring. */
+    wisp_tx_init(&tx, ring, sizeof ring);
+    wisp_tx_set_peer(&tx, 64, 150);
+    CHECK(wisp_tx_send(&tx, 0, 0, body, 50) == 0 && wisp_tx_send(&tx, 0, 0, body, 50) == 1);
+    CHECK(wisp_tx_pull(&tx, out, 25) == 25);
+    wisp_tx_queue_credit(&tx, 7);
+    wisp_tx_queue_credit(&tx, 9); /* replaces 7 */
+    wisp_tx_queue_resync(&tx, 3);
+    CHECK(wisp_tx_pending(&tx) == 95 + 2 * WISP_CTRL_FRAME);
+    n = wisp_tx_pull(&tx, out + 25, sizeof out - 25);
+    CHECK(n == 95 + 2 * WISP_CTRL_FRAME && wisp_tx_pending(&tx) == 0);
+    uint8_t rbuf[200];
+    wisp_rx rx;
+    wisp_rx_event ev;
+    wisp_frame f;
+    uint16_t seq;
+    wisp_rx_init(&rx, rbuf, sizeof rbuf);
+    const uint8_t *p = out;
+    n += 25;
+    static const int expect[] = {WISP_RX_FRAME, WISP_RX_CONTROL, WISP_RX_CONTROL, WISP_RX_FRAME, WISP_RX_NONE};
+    static const int ops[] = {0, WISP_OP_SESSION_RESYNC, WISP_OP_SESSION_CREDIT};
+    static const uint16_t seqs[] = {0, 3, 9};
+    for (int i = 0; i < 5; i++) {
+        size_t used = wisp_rx_feed(&rx, p, n, &ev, &f);
+        p += used;
+        n -= used;
+        CHECK(ev == expect[i]);
+        if (ev == WISP_RX_CONTROL) CHECK(wisp_ctrl_decode(&f, &seq) == ops[i] && seq == seqs[i] && f.seq == 0);
+    }
+    CHECK(rx.frames == 2 && rx.controls == 2 && rx.bad_bytes == 0);
+
+    /* Ack timeout: counts from the last ack (or from when everything was pulled), resends all. */
+    wisp_tx_init(&tx, ring, sizeof ring);
+    wisp_tx_set_peer(&tx, 64, 150);
+    tx.ack_timeout_ms = 100;
+    CHECK(!wisp_tx_tick(&tx, 0)); /* nothing held */
+    wisp_tx_send(&tx, 0, 0, body, 50);
+    wisp_tx_send(&tx, 0, 0, body, 50);
+    CHECK(!wisp_tx_tick(&tx, 1000)); /* not pulled yet */
+    wisp_tx_pull(&tx, out, sizeof out);
+    CHECK(!wisp_tx_tick(&tx, 1099) && wisp_tx_tick(&tx, 1100) && wisp_tx_pending(&tx) == 120);
+    CHECK(!wisp_tx_tick(&tx, 1300)); /* resending */
+    wisp_tx_pull(&tx, out, sizeof out);
+    CHECK(!wisp_tx_tick(&tx, 1399) && wisp_tx_tick(&tx, 1400));
+    wisp_tx_pull(&tx, out, sizeof out);
+    wisp_tx_ack(&tx, 0);
+    CHECK(!wisp_tx_tick(&tx, 1450) && !wisp_tx_tick(&tx, 1549) && wisp_tx_tick(&tx, 1550));
+    CHECK(wisp_tx_pending(&tx) == 60 && tx.timeouts == 3);
+    wisp_tx_ack(&tx, 1);
+    CHECK(!wisp_tx_tick(&tx, 9999) && tx.nframes == 0);
 }
 
 /* ---- messages ---- */
@@ -217,10 +349,18 @@ static void randomize(const wisp_desc *d, uint8_t *s, uint32_t *seed, uint8_t *p
         } else if (wire_size(f->type)) {
             for (size_t k = 0; k < wire_size(f->type); k++) v[k] = (uint8_t)rnd(seed);
         } else {
-            size_t unit = f->type == WISP_T_ITEMS ? f->item->fixed_size : 1;
-            wisp_bytes b = {pool, unit * (rnd(seed) % 5)};
+            /* A counted list gets a matching count; items are the known size, or any size for samples. */
+            size_t items = rnd(seed) % 5;
+            size_t unit = f->type == WISP_T_ITEMS ? f->item->fixed_size : f->count ? 1 + rnd(seed) % 6 : 1;
+            wisp_bytes b = {pool, unit * items};
             for (size_t k = 0; k < b.len; k++) pool[k] = (uint8_t)rnd(seed);
             memcpy(v, &b, sizeof b);
+            if (f->count) {
+                const wisp_field *c = &d->fields[f->count - 1];
+                uint16_t n16 = (uint16_t)items;
+                if (c->type == WISP_T_U8) s[c->offset] = (uint8_t)items;
+                else memcpy(s + c->offset, &n16, 2);
+            }
         }
     }
 }
@@ -260,6 +400,32 @@ static void test_msg_table(void) {
     memset(a, 'x', 44);
     CHECK(wisp_unpack(&wisp_system_info_rsp_desc, a, 44, &info) == WISP_OK && strlen(info.serial) == 16);
     CHECK(wisp_desc_find(0, 99, 0) == NULL);
+
+    /* Counted lists: count is authoritative, items are remaining / count bytes. */
+    wisp_resource_list_rsp_t list;
+    wisp_list_entry_t entry;
+    uint8_t lp[2 + 2 * 30];
+    memset(lp, 0, sizeof lp);
+    wisp_put16(lp, 2);
+    for (int i = 0; i < 2; i++) {
+        wisp_put16(lp + 2 + i * 30, (uint16_t)(0x100 + i)); /* res */
+        wisp_put32(lp + 2 + i * 30 + 4, 777u * (unsigned)i); /* size */
+        memset(lp + 2 + i * 30 + 24, 0xEE, 6);               /* fields we don't know yet */
+    }
+    CHECK(wisp_unpack(&wisp_resource_list_rsp_desc, lp, sizeof lp, &list) == WISP_OK && list.count == 2);
+    CHECK(wisp_list_stride(list.entries, list.count) == 30);
+    CHECK(wisp_items_get(&wisp_list_entry_desc, list.entries, 2, 1, &entry) == WISP_OK && entry.res == 0x101 &&
+          entry.size == 777);
+    CHECK(wisp_items_get(&wisp_list_entry_desc, list.entries, 2, 2, &entry) == WISP_E_ARG);
+    CHECK(wisp_unpack(&wisp_resource_list_rsp_desc, lp, sizeof lp - 1, &list) == WISP_E_MALFORMED);
+    wisp_put16(lp, 0);
+    CHECK(wisp_unpack(&wisp_resource_list_rsp_desc, lp, sizeof lp, &list) == WISP_E_MALFORMED);
+    CHECK(wisp_unpack(&wisp_resource_list_rsp_desc, lp, 2, &list) == WISP_OK && list.entries.len == 0);
+    wisp_put16(lp, 12); /* 60 / 12 = 5 bytes an item: cuts size in half */
+    CHECK(wisp_unpack(&wisp_resource_list_rsp_desc, lp, sizeof lp, &list) == WISP_E_MALFORMED);
+    list.count = 3;
+    list.entries = (wisp_bytes){lp, 20};
+    CHECK(wisp_pack(&wisp_resource_list_rsp_desc, &list, a, sizeof a) == WISP_E_ARG);
     CHECK(wisp_hdr_decode(a, 3, &(wisp_hdr){0}) == WISP_E_MALFORMED);
     const uint8_t busy[] = {5, WISP_MF_RESPONSE | WISP_MF_ERROR, 77, 0, WISP_ERR_BUSY, 0, 'b', 'u', 's', 'y'};
     CHECK(wisp_msg_error(a, sizeof a, 5, 77, WISP_ERR_BUSY, "busy") == 10 && !memcmp(a, busy, 10));
@@ -355,6 +521,17 @@ static void test_session(void) {
     CHECK(r.reply_len == 6 && wisp_get16(out + 4) == WISP_ERR_NOT_ALLOWED);
     CHECK(wisp_session_tick(&s, 60000000) == WISP_SESSION_NONE); /* nothing to time out */
 
+    /* CREDIT and RESYNC act before HELLO too (they ack our error responses) and are never answered. */
+    wisp_session_credit_req_t credit0 = {3};
+    n = msg(in, WISP_OP_SESSION_CREDIT, 5, &wisp_session_credit_req_desc, &credit0);
+    wisp_session_rx(&s, 0, in, n, 0, out, sizeof out, &r);
+    CHECK(r.event == WISP_SESSION_CREDIT && r.seq == 3 && r.reply_len == 0);
+    /* responses and events aren't requests: no error 7 for them */
+    wisp_hdr evh = {WISP_OP_DISPLAY_FILL, WISP_MF_EVENT, 34};
+    n = (size_t)wisp_msg_encode(in, sizeof in, &evh, NULL, NULL);
+    wisp_session_rx(&s, WISP_SVC_DISPLAY, in, n, 0, out, sizeof out, &r);
+    CHECK(r.reply_len == 0 && r.event == WISP_SESSION_NONE);
+
     /* a HELLO cut inside a field is a bad payload */
     wisp_session_hello_req_t hello = {0, 1, 1024, 4000, "app", "test"};
     n = msg(in, WISP_OP_SESSION_HELLO, 3, &wisp_session_hello_req_desc, &hello);
@@ -406,6 +583,12 @@ static void test_session(void) {
     n = msg(in, WISP_OP_SESSION_BYE, 0, NULL, NULL);
     wisp_session_rx(&s, 0, in, n, 10000001, out, sizeof out, &r);
     CHECK(r.event == WISP_SESSION_ENDED && !s.active && r.reply_len == 0);
+    /* BYE with req != 0 gets its ok (an empty response) */
+    n = msg(in, WISP_OP_SESSION_HELLO, 10, &wisp_session_hello_req_desc, &hello);
+    wisp_session_rx(&s, 0, in, n, 10000001, out, sizeof out, &r);
+    n = msg(in, WISP_OP_SESSION_BYE, 11, NULL, NULL);
+    wisp_session_rx(&s, 0, in, n, 10000001, out, sizeof out, &r);
+    CHECK(r.event == WISP_SESSION_ENDED && r.reply_len == 4 && out[1] == WISP_MF_RESPONSE && wisp_get16(out + 2) == 11);
     n = msg(in, WISP_OP_SESSION_PING, 9, &wisp_session_ping_req_desc, &ping);
     wisp_session_rx(&s, 0, in, n, 10000002, out, sizeof out, &r);
     CHECK(wisp_get16(out + 4) == WISP_ERR_NOT_ALLOWED);
@@ -416,10 +599,12 @@ int main(void) {
     test_frame_basics();
     for (uint32_t seed = 1; seed <= 5; seed++) test_rx_chunking(seed);
     test_tx_window();
-    test_lossy_link(7, 3000, 300, 0, 0);
-    for (uint32_t seed = 1; seed <= 20; seed++) test_lossy_link(seed * 2654435761u, 2000, 600, 20, 10);
-    test_lossy_link(11, 2000, 600, 200, 100); /* very noisy */
-    test_lossy_link(13, 70000, 24, 2, 1);     /* seq wraps */
+    test_lost_credit();
+    test_lossy_link(7, 3000, 300, 0, 0, true);
+    for (uint32_t seed = 1; seed <= 20; seed++) test_lossy_link(seed * 2654435761u, 2000, 600, 20, 10, seed % 2);
+    test_lossy_link(11, 2000, 600, 200, 100, true); /* very noisy */
+    test_lossy_link(17, 2000, 40, 300, 300, true);  /* mostly small frames, noisier still */
+    test_lossy_link(13, 70000, 24, 2, 1, true);     /* seq wraps */
     test_msg_table();
     test_codecs();
     test_session();

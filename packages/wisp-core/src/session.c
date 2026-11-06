@@ -9,7 +9,7 @@ void wisp_session_init(wisp_session *s, const wisp_session_hello_rsp_t *info) {
     s->info = info;
 }
 
-/* Answers only requests that asked for it (req != 0). */
+/* Answers only requests that asked for it (req != 0); d NULL = an empty "ok". */
 static int reply(const wisp_hdr *h, const wisp_desc *d, const void *msg, uint8_t *out, size_t cap,
                  wisp_session_result *r) {
     if (!h->req) return WISP_OK;
@@ -38,13 +38,7 @@ int wisp_session_rx(wisp_session *s, uint8_t svc, const uint8_t *body, size_t le
     s->last_rx_us = now_us;
     const uint8_t *p = body + WISP_MSG_HDR;
     size_t plen = len - WISP_MSG_HDR;
-
-    if (svc != WISP_SVC_SESSION) {
-        if (!s->active) return reply_error(&h, WISP_ERR_NOT_ALLOWED, reply_buf, cap, r);
-        r->event = WISP_SESSION_DISPATCH;
-        return WISP_OK;
-    }
-    if (h.mflags & (WISP_MF_RESPONSE | WISP_MF_ERROR | WISP_MF_EVENT)) return WISP_OK; /* not for us */
+    bool request = !(h.mflags & (WISP_MF_RESPONSE | WISP_MF_ERROR | WISP_MF_EVENT));
 
     union {
         wisp_session_hello_req_t hello;
@@ -54,6 +48,22 @@ int wisp_session_rx(wisp_session *s, uint8_t svc, const uint8_t *body, size_t le
         wisp_session_time_sync_req_t time;
         wisp_session_time_sync_rsp_t time_rsp;
     } m;
+
+    /* CREDIT and RESYNC (control frames) act in any state and are never answered. */
+    if (svc == WISP_SVC_SESSION && request && (h.op == WISP_OP_SESSION_CREDIT || h.op == WISP_OP_SESSION_RESYNC)) {
+        const wisp_desc *d = h.op == WISP_OP_SESSION_CREDIT ? &wisp_session_credit_req_desc : &wisp_session_resync_req_desc;
+        if (wisp_unpack(d, p, plen, &m) < 0) return WISP_OK;
+        r->event = h.op == WISP_OP_SESSION_CREDIT ? WISP_SESSION_CREDIT : WISP_SESSION_RESYNC;
+        r->seq = h.op == WISP_OP_SESSION_CREDIT ? m.credit.ack_seq : m.resync.last_good_seq;
+        return WISP_OK;
+    }
+    if (svc != WISP_SVC_SESSION) {
+        if (!s->active) return request ? reply_error(&h, WISP_ERR_NOT_ALLOWED, reply_buf, cap, r) : WISP_OK;
+        r->event = WISP_SESSION_DISPATCH;
+        return WISP_OK;
+    }
+    if (!request) return WISP_OK; /* not for us */
+
     const wisp_desc *d = wisp_desc_find(svc, h.op, h.mflags);
     if (d && wisp_unpack(d, p, plen, &m) < 0) return reply_error(&h, WISP_ERR_BAD_PAYLOAD, reply_buf, cap, r);
 
@@ -70,14 +80,6 @@ int wisp_session_rx(wisp_session *s, uint8_t svc, const uint8_t *body, size_t le
     if (!s->active) return reply_error(&h, WISP_ERR_NOT_ALLOWED, reply_buf, cap, r);
 
     switch (h.op) {
-    case WISP_OP_SESSION_CREDIT:
-        r->event = WISP_SESSION_CREDIT;
-        r->seq = m.credit.ack_seq;
-        return WISP_OK;
-    case WISP_OP_SESSION_RESYNC:
-        r->event = WISP_SESSION_RESYNC;
-        r->seq = m.resync.last_good_seq;
-        return WISP_OK;
     case WISP_OP_SESSION_PING:
         return reply(&h, &wisp_session_ping_rsp_desc, &m.ping, reply_buf, cap, r);
     case WISP_OP_SESSION_TIME_SYNC: {
@@ -89,7 +91,7 @@ int wisp_session_rx(wisp_session *s, uint8_t svc, const uint8_t *body, size_t le
     case WISP_OP_SESSION_BYE:
         s->active = false;
         r->event = WISP_SESSION_ENDED;
-        return WISP_OK;
+        return reply(&h, NULL, NULL, reply_buf, cap, r); /* ok */
     default:
         return reply_error(&h, WISP_ERR_UNSUPPORTED, reply_buf, cap, r);
     }

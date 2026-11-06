@@ -17,6 +17,9 @@ from spec import ERROR, MESSAGES, SERVICES, STRUCTS, parse_fields
 OUT = pathlib.Path(__file__).resolve().parents[2] / "wisp-proto" / "vectors"
 MAGIC = 0x57
 MAX_BODY = 4096
+CTRL = 0x01  # fflags bit 0; bits 1-7 reserved
+FFLAGS_RESERVED = 0xFE
+ROUTE_RESERVED = 0xF0
 
 # ---- checksums (bitwise, straight from the definitions) ----
 
@@ -69,21 +72,27 @@ class Rng:
 # ---- frames ----
 
 
-def frame(svc, seq, body, route=0):
-    head = struct.pack("<BBBBHH", MAGIC, svc, route, 0, len(body), seq) + body
+def frame(svc, seq, body, route=0, fflags=0):
+    head = struct.pack("<BBBBHH", MAGIC, svc, route, fflags, len(body), seq) + body
     return head + struct.pack("<H", crc16_ccitt_false(head))
 
 
+def control(op, seq, route=0, frame_seq=0):
+    """A CREDIT (op 2) or RESYNC (op 3) control frame."""
+    return frame(0, frame_seq, struct.pack("<BBHH", op, 0, 0, seq), route, CTRL)
+
+
 class Receiver:
-    """Reference stream receiver: in-order delivery, silent duplicate drop,
-    one RESYNC per run of discarded bytes and one per gap while in sync."""
+    """Reference stream receiver: in-order delivery, control frames passed on
+    in any state, a CREDIT for every duplicate, one RESYNC per run of
+    discarded bytes and one per gap while in sync."""
 
     def __init__(self):
         self.buf = bytearray()
         self.last = 0xFFFF
         self.recovering = False
         self.bad_run = False
-        self.frames, self.resyncs = [], []
+        self.frames, self.resyncs, self.controls, self.credits = [], [], [], []
 
     def bad(self):
         if not self.bad_run:
@@ -106,7 +115,7 @@ class Receiver:
             if len(self.buf) < 8:
                 return
             body_len = struct.unpack_from("<H", self.buf, 4)[0]
-            if body_len > MAX_BODY:
+            if body_len > MAX_BODY or self.buf[2] & ROUTE_RESERVED or self.buf[3] & FFLAGS_RESERVED:
                 self.skip()
                 continue
             need = body_len + 10
@@ -120,10 +129,14 @@ class Receiver:
             data = bytes(self.buf[:need])
             del self.buf[:need]
             ahead = (seq - self.last - 1) & 0xFFFF
-            if ahead == 0:
+            if data[3] & CTRL:
+                self.controls.append(data)
+            elif ahead == 0:
                 self.last, self.recovering = seq, False
                 self.frames.append(data)
-            elif ahead < 0x8000 and not self.recovering:
+            elif ahead >= 0x8000:
+                self.credits.append(self.last)
+            elif not self.recovering:
                 self.recovering = True
                 self.resyncs.append(self.last)
 
@@ -137,7 +150,7 @@ STRUCT_FIELDS = {name: parse_fields(f) for name, f in STRUCTS.items()}
 
 def pack(fields, values):
     out = b""
-    for name, ftype, item in fields:
+    for name, ftype, item, _ in fields:
         v = values[name]
         if ftype in INT_FMT:
             out += struct.pack("<" + INT_FMT[ftype], v)
@@ -161,7 +174,7 @@ def default(ftype):
 def sample(fields, k=0):
     """Distinct, byte-order-revealing values for every field."""
     vals = {}
-    for i, (name, ftype, item) in enumerate(fields):
+    for i, (name, ftype, item, _) in enumerate(fields):
         n = k + i
         vals[name] = {
             "u8": 0x10 + n,
@@ -177,14 +190,19 @@ def sample(fields, k=0):
             "bytes": bytes(range(0xF0, 0xF0 + 5 + n % 4)).hex(),
             "utf8": "Wisp ✓ grüße",
         }.get(ftype) if ftype != "items" else [sample(STRUCT_FIELDS[item], n + j) for j in range(2)]
+    for name, ftype, _, count in fields:  # counts are authoritative: make them match
+        if count and ftype == "bytes":
+            vals[name], vals[count] = bytes(range(0xE0, 0xEC)).hex(), 2
+        elif count:
+            vals[count] = len(vals[name])
     return vals
 
 
 # Realistic values where the generic samples would be meaningless.
 OVERRIDES = {
-    ("session", "hello", "req"): {"proto_major": 0, "proto_minor": 1, "max_frame": 4096, "rx_window": 16384,
+    ("session", "hello", "req"): {"proto_major": 0, "proto_minor": 2, "max_frame": 4096, "rx_window": 16384,
                                   "app_id": "dev.wisp.demo", "client_name": "wisp-sdk-ts"},
-    ("session", "hello", "rsp"): {"proto_major": 0, "proto_minor": 1, "max_frame": 4096, "rx_window": 32768,
+    ("session", "hello", "rsp"): {"proto_major": 0, "proto_minor": 2, "max_frame": 4096, "rx_window": 32768,
                                   "fw_name": "wisp", "fw_version": "0.1.0", "lens": 2, "caps": 0x000E07FF,
                                   "canvas_w": 640, "canvas_h": 480, "bpp": 4, "max_layers": 16,
                                   "res_bytes": 1048576, "persist_bytes": 8388608, "session_timeout_ms": 10000,
@@ -200,7 +218,7 @@ NO_RESPONSE = {("session", "credit"), ("session", "resync")}
 
 
 def message_case(name, svc, op, mflags, req, fields, values, hex_override=None, decode_only=False):
-    body = struct.pack("<BBH", op, mflags, req) + pack(fields, values)
+    body = struct.pack("<BBH", op, mflags, req) + (pack(fields, values) if hex_override is None else b"")
     case = {"name": name, "kind": "message", "svc": svc, "op": op, "mflags": mflags, "req": req, "fields": values,
             "hex": hex_override or body.hex()}
     if decode_only:
@@ -221,11 +239,11 @@ def message_vectors():
     # Append-only rule: missing trailing fields read as defaults, unknown trailing bytes are ignored.
     hello = parse_fields(MESSAGES[0][4])
     full = OVERRIDES[("session", "hello", "req")]
-    short = {n: (full[n] if i < 4 else default(t)) for i, (n, t, _) in enumerate(hello)}
+    short = {n: (full[n] if i < 4 else default(t)) for i, (n, t, _, _) in enumerate(hello)}
     body = struct.pack("<BBH", 1, 0, 7) + pack(hello[:4], full)
     files["session"].append(message_case("session/hello-request-truncated", 0, 1, 0, 7, hello, short,
                                          body.hex(), decode_only=True))
-    empty = {n: default(t) for n, t, _ in hello}
+    empty = {n: default(t) for n, t, _, _ in hello}
     files["session"].append(message_case("session/hello-request-empty", 0, 1, 0, 8, hello, empty,
                                          "01000800", decode_only=True))
     ping = parse_fields("token u32")
@@ -235,14 +253,88 @@ def message_vectors():
     files["session"].append(message_case("session/hello-request-full-str16", 0, 1, 0, 10, hello,
                                          dict(full, app_id="0123456789abcdef", client_name="")))
 
+    files["resource"] += list_vectors()
+    files["audio"] += tone_vectors()
+    files["sensor"] += sensor_vectors()
+    files["session"].append(malformed_case("session/ping-request-field-cut-in-half", 0, 4, 0, 11, "aabb"))
+    files["session"].append(malformed_case("session/hello-request-cut-inside-str16", 0, 1, 0, 12,
+                                           pack(hello[:4], full).hex() + b"dev.wisp".hex()))
+
     err = parse_fields(ERROR)
     errors = [
         message_case("error/not-allowed-before-hello", 2, 3, MFLAGS["err"], 0x0042, err, {"code": 7, "message": ""}),
         message_case("error/unsupported-with-message", 0, 0x7F, MFLAGS["err"], 0x0043, err,
                      {"code": 1, "message": "unsupported op"}),
         message_case("error/hash-mismatch", 3, 3, MFLAGS["err"], 0xFFFF, err, {"code": 6, "message": "résumé ✗"}),
+        malformed_case("error/code-cut-in-half", 2, 3, MFLAGS["err"], 0x0044, "07"),
     ]
     return {f"{svc}.json": cases for svc, cases in files.items()} | {"errors.json": errors}
+
+
+def malformed_case(name, svc, op, mflags, req, payload_hex):
+    """A body every decoder must reject as a bad payload (error 2)."""
+    return {"name": name, "kind": "message", "svc": svc, "op": op, "mflags": mflags, "req": req, "malformed": True,
+            "hex": (struct.pack("<BBH", op, mflags, req) + bytes.fromhex(payload_hex)).hex()}
+
+
+def counted(prefix, items, stride_pad=0):
+    """Items packed at their size plus stride_pad bytes (negative: cut short)."""
+    out = b""
+    for it in items:
+        b = it + bytes(range(0xA0, 0xA0 + max(stride_pad, 0)))
+        out += b[:len(it) + stride_pad] if stride_pad < 0 else b
+    return prefix + out
+
+
+# Lists: count is authoritative and each item is remaining / count bytes, so items can grow
+# (readers skip what they don't know) or be shorter (missing fields read as 0).
+def list_vectors():
+    svc, op = SERVICES["resource"], 5
+    fields = parse_fields(next(m[4] for m in MESSAGES if m[:4] == ("resource", 5, "rsp", "list")))
+    entry = STRUCT_FIELDS["list_entry"]
+    entries = [sample(entry, 3), sample(entry, 9)]
+    packed = [pack(entry, e) for e in entries]
+    head = struct.pack("<BBHH", op, MFLAGS["rsp"], 0x0201, 2)
+    grown = message_case("resource/list-response-grown-items", svc, op, MFLAGS["rsp"], 0x0201, fields,
+                         {"count": 2, "entries": entries}, counted(head, packed, 6).hex(), decode_only=True)
+    short = [dict(e, size=0, hash="00" * 16) for e in entries]
+    head = struct.pack("<BBHH", op, MFLAGS["rsp"], 0x0202, 2)
+    shorter = message_case("resource/list-response-short-items", svc, op, MFLAGS["rsp"], 0x0202, fields,
+                           {"count": 2, "entries": short}, counted(head, packed, -20).hex(), decode_only=True)
+    empty = message_case("resource/list-response-empty", svc, op, MFLAGS["rsp"], 0x0203, fields,
+                         {"count": 0, "entries": []})
+    rsp = MFLAGS["rsp"]
+    return [grown, shorter, empty,
+            malformed_case("resource/list-response-count-doesnt-divide", svc, op, rsp, 0x0204,
+                           struct.pack("<H", 5).hex() + b"".join(packed).hex()),
+            malformed_case("resource/list-response-count-0-with-items", svc, op, rsp, 0x0205,
+                           struct.pack("<H", 0).hex() + packed[0].hex()),
+            malformed_case("resource/list-response-item-field-cut-in-half", svc, op, rsp, 0x0206,
+                           struct.pack("<H", 2).hex() + counted(b"", packed, -19).hex())]
+
+
+def tone_vectors():
+    svc, op = SERVICES["audio"], 4
+    fields = parse_fields(next(m[4] for m in MESSAGES if m[:4] == ("audio", 4, "req", "tone")))
+    step = STRUCT_FIELDS["tone_step"]
+    steps = [{"freq_hz": 2000, "duration_ms": 100, "duty": 50}, {"freq_hz": 0, "duration_ms": 50, "duty": 0},
+             {"freq_hz": 3000, "duration_ms": 200, "duty": 30}]
+    packed = [pack(step, x) for x in steps]
+    head = struct.pack("<BBHB", op, 0, 0x0301, 3)
+    return [message_case("audio/tone-request-grown-steps", svc, op, 0, 0x0301, fields,
+                         {"count": 3, "steps": steps}, counted(head, packed, 3).hex(), decode_only=True),
+            malformed_case("audio/tone-request-count-doesnt-divide", svc, op, 0, 0x0302,
+                           "02" + b"".join(packed[:2]).hex()[:-2])]
+
+
+def sensor_vectors():
+    svc, op = SERVICES["sensor"], 3
+    fields = parse_fields(next(m[4] for m in MESSAGES if m[:4] == ("sensor", 3, "evt", "data")))
+    accel = struct.pack("<hhhH", 12, -980, 33, 0xBEEF) + struct.pack("<hhhH", 10, -990, 31, 0xBEEF)
+    values = {"sensor": 1, "count": 2, "t0_us": 5000, "dt_us": 10000, "samples": accel.hex()}
+    return [message_case("sensor/data-event-grown-samples", svc, op, MFLAGS["evt"], 0, fields, values),
+            malformed_case("sensor/data-event-count-doesnt-divide", svc, op, MFLAGS["evt"], 0,
+                           struct.pack("<BBII", 1, 4, 5000, 10000).hex() + accel[:6].hex())]
 
 
 # ---- crc, frames, streams ----
@@ -268,6 +360,10 @@ def ping_body(token, req=1):
 def frame_vectors():
     rng = Rng(0x57495350)
     specs = [
+        ("control-credit", 0, 0, 0, struct.pack("<BBHH", 2, 0, 0, 0x1234), CTRL),
+        ("control-resync-from-right", 0, 0b1000, 0, struct.pack("<BBHH", 3, 0, 0, 0xFFFF), CTRL),
+    ]
+    specs += [(*x, 0) for x in [
         ("ping", 0, 0, 0, ping_body(0xDEADBEEF)),
         ("empty-body", 0, 0, 1, b""),
         ("route-right-from-left", 2, 0b0110, 2, struct.pack("<BBHB", 8, 0, 3, 0)),
@@ -276,10 +372,10 @@ def frame_vectors():
         ("extension-svc", 0x80, 0, 5, b"\x01\x00\x00\x00" + rng.bytes(12)),
         ("magic-and-crc-lookalikes-in-body", 3, 0, 6, b"\x02\x00\x00\x00" + bytes([MAGIC]) * 9 + b"\x00\x57"),
         ("max-frame-body", 3, 0, 7, b"\x02\x00\x00\x00" + rng.bytes(MAX_BODY - 4)),
-    ]
-    return [{"name": f"frame/{name}", "kind": "frame", "svc": svc, "route": route, "seq": seq,
-             "body_hex": body.hex(), "hex": frame(svc, seq, body, route).hex()}
-            for name, svc, route, seq, body in specs]
+    ]]
+    return [{"name": f"frame/{name}", "kind": "frame", "svc": svc, "route": route, "fflags": fflags, "seq": seq,
+             "body_hex": body.hex(), "hex": frame(svc, seq, body, route, fflags).hex()}
+            for name, svc, route, seq, body, fflags in specs]
 
 
 def split(data, rng, max_chunk):
@@ -306,6 +402,15 @@ def stream_vectors():
         struct.pack_into("<H", b, 4, n)
         return bytes(b)
 
+    def with_header(fr, i, v):
+        """Header byte i set to v, CRC fixed up: only the header check can reject it."""
+        b = bytearray(fr[:-2])
+        b[i] = v
+        return bytes(b) + struct.pack("<H", crc16_ccitt_false(b))
+
+    credit = lambda seq, **kw: control(2, seq, **kw)  # noqa: E731
+    resync = lambda seq, **kw: control(3, seq, **kw)  # noqa: E731
+
     # Magic bytes whose would-be headers fail on len or CRC.
     garbage = bytes([0x00, 0x13, MAGIC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x08, MAGIC, MAGIC, 0x22])
     cases = [
@@ -314,7 +419,7 @@ def stream_vectors():
         ("random-split", split(b"".join(f), rng, 23), 9),
         ("frame-spanning-chunks", [f[0][:3], f[0][3:] + f[1][:9], f[1][9:] + f[2], f[3][:-1], f[3][-1:]], 4),
         ("garbage-before-first-frame", split(garbage + b"".join(f[:3]), rng, 11), 3),
-        ("duplicates-dropped-silently", [f[0], f[1], f[1], f[0], f[2], f[2]], 3),
+        ("duplicates-answered-with-credit", [f[0], f[1], f[1], f[0], f[2], f[2]], 3),
         ("bad-crc-then-retransmit", split(b"".join([f[0], f[1], flip(f[2], 12), f[3], f[4]] + f[2:6]), rng, 31), 6),
         ("bad-magic-then-retransmit", split(b"".join([f[0], flip(f[1], 0), f[2]] + f[1:4]), rng, 17), 4),
         ("lost-frame-gap-then-retransmit", [f[0], f[1], f[3], f[4], f[2], f[3], f[4], f[5]], 6),
@@ -325,6 +430,18 @@ def stream_vectors():
         # Frame 8's body holds a fake frame header; the rescan after its bad CRC must not trust it.
         ("magic-in-body-after-corruption", split(b"".join(f[:8] + [flip(f[8], 9), f[8]]), rng, 19), 9),
         ("truncated-frame-then-good", [f[0], f[1][:7], f[1], f[2]], 3),
+        # 0.2: control frames are outside the sequence and act in any state.
+        ("control-frames-interleaved", [f[0], credit(7), f[1], resync(3, frame_seq=0x4242), f[2]], 3),
+        ("control-frames-during-recovery",
+         split(b"".join([f[0], flip(f[1], 12), credit(5), f[2], resync(0), f[3], f[1], f[2], f[3]]), rng, 21), 4),
+        ("control-frames-after-gap", [f[0], f[2], credit(9), f[3], resync(1), f[1], f[2], credit(10), f[3]], 4),
+        ("control-frame-bad-crc-is-discarded", [f[0], flip(credit(4), 9), f[1], f[1]], 2),
+        # The sender's window was full and our CREDIT got lost: its ack timeout resends everything
+        # unacknowledged, and every duplicate is answered with a fresh CREDIT.
+        ("lost-credit-full-window-timeout-resend", [b"".join(f[:4]), b"".join(f[:4]), f[4]], 5),
+        ("reserved-fflags-bit-is-bad-frame", [f[0], with_header(f[1], 3, 0x02), f[2], f[1], f[2]], 3),
+        ("reserved-route-bits-are-bad-frame", [f[0], with_header(f[1], 2, 0x10), f[1]], 2),
+        ("reserved-bits-in-control-frame", [f[0], with_header(credit(0), 3, 0x81), f[1]], 2),
     ]
     out = []
     for name, chunks, delivered in cases:
@@ -333,7 +450,8 @@ def stream_vectors():
             rx.feed(c)
         assert len(rx.frames) == delivered, (name, len(rx.frames))
         out.append({"name": f"stream/{name}", "kind": "stream", "frames": [x.hex() for x in rx.frames],
-                    "chunks": [c.hex() for c in chunks], "resyncs": rx.resyncs})
+                    "chunks": [c.hex() for c in chunks], "resyncs": rx.resyncs,
+                    "controls": [x.hex() for x in rx.controls], "credits": rx.credits})
     return out
 
 
@@ -467,6 +585,16 @@ def codec_vectors():
         "sparse-text-like": [[(15 if (x * 7 + y * 3) % 11 == 0 else 0) for x in range(40)] for y in range(6)],
     }
     cases = []
+    bad_rle = {  # runs must cover exactly w x h pixels, never RAW4's padding nibble
+        "runs-cover-padding-nibble": (3, 2, "0102030004050600"),
+        "one-pixel-short": (3, 2, "010203040506"[:-2]),
+        "one-pixel-too-many": (3, 2, "01020304050606"),
+        "last-run-too-long": (4, 1, "f7"),
+        "empty": (1, 1, ""),
+    }
+    for name, (w, h, hexdata) in bad_rle.items():
+        cases.append({"name": f"rle4/{name}", "kind": "codec", "codec": 1, "w": w, "h": h, "malformed": True,
+                      "hex": hexdata})
     for name, px in images.items():
         w, h = len(px[0]), len(px)
         pixels = raw4(px, w).hex()

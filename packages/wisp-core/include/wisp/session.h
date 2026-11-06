@@ -2,8 +2,11 @@
  *
  * Gates everything on HELLO, answers PING and TIME_SYNC, and ends the
  * session after session_timeout_ms without a frame. Feed it every received
- * message body; it answers session messages itself and tells the caller
- * which others to dispatch. */
+ * message body, control frames included; it answers session messages itself
+ * and tells the caller which others to dispatch. Every request with req != 0
+ * gets exactly one response (an empty payload is ok), req = 0 gets none:
+ * the caller keeps that rule for what it dispatches. CREDIT and RESYNC are
+ * reported in any state and never answered. */
 #ifndef WISP_SESSION_H
 #define WISP_SESSION_H
 
@@ -15,9 +18,9 @@ typedef enum {
     WISP_SESSION_NONE,
     WISP_SESSION_STARTED, /* HELLO accepted (also ends any previous session): reset per-session state */
     WISP_SESSION_ENDED,   /* BYE or timeout: stop everything the session started */
-    WISP_SESSION_CREDIT,  /* seq = ack_seq, for wisp_tx_ack */
+    WISP_SESSION_CREDIT,  /* seq = ack_seq, for wisp_tx_ack (or use wisp_tx_control on the frame) */
     WISP_SESSION_RESYNC,  /* seq = last_good_seq, for wisp_tx_resync */
-    WISP_SESSION_DISPATCH /* not a session message and the session is up: the caller handles it */
+    WISP_SESSION_DISPATCH /* not a session message and the session is up: the caller handles (and answers) it */
 } wisp_session_event;
 
 typedef struct {

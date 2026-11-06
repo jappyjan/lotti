@@ -384,7 +384,6 @@ extern const wisp_desc wisp_display_clear_all_req_desc;
 typedef struct {
     uint16_t res;
     uint8_t type;
-    uint8_t codec;
     uint8_t flags;
     uint32_t size;
     uint8_t hash[16];

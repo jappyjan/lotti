@@ -5,130 +5,130 @@
 #include "wisp/msgs.h"
 
 static const wisp_field list_entry_fields[] = {
-    {"res", WISP_T_U16, offsetof(wisp_list_entry_t, res), NULL},
-    {"type", WISP_T_U8, offsetof(wisp_list_entry_t, type), NULL},
-    {"flags", WISP_T_U8, offsetof(wisp_list_entry_t, flags), NULL},
-    {"size", WISP_T_U32, offsetof(wisp_list_entry_t, size), NULL},
-    {"hash", WISP_T_HASH16, offsetof(wisp_list_entry_t, hash), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_list_entry_t, res), NULL},
+    {"type", WISP_T_U8, 0, offsetof(wisp_list_entry_t, type), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_list_entry_t, flags), NULL},
+    {"size", WISP_T_U32, 0, offsetof(wisp_list_entry_t, size), NULL},
+    {"hash", WISP_T_HASH16, 0, offsetof(wisp_list_entry_t, hash), NULL},
 };
 const wisp_desc wisp_list_entry_desc = {"list_entry", 0, 0, WISP_KIND_STRUCT, 5, 24, sizeof(wisp_list_entry_t), list_entry_fields};
 
 static const wisp_field tone_step_fields[] = {
-    {"freq_hz", WISP_T_U16, offsetof(wisp_tone_step_t, freq_hz), NULL},
-    {"duration_ms", WISP_T_U16, offsetof(wisp_tone_step_t, duration_ms), NULL},
-    {"duty", WISP_T_U8, offsetof(wisp_tone_step_t, duty), NULL},
+    {"freq_hz", WISP_T_U16, 0, offsetof(wisp_tone_step_t, freq_hz), NULL},
+    {"duration_ms", WISP_T_U16, 0, offsetof(wisp_tone_step_t, duration_ms), NULL},
+    {"duty", WISP_T_U8, 0, offsetof(wisp_tone_step_t, duty), NULL},
 };
 const wisp_desc wisp_tone_step_desc = {"tone_step", 0, 0, WISP_KIND_STRUCT, 3, 5, sizeof(wisp_tone_step_t), tone_step_fields};
 
 static const wisp_field res_image_fields[] = {
-    {"w", WISP_T_U16, offsetof(wisp_res_image_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_res_image_t, h), NULL},
-    {"bpp", WISP_T_U8, offsetof(wisp_res_image_t, bpp), NULL},
-    {"codec", WISP_T_U8, offsetof(wisp_res_image_t, codec), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_res_image_t, data), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_res_image_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_res_image_t, h), NULL},
+    {"bpp", WISP_T_U8, 0, offsetof(wisp_res_image_t, bpp), NULL},
+    {"codec", WISP_T_U8, 0, offsetof(wisp_res_image_t, codec), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_res_image_t, data), NULL},
 };
 const wisp_desc wisp_res_image_desc = {"res_image", 0, 0, WISP_KIND_STRUCT, 5, 6, sizeof(wisp_res_image_t), res_image_fields};
 
 static const wisp_field res_anim_fields[] = {
-    {"w", WISP_T_U16, offsetof(wisp_res_anim_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_res_anim_t, h), NULL},
-    {"frames", WISP_T_U16, offsetof(wisp_res_anim_t, frames), NULL},
-    {"codec", WISP_T_U8, offsetof(wisp_res_anim_t, codec), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_res_anim_t, data), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_res_anim_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_res_anim_t, h), NULL},
+    {"frames", WISP_T_U16, 0, offsetof(wisp_res_anim_t, frames), NULL},
+    {"codec", WISP_T_U8, 0, offsetof(wisp_res_anim_t, codec), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_res_anim_t, data), NULL},
 };
 const wisp_desc wisp_res_anim_desc = {"res_anim", 0, 0, WISP_KIND_STRUCT, 5, 7, sizeof(wisp_res_anim_t), res_anim_fields};
 
 static const wisp_field res_anim_frame_fields[] = {
-    {"duration_ms", WISP_T_U16, offsetof(wisp_res_anim_frame_t, duration_ms), NULL},
-    {"kind", WISP_T_U8, offsetof(wisp_res_anim_frame_t, kind), NULL},
-    {"size", WISP_T_U32, offsetof(wisp_res_anim_frame_t, size), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_res_anim_frame_t, data), NULL},
+    {"duration_ms", WISP_T_U16, 0, offsetof(wisp_res_anim_frame_t, duration_ms), NULL},
+    {"kind", WISP_T_U8, 0, offsetof(wisp_res_anim_frame_t, kind), NULL},
+    {"size", WISP_T_U32, 0, offsetof(wisp_res_anim_frame_t, size), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_res_anim_frame_t, data), NULL},
 };
 const wisp_desc wisp_res_anim_frame_desc = {"res_anim_frame", 0, 0, WISP_KIND_STRUCT, 4, 7, sizeof(wisp_res_anim_frame_t), res_anim_frame_fields};
 
 static const wisp_field res_font_fields[] = {
-    {"line_h", WISP_T_U8, offsetof(wisp_res_font_t, line_h), NULL},
-    {"baseline", WISP_T_U8, offsetof(wisp_res_font_t, baseline), NULL},
-    {"glyphs", WISP_T_U16, offsetof(wisp_res_font_t, glyphs), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_res_font_t, data), NULL},
+    {"line_h", WISP_T_U8, 0, offsetof(wisp_res_font_t, line_h), NULL},
+    {"baseline", WISP_T_U8, 0, offsetof(wisp_res_font_t, baseline), NULL},
+    {"glyphs", WISP_T_U16, 0, offsetof(wisp_res_font_t, glyphs), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_res_font_t, data), NULL},
 };
 const wisp_desc wisp_res_font_desc = {"res_font", 0, 0, WISP_KIND_STRUCT, 4, 4, sizeof(wisp_res_font_t), res_font_fields};
 
 static const wisp_field res_glyph_fields[] = {
-    {"codepoint", WISP_T_U32, offsetof(wisp_res_glyph_t, codepoint), NULL},
-    {"w", WISP_T_U8, offsetof(wisp_res_glyph_t, w), NULL},
-    {"h", WISP_T_U8, offsetof(wisp_res_glyph_t, h), NULL},
-    {"x_off", WISP_T_I8, offsetof(wisp_res_glyph_t, x_off), NULL},
-    {"y_off", WISP_T_I8, offsetof(wisp_res_glyph_t, y_off), NULL},
-    {"advance", WISP_T_U8, offsetof(wisp_res_glyph_t, advance), NULL},
-    {"offset", WISP_T_U32, offsetof(wisp_res_glyph_t, offset), NULL},
+    {"codepoint", WISP_T_U32, 0, offsetof(wisp_res_glyph_t, codepoint), NULL},
+    {"w", WISP_T_U8, 0, offsetof(wisp_res_glyph_t, w), NULL},
+    {"h", WISP_T_U8, 0, offsetof(wisp_res_glyph_t, h), NULL},
+    {"x_off", WISP_T_I8, 0, offsetof(wisp_res_glyph_t, x_off), NULL},
+    {"y_off", WISP_T_I8, 0, offsetof(wisp_res_glyph_t, y_off), NULL},
+    {"advance", WISP_T_U8, 0, offsetof(wisp_res_glyph_t, advance), NULL},
+    {"offset", WISP_T_U32, 0, offsetof(wisp_res_glyph_t, offset), NULL},
 };
 const wisp_desc wisp_res_glyph_desc = {"res_glyph", 0, 0, WISP_KIND_STRUCT, 7, 13, sizeof(wisp_res_glyph_t), res_glyph_fields};
 
 static const wisp_field error_fields[] = {
-    {"code", WISP_T_U16, offsetof(wisp_error_t, code), NULL},
-    {"message", WISP_T_UTF8, offsetof(wisp_error_t, message), NULL},
+    {"code", WISP_T_U16, 0, offsetof(wisp_error_t, code), NULL},
+    {"message", WISP_T_UTF8, 0, offsetof(wisp_error_t, message), NULL},
 };
 const wisp_desc wisp_error_desc = {"error", 0, 0, WISP_KIND_ERR, 2, 2, sizeof(wisp_error_t), error_fields};
 
 static const wisp_field session_hello_req_fields[] = {
-    {"proto_major", WISP_T_U8, offsetof(wisp_session_hello_req_t, proto_major), NULL},
-    {"proto_minor", WISP_T_U8, offsetof(wisp_session_hello_req_t, proto_minor), NULL},
-    {"max_frame", WISP_T_U16, offsetof(wisp_session_hello_req_t, max_frame), NULL},
-    {"rx_window", WISP_T_U32, offsetof(wisp_session_hello_req_t, rx_window), NULL},
-    {"app_id", WISP_T_STR16, offsetof(wisp_session_hello_req_t, app_id), NULL},
-    {"client_name", WISP_T_STR16, offsetof(wisp_session_hello_req_t, client_name), NULL},
+    {"proto_major", WISP_T_U8, 0, offsetof(wisp_session_hello_req_t, proto_major), NULL},
+    {"proto_minor", WISP_T_U8, 0, offsetof(wisp_session_hello_req_t, proto_minor), NULL},
+    {"max_frame", WISP_T_U16, 0, offsetof(wisp_session_hello_req_t, max_frame), NULL},
+    {"rx_window", WISP_T_U32, 0, offsetof(wisp_session_hello_req_t, rx_window), NULL},
+    {"app_id", WISP_T_STR16, 0, offsetof(wisp_session_hello_req_t, app_id), NULL},
+    {"client_name", WISP_T_STR16, 0, offsetof(wisp_session_hello_req_t, client_name), NULL},
 };
 const wisp_desc wisp_session_hello_req_desc = {"session/hello", 0, 1, WISP_KIND_REQ, 6, 40, sizeof(wisp_session_hello_req_t), session_hello_req_fields};
 
 static const wisp_field session_hello_rsp_fields[] = {
-    {"proto_major", WISP_T_U8, offsetof(wisp_session_hello_rsp_t, proto_major), NULL},
-    {"proto_minor", WISP_T_U8, offsetof(wisp_session_hello_rsp_t, proto_minor), NULL},
-    {"max_frame", WISP_T_U16, offsetof(wisp_session_hello_rsp_t, max_frame), NULL},
-    {"rx_window", WISP_T_U32, offsetof(wisp_session_hello_rsp_t, rx_window), NULL},
-    {"fw_name", WISP_T_STR16, offsetof(wisp_session_hello_rsp_t, fw_name), NULL},
-    {"fw_version", WISP_T_STR16, offsetof(wisp_session_hello_rsp_t, fw_version), NULL},
-    {"lens", WISP_T_U8, offsetof(wisp_session_hello_rsp_t, lens), NULL},
-    {"caps", WISP_T_U32, offsetof(wisp_session_hello_rsp_t, caps), NULL},
-    {"canvas_w", WISP_T_U16, offsetof(wisp_session_hello_rsp_t, canvas_w), NULL},
-    {"canvas_h", WISP_T_U16, offsetof(wisp_session_hello_rsp_t, canvas_h), NULL},
-    {"bpp", WISP_T_U8, offsetof(wisp_session_hello_rsp_t, bpp), NULL},
-    {"max_layers", WISP_T_U8, offsetof(wisp_session_hello_rsp_t, max_layers), NULL},
-    {"res_bytes", WISP_T_U32, offsetof(wisp_session_hello_rsp_t, res_bytes), NULL},
-    {"persist_bytes", WISP_T_U32, offsetof(wisp_session_hello_rsp_t, persist_bytes), NULL},
-    {"session_timeout_ms", WISP_T_U32, offsetof(wisp_session_hello_rsp_t, session_timeout_ms), NULL},
-    {"l2cap_psm", WISP_T_U16, offsetof(wisp_session_hello_rsp_t, l2cap_psm), NULL},
+    {"proto_major", WISP_T_U8, 0, offsetof(wisp_session_hello_rsp_t, proto_major), NULL},
+    {"proto_minor", WISP_T_U8, 0, offsetof(wisp_session_hello_rsp_t, proto_minor), NULL},
+    {"max_frame", WISP_T_U16, 0, offsetof(wisp_session_hello_rsp_t, max_frame), NULL},
+    {"rx_window", WISP_T_U32, 0, offsetof(wisp_session_hello_rsp_t, rx_window), NULL},
+    {"fw_name", WISP_T_STR16, 0, offsetof(wisp_session_hello_rsp_t, fw_name), NULL},
+    {"fw_version", WISP_T_STR16, 0, offsetof(wisp_session_hello_rsp_t, fw_version), NULL},
+    {"lens", WISP_T_U8, 0, offsetof(wisp_session_hello_rsp_t, lens), NULL},
+    {"caps", WISP_T_U32, 0, offsetof(wisp_session_hello_rsp_t, caps), NULL},
+    {"canvas_w", WISP_T_U16, 0, offsetof(wisp_session_hello_rsp_t, canvas_w), NULL},
+    {"canvas_h", WISP_T_U16, 0, offsetof(wisp_session_hello_rsp_t, canvas_h), NULL},
+    {"bpp", WISP_T_U8, 0, offsetof(wisp_session_hello_rsp_t, bpp), NULL},
+    {"max_layers", WISP_T_U8, 0, offsetof(wisp_session_hello_rsp_t, max_layers), NULL},
+    {"res_bytes", WISP_T_U32, 0, offsetof(wisp_session_hello_rsp_t, res_bytes), NULL},
+    {"persist_bytes", WISP_T_U32, 0, offsetof(wisp_session_hello_rsp_t, persist_bytes), NULL},
+    {"session_timeout_ms", WISP_T_U32, 0, offsetof(wisp_session_hello_rsp_t, session_timeout_ms), NULL},
+    {"l2cap_psm", WISP_T_U16, 0, offsetof(wisp_session_hello_rsp_t, l2cap_psm), NULL},
 };
 const wisp_desc wisp_session_hello_rsp_desc = {"session/hello", 0, 1, WISP_KIND_RSP, 16, 65, sizeof(wisp_session_hello_rsp_t), session_hello_rsp_fields};
 
 static const wisp_field session_credit_req_fields[] = {
-    {"ack_seq", WISP_T_U16, offsetof(wisp_session_credit_req_t, ack_seq), NULL},
+    {"ack_seq", WISP_T_U16, 0, offsetof(wisp_session_credit_req_t, ack_seq), NULL},
 };
 const wisp_desc wisp_session_credit_req_desc = {"session/credit", 0, 2, WISP_KIND_REQ, 1, 2, sizeof(wisp_session_credit_req_t), session_credit_req_fields};
 
 static const wisp_field session_resync_req_fields[] = {
-    {"last_good_seq", WISP_T_U16, offsetof(wisp_session_resync_req_t, last_good_seq), NULL},
+    {"last_good_seq", WISP_T_U16, 0, offsetof(wisp_session_resync_req_t, last_good_seq), NULL},
 };
 const wisp_desc wisp_session_resync_req_desc = {"session/resync", 0, 3, WISP_KIND_REQ, 1, 2, sizeof(wisp_session_resync_req_t), session_resync_req_fields};
 
 static const wisp_field session_ping_req_fields[] = {
-    {"token", WISP_T_U32, offsetof(wisp_session_ping_req_t, token), NULL},
+    {"token", WISP_T_U32, 0, offsetof(wisp_session_ping_req_t, token), NULL},
 };
 const wisp_desc wisp_session_ping_req_desc = {"session/ping", 0, 4, WISP_KIND_REQ, 1, 4, sizeof(wisp_session_ping_req_t), session_ping_req_fields};
 
 static const wisp_field session_ping_rsp_fields[] = {
-    {"token", WISP_T_U32, offsetof(wisp_session_ping_rsp_t, token), NULL},
+    {"token", WISP_T_U32, 0, offsetof(wisp_session_ping_rsp_t, token), NULL},
 };
 const wisp_desc wisp_session_ping_rsp_desc = {"session/ping", 0, 4, WISP_KIND_RSP, 1, 4, sizeof(wisp_session_ping_rsp_t), session_ping_rsp_fields};
 
 static const wisp_field session_time_sync_req_fields[] = {
-    {"phone_ms", WISP_T_U64, offsetof(wisp_session_time_sync_req_t, phone_ms), NULL},
+    {"phone_ms", WISP_T_U64, 0, offsetof(wisp_session_time_sync_req_t, phone_ms), NULL},
 };
 const wisp_desc wisp_session_time_sync_req_desc = {"session/time_sync", 0, 5, WISP_KIND_REQ, 1, 8, sizeof(wisp_session_time_sync_req_t), session_time_sync_req_fields};
 
 static const wisp_field session_time_sync_rsp_fields[] = {
-    {"phone_ms", WISP_T_U64, offsetof(wisp_session_time_sync_rsp_t, phone_ms), NULL},
-    {"glass_us", WISP_T_U64, offsetof(wisp_session_time_sync_rsp_t, glass_us), NULL},
+    {"phone_ms", WISP_T_U64, 0, offsetof(wisp_session_time_sync_rsp_t, phone_ms), NULL},
+    {"glass_us", WISP_T_U64, 0, offsetof(wisp_session_time_sync_rsp_t, glass_us), NULL},
 };
 const wisp_desc wisp_session_time_sync_rsp_desc = {"session/time_sync", 0, 5, WISP_KIND_RSP, 2, 16, sizeof(wisp_session_time_sync_rsp_t), session_time_sync_rsp_fields};
 
@@ -137,320 +137,319 @@ const wisp_desc wisp_session_bye_req_desc = {"session/bye", 0, 6, WISP_KIND_REQ,
 const wisp_desc wisp_system_info_req_desc = {"system/info", 1, 1, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field system_info_rsp_fields[] = {
-    {"hw_rev", WISP_T_STR16, offsetof(wisp_system_info_rsp_t, hw_rev), NULL},
-    {"serial", WISP_T_STR16, offsetof(wisp_system_info_rsp_t, serial), NULL},
-    {"panel", WISP_T_U8, offsetof(wisp_system_info_rsp_t, panel), NULL},
-    {"power_board", WISP_T_U8, offsetof(wisp_system_info_rsp_t, power_board), NULL},
-    {"lens", WISP_T_U8, offsetof(wisp_system_info_rsp_t, lens), NULL},
-    {"boot_reason", WISP_T_U8, offsetof(wisp_system_info_rsp_t, boot_reason), NULL},
-    {"boot_count", WISP_T_U32, offsetof(wisp_system_info_rsp_t, boot_count), NULL},
-    {"uptime_ms", WISP_T_U32, offsetof(wisp_system_info_rsp_t, uptime_ms), NULL},
-    {"build", WISP_T_STR16, offsetof(wisp_system_info_rsp_t, build), NULL},
+    {"hw_rev", WISP_T_STR16, 0, offsetof(wisp_system_info_rsp_t, hw_rev), NULL},
+    {"serial", WISP_T_STR16, 0, offsetof(wisp_system_info_rsp_t, serial), NULL},
+    {"panel", WISP_T_U8, 0, offsetof(wisp_system_info_rsp_t, panel), NULL},
+    {"power_board", WISP_T_U8, 0, offsetof(wisp_system_info_rsp_t, power_board), NULL},
+    {"lens", WISP_T_U8, 0, offsetof(wisp_system_info_rsp_t, lens), NULL},
+    {"boot_reason", WISP_T_U8, 0, offsetof(wisp_system_info_rsp_t, boot_reason), NULL},
+    {"boot_count", WISP_T_U32, 0, offsetof(wisp_system_info_rsp_t, boot_count), NULL},
+    {"uptime_ms", WISP_T_U32, 0, offsetof(wisp_system_info_rsp_t, uptime_ms), NULL},
+    {"build", WISP_T_STR16, 0, offsetof(wisp_system_info_rsp_t, build), NULL},
 };
 const wisp_desc wisp_system_info_rsp_desc = {"system/info", 1, 1, WISP_KIND_RSP, 9, 60, sizeof(wisp_system_info_rsp_t), system_info_rsp_fields};
 
 static const wisp_field system_brightness_req_fields[] = {
-    {"mode", WISP_T_U8, offsetof(wisp_system_brightness_req_t, mode), NULL},
-    {"level", WISP_T_U8, offsetof(wisp_system_brightness_req_t, level), NULL},
+    {"mode", WISP_T_U8, 0, offsetof(wisp_system_brightness_req_t, mode), NULL},
+    {"level", WISP_T_U8, 0, offsetof(wisp_system_brightness_req_t, level), NULL},
 };
 const wisp_desc wisp_system_brightness_req_desc = {"system/brightness", 1, 2, WISP_KIND_REQ, 2, 2, sizeof(wisp_system_brightness_req_t), system_brightness_req_fields};
 
 static const wisp_field system_display_power_req_fields[] = {
-    {"on", WISP_T_U8, offsetof(wisp_system_display_power_req_t, on), NULL},
-    {"off_when_unworn", WISP_T_U8, offsetof(wisp_system_display_power_req_t, off_when_unworn), NULL},
-    {"idle_off_ms", WISP_T_U32, offsetof(wisp_system_display_power_req_t, idle_off_ms), NULL},
+    {"on", WISP_T_U8, 0, offsetof(wisp_system_display_power_req_t, on), NULL},
+    {"off_when_unworn", WISP_T_U8, 0, offsetof(wisp_system_display_power_req_t, off_when_unworn), NULL},
+    {"idle_off_ms", WISP_T_U32, 0, offsetof(wisp_system_display_power_req_t, idle_off_ms), NULL},
 };
 const wisp_desc wisp_system_display_power_req_desc = {"system/display_power", 1, 3, WISP_KIND_REQ, 3, 6, sizeof(wisp_system_display_power_req_t), system_display_power_req_fields};
 
 static const wisp_field system_link_profile_req_fields[] = {
-    {"profile", WISP_T_U8, offsetof(wisp_system_link_profile_req_t, profile), NULL},
+    {"profile", WISP_T_U8, 0, offsetof(wisp_system_link_profile_req_t, profile), NULL},
 };
 const wisp_desc wisp_system_link_profile_req_desc = {"system/link_profile", 1, 4, WISP_KIND_REQ, 1, 1, sizeof(wisp_system_link_profile_req_t), system_link_profile_req_fields};
 
 static const wisp_field system_reboot_req_fields[] = {
-    {"mode", WISP_T_U8, offsetof(wisp_system_reboot_req_t, mode), NULL},
+    {"mode", WISP_T_U8, 0, offsetof(wisp_system_reboot_req_t, mode), NULL},
 };
 const wisp_desc wisp_system_reboot_req_desc = {"system/reboot", 1, 5, WISP_KIND_REQ, 1, 1, sizeof(wisp_system_reboot_req_t), system_reboot_req_fields};
 
 static const wisp_field system_log_config_req_fields[] = {
-    {"level", WISP_T_U8, offsetof(wisp_system_log_config_req_t, level), NULL},
+    {"level", WISP_T_U8, 0, offsetof(wisp_system_log_config_req_t, level), NULL},
 };
 const wisp_desc wisp_system_log_config_req_desc = {"system/log_config", 1, 6, WISP_KIND_REQ, 1, 1, sizeof(wisp_system_log_config_req_t), system_log_config_req_fields};
 
 static const wisp_field system_log_evt_fields[] = {
-    {"level", WISP_T_U8, offsetof(wisp_system_log_evt_t, level), NULL},
-    {"t_us", WISP_T_U32, offsetof(wisp_system_log_evt_t, t_us), NULL},
-    {"utf8", WISP_T_UTF8, offsetof(wisp_system_log_evt_t, utf8), NULL},
+    {"level", WISP_T_U8, 0, offsetof(wisp_system_log_evt_t, level), NULL},
+    {"t_us", WISP_T_U32, 0, offsetof(wisp_system_log_evt_t, t_us), NULL},
+    {"utf8", WISP_T_UTF8, 0, offsetof(wisp_system_log_evt_t, utf8), NULL},
 };
 const wisp_desc wisp_system_log_evt_desc = {"system/log", 1, 7, WISP_KIND_EVT, 3, 5, sizeof(wisp_system_log_evt_t), system_log_evt_fields};
 
 const wisp_desc wisp_system_stats_req_desc = {"system/stats", 1, 8, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field system_stats_rsp_fields[] = {
-    {"heap_free", WISP_T_U32, offsetof(wisp_system_stats_rsp_t, heap_free), NULL},
-    {"heap_min", WISP_T_U32, offsetof(wisp_system_stats_rsp_t, heap_min), NULL},
-    {"cpu_pct", WISP_T_U8, offsetof(wisp_system_stats_rsp_t, cpu_pct), NULL},
-    {"frames", WISP_T_U32, offsetof(wisp_system_stats_rsp_t, frames), NULL},
-    {"rx_bytes", WISP_T_U32, offsetof(wisp_system_stats_rsp_t, rx_bytes), NULL},
-    {"tx_bytes", WISP_T_U32, offsetof(wisp_system_stats_rsp_t, tx_bytes), NULL},
-    {"resyncs", WISP_T_U16, offsetof(wisp_system_stats_rsp_t, resyncs), NULL},
+    {"heap_free", WISP_T_U32, 0, offsetof(wisp_system_stats_rsp_t, heap_free), NULL},
+    {"heap_min", WISP_T_U32, 0, offsetof(wisp_system_stats_rsp_t, heap_min), NULL},
+    {"cpu_pct", WISP_T_U8, 0, offsetof(wisp_system_stats_rsp_t, cpu_pct), NULL},
+    {"frames", WISP_T_U32, 0, offsetof(wisp_system_stats_rsp_t, frames), NULL},
+    {"rx_bytes", WISP_T_U32, 0, offsetof(wisp_system_stats_rsp_t, rx_bytes), NULL},
+    {"tx_bytes", WISP_T_U32, 0, offsetof(wisp_system_stats_rsp_t, tx_bytes), NULL},
+    {"resyncs", WISP_T_U16, 0, offsetof(wisp_system_stats_rsp_t, resyncs), NULL},
 };
 const wisp_desc wisp_system_stats_rsp_desc = {"system/stats", 1, 8, WISP_KIND_RSP, 7, 23, sizeof(wisp_system_stats_rsp_t), system_stats_rsp_fields};
 
 static const wisp_field display_layer_set_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_layer_set_req_t, layer), NULL},
-    {"z", WISP_T_U8, offsetof(wisp_display_layer_set_req_t, z), NULL},
-    {"flags", WISP_T_U8, offsetof(wisp_display_layer_set_req_t, flags), NULL},
-    {"alpha", WISP_T_U8, offsetof(wisp_display_layer_set_req_t, alpha), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_layer_set_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_layer_set_req_t, y), NULL},
-    {"w", WISP_T_U16, offsetof(wisp_display_layer_set_req_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_display_layer_set_req_t, h), NULL},
-    {"content_w", WISP_T_U16, offsetof(wisp_display_layer_set_req_t, content_w), NULL},
-    {"content_h", WISP_T_U16, offsetof(wisp_display_layer_set_req_t, content_h), NULL},
-    {"scroll_x", WISP_T_I16, offsetof(wisp_display_layer_set_req_t, scroll_x), NULL},
-    {"scroll_y", WISP_T_I16, offsetof(wisp_display_layer_set_req_t, scroll_y), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_layer_set_req_t, layer), NULL},
+    {"z", WISP_T_U8, 0, offsetof(wisp_display_layer_set_req_t, z), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_display_layer_set_req_t, flags), NULL},
+    {"alpha", WISP_T_U8, 0, offsetof(wisp_display_layer_set_req_t, alpha), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_layer_set_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_layer_set_req_t, y), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_display_layer_set_req_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_display_layer_set_req_t, h), NULL},
+    {"content_w", WISP_T_U16, 0, offsetof(wisp_display_layer_set_req_t, content_w), NULL},
+    {"content_h", WISP_T_U16, 0, offsetof(wisp_display_layer_set_req_t, content_h), NULL},
+    {"scroll_x", WISP_T_I16, 0, offsetof(wisp_display_layer_set_req_t, scroll_x), NULL},
+    {"scroll_y", WISP_T_I16, 0, offsetof(wisp_display_layer_set_req_t, scroll_y), NULL},
 };
 const wisp_desc wisp_display_layer_set_req_desc = {"display/layer_set", 2, 1, WISP_KIND_REQ, 12, 20, sizeof(wisp_display_layer_set_req_t), display_layer_set_req_fields};
 
 static const wisp_field display_layer_del_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_layer_del_req_t, layer), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_layer_del_req_t, layer), NULL},
 };
 const wisp_desc wisp_display_layer_del_req_desc = {"display/layer_del", 2, 2, WISP_KIND_REQ, 1, 1, sizeof(wisp_display_layer_del_req_t), display_layer_del_req_fields};
 
 static const wisp_field display_fill_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_fill_req_t, layer), NULL},
-    {"value", WISP_T_U8, offsetof(wisp_display_fill_req_t, value), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_fill_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_fill_req_t, y), NULL},
-    {"w", WISP_T_U16, offsetof(wisp_display_fill_req_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_display_fill_req_t, h), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_fill_req_t, layer), NULL},
+    {"value", WISP_T_U8, 0, offsetof(wisp_display_fill_req_t, value), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_fill_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_fill_req_t, y), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_display_fill_req_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_display_fill_req_t, h), NULL},
 };
 const wisp_desc wisp_display_fill_req_desc = {"display/fill", 2, 3, WISP_KIND_REQ, 6, 10, sizeof(wisp_display_fill_req_t), display_fill_req_fields};
 
 static const wisp_field display_blit_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_blit_req_t, layer), NULL},
-    {"flags", WISP_T_U8, offsetof(wisp_display_blit_req_t, flags), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_blit_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_blit_req_t, y), NULL},
-    {"res", WISP_T_U16, offsetof(wisp_display_blit_req_t, res), NULL},
-    {"src_x", WISP_T_U16, offsetof(wisp_display_blit_req_t, src_x), NULL},
-    {"src_y", WISP_T_U16, offsetof(wisp_display_blit_req_t, src_y), NULL},
-    {"w", WISP_T_U16, offsetof(wisp_display_blit_req_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_display_blit_req_t, h), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_blit_req_t, layer), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_display_blit_req_t, flags), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_blit_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_blit_req_t, y), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_display_blit_req_t, res), NULL},
+    {"src_x", WISP_T_U16, 0, offsetof(wisp_display_blit_req_t, src_x), NULL},
+    {"src_y", WISP_T_U16, 0, offsetof(wisp_display_blit_req_t, src_y), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_display_blit_req_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_display_blit_req_t, h), NULL},
 };
 const wisp_desc wisp_display_blit_req_desc = {"display/blit", 2, 4, WISP_KIND_REQ, 9, 16, sizeof(wisp_display_blit_req_t), display_blit_req_fields};
 
 static const wisp_field display_image_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_image_req_t, layer), NULL},
-    {"codec", WISP_T_U8, offsetof(wisp_display_image_req_t, codec), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_image_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_image_req_t, y), NULL},
-    {"w", WISP_T_U16, offsetof(wisp_display_image_req_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_display_image_req_t, h), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_display_image_req_t, data), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_image_req_t, layer), NULL},
+    {"codec", WISP_T_U8, 0, offsetof(wisp_display_image_req_t, codec), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_image_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_image_req_t, y), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_display_image_req_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_display_image_req_t, h), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_display_image_req_t, data), NULL},
 };
 const wisp_desc wisp_display_image_req_desc = {"display/image", 2, 5, WISP_KIND_REQ, 7, 10, sizeof(wisp_display_image_req_t), display_image_req_fields};
 
 static const wisp_field display_text_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_text_req_t, layer), NULL},
-    {"value", WISP_T_U8, offsetof(wisp_display_text_req_t, value), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_text_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_text_req_t, y), NULL},
-    {"font", WISP_T_U16, offsetof(wisp_display_text_req_t, font), NULL},
-    {"max_w", WISP_T_U16, offsetof(wisp_display_text_req_t, max_w), NULL},
-    {"line_h", WISP_T_U16, offsetof(wisp_display_text_req_t, line_h), NULL},
-    {"utf8", WISP_T_UTF8, offsetof(wisp_display_text_req_t, utf8), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_text_req_t, layer), NULL},
+    {"value", WISP_T_U8, 0, offsetof(wisp_display_text_req_t, value), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_text_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_text_req_t, y), NULL},
+    {"font", WISP_T_U16, 0, offsetof(wisp_display_text_req_t, font), NULL},
+    {"max_w", WISP_T_U16, 0, offsetof(wisp_display_text_req_t, max_w), NULL},
+    {"line_h", WISP_T_U16, 0, offsetof(wisp_display_text_req_t, line_h), NULL},
+    {"utf8", WISP_T_UTF8, 0, offsetof(wisp_display_text_req_t, utf8), NULL},
 };
 const wisp_desc wisp_display_text_req_desc = {"display/text", 2, 6, WISP_KIND_REQ, 8, 12, sizeof(wisp_display_text_req_t), display_text_req_fields};
 
 static const wisp_field display_text_rsp_fields[] = {
-    {"w", WISP_T_U16, offsetof(wisp_display_text_rsp_t, w), NULL},
-    {"h", WISP_T_U16, offsetof(wisp_display_text_rsp_t, h), NULL},
-    {"chars_drawn", WISP_T_U16, offsetof(wisp_display_text_rsp_t, chars_drawn), NULL},
+    {"w", WISP_T_U16, 0, offsetof(wisp_display_text_rsp_t, w), NULL},
+    {"h", WISP_T_U16, 0, offsetof(wisp_display_text_rsp_t, h), NULL},
+    {"chars_drawn", WISP_T_U16, 0, offsetof(wisp_display_text_rsp_t, chars_drawn), NULL},
 };
 const wisp_desc wisp_display_text_rsp_desc = {"display/text", 2, 6, WISP_KIND_RSP, 3, 6, sizeof(wisp_display_text_rsp_t), display_text_rsp_fields};
 
 static const wisp_field display_scroll_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_scroll_req_t, layer), NULL},
-    {"dx", WISP_T_I16, offsetof(wisp_display_scroll_req_t, dx), NULL},
-    {"dy", WISP_T_I16, offsetof(wisp_display_scroll_req_t, dy), NULL},
-    {"fill", WISP_T_U8, offsetof(wisp_display_scroll_req_t, fill), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_scroll_req_t, layer), NULL},
+    {"dx", WISP_T_I16, 0, offsetof(wisp_display_scroll_req_t, dx), NULL},
+    {"dy", WISP_T_I16, 0, offsetof(wisp_display_scroll_req_t, dy), NULL},
+    {"fill", WISP_T_U8, 0, offsetof(wisp_display_scroll_req_t, fill), NULL},
 };
 const wisp_desc wisp_display_scroll_req_desc = {"display/scroll", 2, 7, WISP_KIND_REQ, 4, 6, sizeof(wisp_display_scroll_req_t), display_scroll_req_fields};
 
 static const wisp_field display_commit_req_fields[] = {
-    {"flags", WISP_T_U8, offsetof(wisp_display_commit_req_t, flags), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_display_commit_req_t, flags), NULL},
 };
 const wisp_desc wisp_display_commit_req_desc = {"display/commit", 2, 8, WISP_KIND_REQ, 1, 1, sizeof(wisp_display_commit_req_t), display_commit_req_fields};
 
 static const wisp_field display_commit_rsp_fields[] = {
-    {"frame", WISP_T_U32, offsetof(wisp_display_commit_rsp_t, frame), NULL},
-    {"glass_us", WISP_T_U64, offsetof(wisp_display_commit_rsp_t, glass_us), NULL},
+    {"frame", WISP_T_U32, 0, offsetof(wisp_display_commit_rsp_t, frame), NULL},
+    {"glass_us", WISP_T_U64, 0, offsetof(wisp_display_commit_rsp_t, glass_us), NULL},
 };
 const wisp_desc wisp_display_commit_rsp_desc = {"display/commit", 2, 8, WISP_KIND_RSP, 2, 12, sizeof(wisp_display_commit_rsp_t), display_commit_rsp_fields};
 
 static const wisp_field display_anim_play_req_fields[] = {
-    {"slot", WISP_T_U8, offsetof(wisp_display_anim_play_req_t, slot), NULL},
-    {"layer", WISP_T_U8, offsetof(wisp_display_anim_play_req_t, layer), NULL},
-    {"x", WISP_T_I16, offsetof(wisp_display_anim_play_req_t, x), NULL},
-    {"y", WISP_T_I16, offsetof(wisp_display_anim_play_req_t, y), NULL},
-    {"res", WISP_T_U16, offsetof(wisp_display_anim_play_req_t, res), NULL},
-    {"loops", WISP_T_U16, offsetof(wisp_display_anim_play_req_t, loops), NULL},
-    {"flags", WISP_T_U8, offsetof(wisp_display_anim_play_req_t, flags), NULL},
+    {"slot", WISP_T_U8, 0, offsetof(wisp_display_anim_play_req_t, slot), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_anim_play_req_t, layer), NULL},
+    {"x", WISP_T_I16, 0, offsetof(wisp_display_anim_play_req_t, x), NULL},
+    {"y", WISP_T_I16, 0, offsetof(wisp_display_anim_play_req_t, y), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_display_anim_play_req_t, res), NULL},
+    {"loops", WISP_T_U16, 0, offsetof(wisp_display_anim_play_req_t, loops), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_display_anim_play_req_t, flags), NULL},
 };
 const wisp_desc wisp_display_anim_play_req_desc = {"display/anim_play", 2, 9, WISP_KIND_REQ, 7, 11, sizeof(wisp_display_anim_play_req_t), display_anim_play_req_fields};
 
 static const wisp_field display_anim_done_evt_fields[] = {
-    {"slot", WISP_T_U8, offsetof(wisp_display_anim_done_evt_t, slot), NULL},
+    {"slot", WISP_T_U8, 0, offsetof(wisp_display_anim_done_evt_t, slot), NULL},
 };
 const wisp_desc wisp_display_anim_done_evt_desc = {"display/anim_done", 2, 9, WISP_KIND_EVT, 1, 1, sizeof(wisp_display_anim_done_evt_t), display_anim_done_evt_fields};
 
 static const wisp_field display_anim_stop_req_fields[] = {
-    {"slot", WISP_T_U8, offsetof(wisp_display_anim_stop_req_t, slot), NULL},
+    {"slot", WISP_T_U8, 0, offsetof(wisp_display_anim_stop_req_t, slot), NULL},
 };
 const wisp_desc wisp_display_anim_stop_req_desc = {"display/anim_stop", 2, 10, WISP_KIND_REQ, 1, 1, sizeof(wisp_display_anim_stop_req_t), display_anim_stop_req_fields};
 
 static const wisp_field display_tween_req_fields[] = {
-    {"layer", WISP_T_U8, offsetof(wisp_display_tween_req_t, layer), NULL},
-    {"prop", WISP_T_U8, offsetof(wisp_display_tween_req_t, prop), NULL},
-    {"easing", WISP_T_U8, offsetof(wisp_display_tween_req_t, easing), NULL},
-    {"to", WISP_T_I16, offsetof(wisp_display_tween_req_t, to), NULL},
-    {"duration_ms", WISP_T_U16, offsetof(wisp_display_tween_req_t, duration_ms), NULL},
+    {"layer", WISP_T_U8, 0, offsetof(wisp_display_tween_req_t, layer), NULL},
+    {"prop", WISP_T_U8, 0, offsetof(wisp_display_tween_req_t, prop), NULL},
+    {"easing", WISP_T_U8, 0, offsetof(wisp_display_tween_req_t, easing), NULL},
+    {"to", WISP_T_I16, 0, offsetof(wisp_display_tween_req_t, to), NULL},
+    {"duration_ms", WISP_T_U16, 0, offsetof(wisp_display_tween_req_t, duration_ms), NULL},
 };
 const wisp_desc wisp_display_tween_req_desc = {"display/tween", 2, 11, WISP_KIND_REQ, 5, 7, sizeof(wisp_display_tween_req_t), display_tween_req_fields};
 
 const wisp_desc wisp_display_clear_all_req_desc = {"display/clear_all", 2, 12, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field resource_put_begin_req_fields[] = {
-    {"res", WISP_T_U16, offsetof(wisp_resource_put_begin_req_t, res), NULL},
-    {"type", WISP_T_U8, offsetof(wisp_resource_put_begin_req_t, type), NULL},
-    {"codec", WISP_T_U8, offsetof(wisp_resource_put_begin_req_t, codec), NULL},
-    {"flags", WISP_T_U8, offsetof(wisp_resource_put_begin_req_t, flags), NULL},
-    {"size", WISP_T_U32, offsetof(wisp_resource_put_begin_req_t, size), NULL},
-    {"hash", WISP_T_HASH16, offsetof(wisp_resource_put_begin_req_t, hash), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_resource_put_begin_req_t, res), NULL},
+    {"type", WISP_T_U8, 0, offsetof(wisp_resource_put_begin_req_t, type), NULL},
+    {"flags", WISP_T_U8, 0, offsetof(wisp_resource_put_begin_req_t, flags), NULL},
+    {"size", WISP_T_U32, 0, offsetof(wisp_resource_put_begin_req_t, size), NULL},
+    {"hash", WISP_T_HASH16, 0, offsetof(wisp_resource_put_begin_req_t, hash), NULL},
 };
-const wisp_desc wisp_resource_put_begin_req_desc = {"resource/put_begin", 3, 1, WISP_KIND_REQ, 6, 25, sizeof(wisp_resource_put_begin_req_t), resource_put_begin_req_fields};
+const wisp_desc wisp_resource_put_begin_req_desc = {"resource/put_begin", 3, 1, WISP_KIND_REQ, 5, 24, sizeof(wisp_resource_put_begin_req_t), resource_put_begin_req_fields};
 
 static const wisp_field resource_put_begin_rsp_fields[] = {
-    {"status", WISP_T_U8, offsetof(wisp_resource_put_begin_rsp_t, status), NULL},
+    {"status", WISP_T_U8, 0, offsetof(wisp_resource_put_begin_rsp_t, status), NULL},
 };
 const wisp_desc wisp_resource_put_begin_rsp_desc = {"resource/put_begin", 3, 1, WISP_KIND_RSP, 1, 1, sizeof(wisp_resource_put_begin_rsp_t), resource_put_begin_rsp_fields};
 
 static const wisp_field resource_put_data_req_fields[] = {
-    {"res", WISP_T_U16, offsetof(wisp_resource_put_data_req_t, res), NULL},
-    {"offset", WISP_T_U32, offsetof(wisp_resource_put_data_req_t, offset), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_resource_put_data_req_t, data), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_resource_put_data_req_t, res), NULL},
+    {"offset", WISP_T_U32, 0, offsetof(wisp_resource_put_data_req_t, offset), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_resource_put_data_req_t, data), NULL},
 };
 const wisp_desc wisp_resource_put_data_req_desc = {"resource/put_data", 3, 2, WISP_KIND_REQ, 3, 6, sizeof(wisp_resource_put_data_req_t), resource_put_data_req_fields};
 
 static const wisp_field resource_put_end_req_fields[] = {
-    {"res", WISP_T_U16, offsetof(wisp_resource_put_end_req_t, res), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_resource_put_end_req_t, res), NULL},
 };
 const wisp_desc wisp_resource_put_end_req_desc = {"resource/put_end", 3, 3, WISP_KIND_REQ, 1, 2, sizeof(wisp_resource_put_end_req_t), resource_put_end_req_fields};
 
 static const wisp_field resource_delete_req_fields[] = {
-    {"res", WISP_T_U16, offsetof(wisp_resource_delete_req_t, res), NULL},
+    {"res", WISP_T_U16, 0, offsetof(wisp_resource_delete_req_t, res), NULL},
 };
 const wisp_desc wisp_resource_delete_req_desc = {"resource/delete", 3, 4, WISP_KIND_REQ, 1, 2, sizeof(wisp_resource_delete_req_t), resource_delete_req_fields};
 
 const wisp_desc wisp_resource_list_req_desc = {"resource/list", 3, 5, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field resource_list_rsp_fields[] = {
-    {"count", WISP_T_U16, offsetof(wisp_resource_list_rsp_t, count), NULL},
-    {"entries", WISP_T_ITEMS, offsetof(wisp_resource_list_rsp_t, entries), &wisp_list_entry_desc},
+    {"count", WISP_T_U16, 0, offsetof(wisp_resource_list_rsp_t, count), NULL},
+    {"entries", WISP_T_ITEMS, 1, offsetof(wisp_resource_list_rsp_t, entries), &wisp_list_entry_desc},
 };
 const wisp_desc wisp_resource_list_rsp_desc = {"resource/list", 3, 5, WISP_KIND_RSP, 2, 2, sizeof(wisp_resource_list_rsp_t), resource_list_rsp_fields};
 
 static const wisp_field input_config_req_fields[] = {
-    {"mask", WISP_T_U8, offsetof(wisp_input_config_req_t, mask), NULL},
-    {"tap_max_ms", WISP_T_U16, offsetof(wisp_input_config_req_t, tap_max_ms), NULL},
-    {"double_gap_ms", WISP_T_U16, offsetof(wisp_input_config_req_t, double_gap_ms), NULL},
-    {"long_ms", WISP_T_U16, offsetof(wisp_input_config_req_t, long_ms), NULL},
+    {"mask", WISP_T_U8, 0, offsetof(wisp_input_config_req_t, mask), NULL},
+    {"tap_max_ms", WISP_T_U16, 0, offsetof(wisp_input_config_req_t, tap_max_ms), NULL},
+    {"double_gap_ms", WISP_T_U16, 0, offsetof(wisp_input_config_req_t, double_gap_ms), NULL},
+    {"long_ms", WISP_T_U16, 0, offsetof(wisp_input_config_req_t, long_ms), NULL},
 };
 const wisp_desc wisp_input_config_req_desc = {"input/config", 4, 1, WISP_KIND_REQ, 4, 7, sizeof(wisp_input_config_req_t), input_config_req_fields};
 
 static const wisp_field input_touch_evt_fields[] = {
-    {"lens", WISP_T_U8, offsetof(wisp_input_touch_evt_t, lens), NULL},
-    {"pad", WISP_T_U8, offsetof(wisp_input_touch_evt_t, pad), NULL},
-    {"phase", WISP_T_U8, offsetof(wisp_input_touch_evt_t, phase), NULL},
-    {"pos", WISP_T_U16, offsetof(wisp_input_touch_evt_t, pos), NULL},
-    {"t_us", WISP_T_U32, offsetof(wisp_input_touch_evt_t, t_us), NULL},
+    {"lens", WISP_T_U8, 0, offsetof(wisp_input_touch_evt_t, lens), NULL},
+    {"pad", WISP_T_U8, 0, offsetof(wisp_input_touch_evt_t, pad), NULL},
+    {"phase", WISP_T_U8, 0, offsetof(wisp_input_touch_evt_t, phase), NULL},
+    {"pos", WISP_T_U16, 0, offsetof(wisp_input_touch_evt_t, pos), NULL},
+    {"t_us", WISP_T_U32, 0, offsetof(wisp_input_touch_evt_t, t_us), NULL},
 };
 const wisp_desc wisp_input_touch_evt_desc = {"input/touch", 4, 2, WISP_KIND_EVT, 5, 9, sizeof(wisp_input_touch_evt_t), input_touch_evt_fields};
 
 static const wisp_field input_gesture_evt_fields[] = {
-    {"lens", WISP_T_U8, offsetof(wisp_input_gesture_evt_t, lens), NULL},
-    {"kind", WISP_T_U8, offsetof(wisp_input_gesture_evt_t, kind), NULL},
-    {"t_us", WISP_T_U32, offsetof(wisp_input_gesture_evt_t, t_us), NULL},
+    {"lens", WISP_T_U8, 0, offsetof(wisp_input_gesture_evt_t, lens), NULL},
+    {"kind", WISP_T_U8, 0, offsetof(wisp_input_gesture_evt_t, kind), NULL},
+    {"t_us", WISP_T_U32, 0, offsetof(wisp_input_gesture_evt_t, t_us), NULL},
 };
 const wisp_desc wisp_input_gesture_evt_desc = {"input/gesture", 4, 3, WISP_KIND_EVT, 3, 6, sizeof(wisp_input_gesture_evt_t), input_gesture_evt_fields};
 
 static const wisp_field sensor_subscribe_req_fields[] = {
-    {"sensor", WISP_T_U8, offsetof(wisp_sensor_subscribe_req_t, sensor), NULL},
-    {"rate_hz", WISP_T_U16, offsetof(wisp_sensor_subscribe_req_t, rate_hz), NULL},
-    {"batch_ms", WISP_T_U16, offsetof(wisp_sensor_subscribe_req_t, batch_ms), NULL},
+    {"sensor", WISP_T_U8, 0, offsetof(wisp_sensor_subscribe_req_t, sensor), NULL},
+    {"rate_hz", WISP_T_U16, 0, offsetof(wisp_sensor_subscribe_req_t, rate_hz), NULL},
+    {"batch_ms", WISP_T_U16, 0, offsetof(wisp_sensor_subscribe_req_t, batch_ms), NULL},
 };
 const wisp_desc wisp_sensor_subscribe_req_desc = {"sensor/subscribe", 5, 1, WISP_KIND_REQ, 3, 5, sizeof(wisp_sensor_subscribe_req_t), sensor_subscribe_req_fields};
 
 static const wisp_field sensor_unsubscribe_req_fields[] = {
-    {"sensor", WISP_T_U8, offsetof(wisp_sensor_unsubscribe_req_t, sensor), NULL},
+    {"sensor", WISP_T_U8, 0, offsetof(wisp_sensor_unsubscribe_req_t, sensor), NULL},
 };
 const wisp_desc wisp_sensor_unsubscribe_req_desc = {"sensor/unsubscribe", 5, 2, WISP_KIND_REQ, 1, 1, sizeof(wisp_sensor_unsubscribe_req_t), sensor_unsubscribe_req_fields};
 
 static const wisp_field sensor_data_evt_fields[] = {
-    {"sensor", WISP_T_U8, offsetof(wisp_sensor_data_evt_t, sensor), NULL},
-    {"count", WISP_T_U8, offsetof(wisp_sensor_data_evt_t, count), NULL},
-    {"t0_us", WISP_T_U32, offsetof(wisp_sensor_data_evt_t, t0_us), NULL},
-    {"dt_us", WISP_T_U32, offsetof(wisp_sensor_data_evt_t, dt_us), NULL},
-    {"samples", WISP_T_BYTES, offsetof(wisp_sensor_data_evt_t, samples), NULL},
+    {"sensor", WISP_T_U8, 0, offsetof(wisp_sensor_data_evt_t, sensor), NULL},
+    {"count", WISP_T_U8, 0, offsetof(wisp_sensor_data_evt_t, count), NULL},
+    {"t0_us", WISP_T_U32, 0, offsetof(wisp_sensor_data_evt_t, t0_us), NULL},
+    {"dt_us", WISP_T_U32, 0, offsetof(wisp_sensor_data_evt_t, dt_us), NULL},
+    {"samples", WISP_T_BYTES, 2, offsetof(wisp_sensor_data_evt_t, samples), NULL},
 };
 const wisp_desc wisp_sensor_data_evt_desc = {"sensor/data", 5, 3, WISP_KIND_EVT, 5, 10, sizeof(wisp_sensor_data_evt_t), sensor_data_evt_fields};
 
 static const wisp_field sensor_read_req_fields[] = {
-    {"sensor", WISP_T_U8, offsetof(wisp_sensor_read_req_t, sensor), NULL},
+    {"sensor", WISP_T_U8, 0, offsetof(wisp_sensor_read_req_t, sensor), NULL},
 };
 const wisp_desc wisp_sensor_read_req_desc = {"sensor/read", 5, 4, WISP_KIND_REQ, 1, 1, sizeof(wisp_sensor_read_req_t), sensor_read_req_fields};
 
 static const wisp_field sensor_read_rsp_fields[] = {
-    {"sample", WISP_T_BYTES, offsetof(wisp_sensor_read_rsp_t, sample), NULL},
+    {"sample", WISP_T_BYTES, 0, offsetof(wisp_sensor_read_rsp_t, sample), NULL},
 };
 const wisp_desc wisp_sensor_read_rsp_desc = {"sensor/read", 5, 4, WISP_KIND_RSP, 1, 0, sizeof(wisp_sensor_read_rsp_t), sensor_read_rsp_fields};
 
 static const wisp_field audio_mic_start_req_fields[] = {
-    {"codec", WISP_T_U8, offsetof(wisp_audio_mic_start_req_t, codec), NULL},
-    {"rate_hz", WISP_T_U16, offsetof(wisp_audio_mic_start_req_t, rate_hz), NULL},
-    {"channels", WISP_T_U8, offsetof(wisp_audio_mic_start_req_t, channels), NULL},
-    {"frame_ms", WISP_T_U8, offsetof(wisp_audio_mic_start_req_t, frame_ms), NULL},
-    {"lc3_bytes", WISP_T_U8, offsetof(wisp_audio_mic_start_req_t, lc3_bytes), NULL},
+    {"codec", WISP_T_U8, 0, offsetof(wisp_audio_mic_start_req_t, codec), NULL},
+    {"rate_hz", WISP_T_U16, 0, offsetof(wisp_audio_mic_start_req_t, rate_hz), NULL},
+    {"channels", WISP_T_U8, 0, offsetof(wisp_audio_mic_start_req_t, channels), NULL},
+    {"frame_ms", WISP_T_U8, 0, offsetof(wisp_audio_mic_start_req_t, frame_ms), NULL},
+    {"lc3_bytes", WISP_T_U8, 0, offsetof(wisp_audio_mic_start_req_t, lc3_bytes), NULL},
 };
 const wisp_desc wisp_audio_mic_start_req_desc = {"audio/mic_start", 6, 1, WISP_KIND_REQ, 5, 6, sizeof(wisp_audio_mic_start_req_t), audio_mic_start_req_fields};
 
 const wisp_desc wisp_audio_mic_stop_req_desc = {"audio/mic_stop", 6, 2, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field audio_mic_data_evt_fields[] = {
-    {"seq", WISP_T_U16, offsetof(wisp_audio_mic_data_evt_t, seq), NULL},
-    {"t_us", WISP_T_U32, offsetof(wisp_audio_mic_data_evt_t, t_us), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_audio_mic_data_evt_t, data), NULL},
+    {"seq", WISP_T_U16, 0, offsetof(wisp_audio_mic_data_evt_t, seq), NULL},
+    {"t_us", WISP_T_U32, 0, offsetof(wisp_audio_mic_data_evt_t, t_us), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_audio_mic_data_evt_t, data), NULL},
 };
 const wisp_desc wisp_audio_mic_data_evt_desc = {"audio/mic_data", 6, 3, WISP_KIND_EVT, 3, 6, sizeof(wisp_audio_mic_data_evt_t), audio_mic_data_evt_fields};
 
 static const wisp_field audio_tone_req_fields[] = {
-    {"count", WISP_T_U8, offsetof(wisp_audio_tone_req_t, count), NULL},
-    {"steps", WISP_T_ITEMS, offsetof(wisp_audio_tone_req_t, steps), &wisp_tone_step_desc},
+    {"count", WISP_T_U8, 0, offsetof(wisp_audio_tone_req_t, count), NULL},
+    {"steps", WISP_T_ITEMS, 1, offsetof(wisp_audio_tone_req_t, steps), &wisp_tone_step_desc},
 };
 const wisp_desc wisp_audio_tone_req_desc = {"audio/tone", 6, 4, WISP_KIND_REQ, 2, 1, sizeof(wisp_audio_tone_req_t), audio_tone_req_fields};
 
 static const wisp_field update_begin_req_fields[] = {
-    {"size", WISP_T_U32, offsetof(wisp_update_begin_req_t, size), NULL},
-    {"sha256", WISP_T_SHA256, offsetof(wisp_update_begin_req_t, sha256), NULL},
-    {"version", WISP_T_STR16, offsetof(wisp_update_begin_req_t, version), NULL},
+    {"size", WISP_T_U32, 0, offsetof(wisp_update_begin_req_t, size), NULL},
+    {"sha256", WISP_T_SHA256, 0, offsetof(wisp_update_begin_req_t, sha256), NULL},
+    {"version", WISP_T_STR16, 0, offsetof(wisp_update_begin_req_t, version), NULL},
 };
 const wisp_desc wisp_update_begin_req_desc = {"update/begin", 7, 1, WISP_KIND_REQ, 3, 52, sizeof(wisp_update_begin_req_t), update_begin_req_fields};
 
 static const wisp_field update_data_req_fields[] = {
-    {"offset", WISP_T_U32, offsetof(wisp_update_data_req_t, offset), NULL},
-    {"data", WISP_T_BYTES, offsetof(wisp_update_data_req_t, data), NULL},
+    {"offset", WISP_T_U32, 0, offsetof(wisp_update_data_req_t, offset), NULL},
+    {"data", WISP_T_BYTES, 0, offsetof(wisp_update_data_req_t, data), NULL},
 };
 const wisp_desc wisp_update_data_req_desc = {"update/data", 7, 2, WISP_KIND_REQ, 2, 4, sizeof(wisp_update_data_req_t), update_data_req_fields};
 
@@ -461,10 +460,10 @@ const wisp_desc wisp_update_apply_req_desc = {"update/apply", 7, 4, WISP_KIND_RE
 const wisp_desc wisp_update_status_req_desc = {"update/status", 7, 5, WISP_KIND_REQ, 0, 0, 0, NULL};
 
 static const wisp_field update_status_rsp_fields[] = {
-    {"state", WISP_T_U8, offsetof(wisp_update_status_rsp_t, state), NULL},
-    {"confirmed", WISP_T_U8, offsetof(wisp_update_status_rsp_t, confirmed), NULL},
-    {"version", WISP_T_STR16, offsetof(wisp_update_status_rsp_t, version), NULL},
-    {"rescue_present", WISP_T_U8, offsetof(wisp_update_status_rsp_t, rescue_present), NULL},
+    {"state", WISP_T_U8, 0, offsetof(wisp_update_status_rsp_t, state), NULL},
+    {"confirmed", WISP_T_U8, 0, offsetof(wisp_update_status_rsp_t, confirmed), NULL},
+    {"version", WISP_T_STR16, 0, offsetof(wisp_update_status_rsp_t, version), NULL},
+    {"rescue_present", WISP_T_U8, 0, offsetof(wisp_update_status_rsp_t, rescue_present), NULL},
 };
 const wisp_desc wisp_update_status_rsp_desc = {"update/status", 7, 5, WISP_KIND_RSP, 4, 19, sizeof(wisp_update_status_rsp_t), update_status_rsp_fields};
 

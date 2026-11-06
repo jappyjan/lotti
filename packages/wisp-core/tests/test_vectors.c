@@ -27,6 +27,10 @@ static double num(const jv *c, const char *key) {
     const jv *v = json_get(c, key);
     return v ? v->num : -1;
 }
+static bool flag(const jv *c, const char *key) {
+    const jv *v = json_get(c, key);
+    return v && v->num;
+}
 
 static uint8_t arena[1 << 16];
 static size_t arena_used;
@@ -70,8 +74,9 @@ static void test_frame(const jv *c) {
     uint8_t body[8192], out[8192], buf[WISP_MAX_FRAME_DEFAULT + WISP_FRAME_OVERHEAD];
     size_t n = from_hex(str(c, "body_hex"), body, sizeof body);
     uint16_t seq = (uint16_t)num(c, "seq");
-    int len = wisp_frame_encode(out, sizeof out, (uint8_t)num(c, "svc"), (uint8_t)num(c, "route"), seq, body, n);
-    if (len < 0 || !hex_eq(out, (size_t)len, str(c, "hex"))) fail("encode");
+    uint8_t fflags = (uint8_t)num(c, "fflags");
+    int len = wisp_frame_encode(out, sizeof out, (uint8_t)num(c, "svc"), (uint8_t)num(c, "route"), fflags, seq, body, n);
+    if (len < 0 || !hex_eq(out, (size_t)len, str(c, "hex"))) return fail("encode");
 
     wisp_rx rx;
     wisp_rx_event ev;
@@ -79,15 +84,24 @@ static void test_frame(const jv *c) {
     wisp_rx_init(&rx, buf, sizeof buf);
     rx.last_good_seq = (uint16_t)(seq - 1u);
     size_t used = wisp_rx_feed(&rx, out, (size_t)len, &ev, &f);
-    if (ev != WISP_RX_FRAME || used != (size_t)len || f.seq != seq || f.svc != num(c, "svc") ||
-        f.route != num(c, "route") || f.len != n || memcmp(f.body, body, n))
+    if (ev != ((fflags & WISP_FF_CTRL) ? WISP_RX_CONTROL : WISP_RX_FRAME) || used != (size_t)len || f.seq != seq ||
+        f.svc != num(c, "svc") || f.route != num(c, "route") || f.fflags != fflags || f.len != n ||
+        memcmp(f.body, body, n))
         fail("decode");
 }
 
+/* The next expected item of a vector array (hex strings or numbers). */
+static bool next_hex(const jv *arr, size_t *i, const wisp_frame *f) {
+    return arr && *i < arr->n && hex_eq(f->body - WISP_FRAME_HDR, f->len + WISP_FRAME_OVERHEAD, arr->items[(*i)++].str);
+}
+static bool next_num(const jv *arr, size_t *i, double v) { return arr && *i < arr->n && arr->items[(*i)++].num == v; }
+static size_t len_of(const jv *arr) { return arr ? arr->n : 0; }
+
 static void test_stream(const jv *c) {
     uint8_t buf[WISP_MAX_FRAME_DEFAULT + WISP_FRAME_OVERHEAD], chunk[8192];
-    const jv *chunks = json_get(c, "chunks"), *frames = json_get(c, "frames"), *resyncs = json_get(c, "resyncs");
-    size_t nframes = 0, nresyncs = 0;
+    const jv *chunks = json_get(c, "chunks"), *frames = json_get(c, "frames"), *resyncs = json_get(c, "resyncs"),
+             *controls = json_get(c, "controls"), *credits = json_get(c, "credits");
+    size_t nframes = 0, nresyncs = 0, ncontrols = 0, ncredits = 0;
     wisp_rx rx;
     wisp_rx_init(&rx, buf, sizeof buf);
     for (size_t i = 0; i < chunks->n; i++) {
@@ -99,20 +113,16 @@ static void test_stream(const jv *c) {
             size_t used = wisp_rx_feed(&rx, p, len, &ev, &f);
             p += used;
             len -= used;
-            if (ev == WISP_RX_FRAME) {
-                if (nframes >= frames->n ||
-                    !hex_eq(f.body - WISP_FRAME_HDR, f.len + WISP_FRAME_OVERHEAD, frames->items[nframes].str))
-                    fail("unexpected frame");
-                nframes++;
-            } else if (ev == WISP_RX_RESYNC) {
-                if (!resyncs || nresyncs >= resyncs->n || resyncs->items[nresyncs].num != rx.last_good_seq)
-                    fail("unexpected resync");
-                nresyncs++;
-            }
+            if (ev == WISP_RX_FRAME && !next_hex(frames, &nframes, &f)) fail("unexpected frame");
+            if (ev == WISP_RX_CONTROL && !next_hex(controls, &ncontrols, &f)) fail("unexpected control frame");
+            if (ev == WISP_RX_RESYNC && !next_num(resyncs, &nresyncs, rx.last_good_seq)) fail("unexpected resync");
+            if (ev == WISP_RX_DUPLICATE && !next_num(credits, &ncredits, rx.last_good_seq)) fail("unexpected credit");
         } while (ev != WISP_RX_NONE);
     }
-    if (nframes != frames->n) fail("missing frames");
-    if (nresyncs != (resyncs ? resyncs->n : 0)) fail("missing resyncs");
+    if (nframes != len_of(frames)) fail("missing frames");
+    if (nresyncs != len_of(resyncs)) fail("missing resyncs");
+    if (ncontrols != len_of(controls)) fail("missing control frames");
+    if (ncredits != len_of(credits)) fail("missing credits");
 }
 
 /* ---- messages ---- */
@@ -170,10 +180,11 @@ static void compare(const wisp_desc *d, const uint8_t *s, const jv *fields) {
         } else if (f->type == WISP_T_UTF8) {
             if (b->len != strlen(j->str) || (b->len && memcmp(b->data, j->str, b->len))) fail(f->name);
         } else if (f->type == WISP_T_ITEMS) {
-            if (wisp_items_count(f->item, *b) != j->n) fail("item count");
-            for (size_t k = 0; k < j->n && k < wisp_items_count(f->item, *b); k++) {
+            size_t count = wisp_list_count(d, s, f);
+            if (count != j->n) fail("item count");
+            for (size_t k = 0; k < j->n && k < count; k++) {
                 alignas(16) uint8_t item[256];
-                wisp_items_get(f->item, *b, k, item);
+                if (wisp_items_get(f->item, *b, count, k, item) < 0) fail("item unpack");
                 compare(f->item, item, &j->items[k]);
             }
         }
@@ -224,11 +235,15 @@ static void test_message(const jv *c) {
     if (h.op != num(c, "op") || h.mflags != num(c, "mflags") || h.req != num(c, "req")) fail("header fields");
     const wisp_desc *d = wisp_desc_find((uint8_t)num(c, "svc"), h.op, h.mflags);
     if (!d) return fail("no layout for (svc, op, mflags)");
-    if (wisp_unpack(d, body + WISP_MSG_HDR, len - WISP_MSG_HDR, s) < 0) return fail("unpack");
+    int r = wisp_unpack(d, body + WISP_MSG_HDR, len - WISP_MSG_HDR, s);
+    if (flag(c, "malformed")) {
+        if (r != WISP_E_MALFORMED) fail("malformed payload accepted");
+        return;
+    }
+    if (r < 0) return fail("unpack");
     compare(d, s, fields);
 
-    const jv *decode_only = json_get(c, "decode_only");
-    if (decode_only && decode_only->num) return;
+    if (flag(c, "decode_only")) return;
     build(d, fields, s);
     int n = wisp_msg_encode(out, sizeof out, &h, d, s);
     if (n < 0 || !hex_eq(out, (size_t)n, str(c, "hex"))) fail("encode");
@@ -242,6 +257,11 @@ static void test_codec(const jv *c) {
     uint8_t codec = (uint8_t)num(c, "codec");
     uint16_t w = (uint16_t)num(c, "w"), h = (uint16_t)num(c, "h");
     size_t len = from_hex(str(c, "hex"), in, sizeof in);
+    if (flag(c, "malformed")) {
+        if (wisp_pixels_decode(codec, in, len, w, h, out, sizeof out, scratch, sizeof scratch) != WISP_E_MALFORMED)
+            fail("malformed data accepted");
+        return;
+    }
     size_t npix = from_hex(str(c, "pixels_hex"), pixels, sizeof pixels);
     if (npix != wisp_raw4_size(w, h)) return fail("pixels_hex size");
 
@@ -260,8 +280,7 @@ static void test_codec(const jv *c) {
         break;
     }
     if (n < 0) return fail("encode");
-    const jv *decode_only = json_get(c, "decode_only");
-    if (!(decode_only && decode_only->num) && !hex_eq(tmp, (size_t)n, str(c, "hex"))) fail("encode bytes");
+    if (!flag(c, "decode_only") && !hex_eq(tmp, (size_t)n, str(c, "hex"))) fail("encode bytes");
     int m = wisp_pixels_decode(codec, tmp, (size_t)n, w, h, out, sizeof out, scratch, sizeof scratch);
     if (m != (int)npix || memcmp(out, pixels, npix)) fail("round trip");
 }

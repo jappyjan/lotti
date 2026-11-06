@@ -309,10 +309,10 @@ const resourceEntry = {
 
 export const Resource = {
   putBegin: def(s.resource, 1, 'PUT_BEGIN', {
+    /** `size` and `hash` cover the resource payload exactly as uploaded. */
     request: struct({
       res: 'u16',
       type: 'u8',
-      codec: 'u8',
       flags: 'u8',
       size: 'u32',
       hash: 'hash16',
@@ -375,7 +375,8 @@ export const Sensor = {
       count: 'u8',
       t0Us: 'u32',
       dtUs: 'u32',
-      samples: 'bytes',
+      /** `count` samples of (length / count) bytes; decode with `decodeSamples`. */
+      samples: { count: 'count', bytes: true },
     }),
   }),
   read: def(s.sensor, 4, 'READ', {

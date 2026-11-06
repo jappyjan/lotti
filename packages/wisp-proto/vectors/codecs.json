@@ -1,5 +1,50 @@
 [
   {
+    "name": "rle4/runs-cover-padding-nibble",
+    "kind": "codec",
+    "codec": 1,
+    "w": 3,
+    "h": 2,
+    "malformed": true,
+    "hex": "0102030004050600"
+  },
+  {
+    "name": "rle4/one-pixel-short",
+    "kind": "codec",
+    "codec": 1,
+    "w": 3,
+    "h": 2,
+    "malformed": true,
+    "hex": "0102030405"
+  },
+  {
+    "name": "rle4/one-pixel-too-many",
+    "kind": "codec",
+    "codec": 1,
+    "w": 3,
+    "h": 2,
+    "malformed": true,
+    "hex": "01020304050606"
+  },
+  {
+    "name": "rle4/last-run-too-long",
+    "kind": "codec",
+    "codec": 1,
+    "w": 4,
+    "h": 1,
+    "malformed": true,
+    "hex": "f7"
+  },
+  {
+    "name": "rle4/empty",
+    "kind": "codec",
+    "codec": 1,
+    "w": 1,
+    "h": 1,
+    "malformed": true,
+    "hex": ""
+  },
+  {
     "name": "raw4/single-pixel",
     "kind": "codec",
     "codec": 0,

@@ -4,26 +4,37 @@
 
 #include "wisp/crc.h"
 #include "wisp/frame.h"
+#include "wisp/msgs.h"
 
 static size_t min_sz(size_t a, size_t b) { return a < b ? a : b; }
 
-static void put_header(uint8_t *h, uint8_t svc, uint8_t route, uint16_t len, uint16_t seq) {
+static void put_header(uint8_t *h, uint8_t svc, uint8_t route, uint8_t fflags, uint16_t len, uint16_t seq) {
     h[0] = WISP_MAGIC;
     h[1] = svc;
     h[2] = route;
-    h[3] = 0;
+    h[3] = fflags;
     wisp_put16(h + 4, len);
     wisp_put16(h + 6, seq);
 }
 
-int wisp_frame_encode(uint8_t *out, size_t cap, uint8_t svc, uint8_t route, uint16_t seq,
+int wisp_frame_encode(uint8_t *out, size_t cap, uint8_t svc, uint8_t route, uint8_t fflags, uint16_t seq,
                       const uint8_t *body, size_t len) {
+    if ((route & WISP_ROUTE_RESERVED) || (fflags & WISP_FF_RESERVED)) return WISP_E_ARG;
     if (len > 0xFFFF) return WISP_E_TOO_BIG;
     if (cap < len + WISP_FRAME_OVERHEAD) return WISP_E_SPACE;
-    put_header(out, svc, route, (uint16_t)len, seq);
+    put_header(out, svc, route, fflags, (uint16_t)len, seq);
     if (len) memcpy(out + WISP_FRAME_HDR, body, len);
     wisp_put16(out + WISP_FRAME_HDR + len, wisp_crc16(WISP_CRC16_INIT, out, WISP_FRAME_HDR + len));
     return (int)(len + WISP_FRAME_OVERHEAD);
+}
+
+int wisp_ctrl_decode(const wisp_frame *f, uint16_t *seq) {
+    if (f->svc != WISP_SVC_SESSION || !(f->fflags & WISP_FF_CTRL) || f->len < WISP_CTRL_BODY || f->body[1])
+        return WISP_E_MALFORMED;
+    uint8_t op = f->body[0];
+    if (op != WISP_OP_SESSION_CREDIT && op != WISP_OP_SESSION_RESYNC) return WISP_E_MALFORMED;
+    *seq = wisp_get16(f->body + 4);
+    return op;
 }
 
 /* ---- receiver ---- */
@@ -80,7 +91,7 @@ size_t wisp_rx_feed(wisp_rx *rx, const uint8_t *data, size_t len, wisp_rx_event 
         size_t need = WISP_FRAME_HDR;
         if (rx->fill >= WISP_FRAME_HDR) {
             uint16_t body_len = wisp_get16(rx->buf + 4);
-            if (body_len > rx->max_body) {
+            if (body_len > rx->max_body || (rx->buf[2] & WISP_ROUTE_RESERVED) || (rx->buf[3] & WISP_FF_RESERVED)) {
                 if (rx_skip(rx)) goto resync;
                 continue;
             }
@@ -104,10 +115,15 @@ size_t wisp_rx_feed(wisp_rx *rx, const uint8_t *data, size_t len, wisp_rx_event 
         rx->bad_run = false;
         uint16_t seq = wisp_get16(b + 6);
         uint16_t ahead = (uint16_t)(seq - (uint16_t)(rx->last_good_seq + 1u));
-        if (ahead == 0) {
-            rx->last_good_seq = seq;
-            rx->recovering = false;
-            rx->frames++;
+        bool ctrl = b[3] & WISP_FF_CTRL; /* outside the sequence: always passed on */
+        if (ctrl || ahead == 0) {
+            if (ctrl) {
+                rx->controls++;
+            } else {
+                rx->last_good_seq = seq;
+                rx->recovering = false;
+                rx->frames++;
+            }
             frame->svc = b[1];
             frame->route = b[2];
             frame->fflags = b[3];
@@ -115,18 +131,19 @@ size_t wisp_rx_feed(wisp_rx *rx, const uint8_t *data, size_t len, wisp_rx_event 
             frame->seq = seq;
             frame->body = b + WISP_FRAME_HDR;
             rx->delivered = true;
-            *ev = WISP_RX_FRAME;
+            *ev = ctrl ? WISP_RX_CONTROL : WISP_RX_FRAME;
             return used;
         }
         rx_drop(rx, need);
         if (ahead >= 0x8000u) {
-            rx->dups++; /* already delivered */
-        } else {
-            rx->gaps++; /* a frame went missing; ask once, then wait for it */
-            if (!rx->recovering) {
-                rx->recovering = true;
-                goto resync;
-            }
+            rx->dups++; /* already delivered: the sender may have missed our CREDIT */
+            *ev = WISP_RX_DUPLICATE;
+            return used;
+        }
+        rx->gaps++; /* a frame went missing; ask once, then wait for it */
+        if (!rx->recovering) {
+            rx->recovering = true;
+            goto resync;
         }
     }
 resync:
@@ -141,6 +158,7 @@ void wisp_tx_init(wisp_tx *tx, uint8_t *ring, size_t cap) {
     tx->ring = ring;
     tx->cap = cap;
     wisp_tx_set_peer(tx, 0, 0);
+    tx->window = WISP_PEER_WINDOW_INITIAL;
 }
 
 void wisp_tx_set_peer(wisp_tx *tx, uint16_t max_frame, uint32_t rx_window) {
@@ -173,8 +191,9 @@ int wisp_tx_send(wisp_tx *tx, uint8_t svc, uint8_t route, const uint8_t *body, s
     size_t size = len + WISP_FRAME_OVERHEAD;
     if (len > tx->max_body || size > tx->window || size > tx->cap) return WISP_E_TOO_BIG;
     if (tx->used + size > tx->window || tx->used + size > tx->cap || tx->nframes >= 0x8000u) return WISP_E_WINDOW;
+    if (route & WISP_ROUTE_RESERVED) return WISP_E_ARG;
     uint8_t h[WISP_FRAME_HDR], c[2];
-    put_header(h, svc, route, (uint16_t)len, tx->next_seq);
+    put_header(h, svc, route, 0, (uint16_t)len, tx->next_seq);
     wisp_put16(c, wisp_crc16(wisp_crc16(WISP_CRC16_INIT, h, sizeof h), body, len));
     ring_write(tx, tx->used, h, sizeof h);
     ring_write(tx, tx->used + WISP_FRAME_HDR, body, len);
@@ -187,6 +206,7 @@ int wisp_tx_send(wisp_tx *tx, uint8_t svc, uint8_t route, const uint8_t *body, s
 static void do_ack(wisp_tx *tx, uint16_t ack_seq) {
     uint16_t n = (uint16_t)(ack_seq - tail_seq(tx) + 1u);
     if (n > tx->nframes) return; /* stale, or not sent yet */
+    if (n) tx->acked = true;
     while (n--) {
         size_t size = frame_size_at(tx, 0);
         tx->tail = (tx->tail + size) % tx->cap;
@@ -228,6 +248,7 @@ void wisp_tx_ack(wisp_tx *tx, uint16_t ack_seq) {
 }
 
 void wisp_tx_resync(wisp_tx *tx, uint16_t last_good_seq) {
+    wisp_tx_ack(tx, last_good_seq); /* the peer has everything up to last_good_seq */
     tx->rewind_pending = true;
     tx->rewind_seq = (uint16_t)(last_good_seq + 1u);
     if (tx->frame_left == 0) apply_pending(tx);
@@ -235,11 +256,59 @@ void wisp_tx_resync(wisp_tx *tx, uint16_t last_good_seq) {
 
 void wisp_tx_resend_all(wisp_tx *tx) { wisp_tx_resync(tx, (uint16_t)(tail_seq(tx) - 1u)); }
 
+void wisp_tx_control(wisp_tx *tx, const wisp_frame *f) {
+    uint16_t seq;
+    int op = wisp_ctrl_decode(f, &seq);
+    if (op == WISP_OP_SESSION_CREDIT) wisp_tx_ack(tx, seq);
+    if (op == WISP_OP_SESSION_RESYNC) wisp_tx_resync(tx, seq);
+}
+
+void wisp_tx_queue_credit(wisp_tx *tx, uint16_t ack_seq) {
+    tx->credit_queued = true;
+    tx->credit_seq = ack_seq;
+}
+
+void wisp_tx_queue_resync(wisp_tx *tx, uint16_t last_good_seq) {
+    tx->resync_queued = true;
+    tx->resync_seq = last_good_seq;
+}
+
+/* At a frame boundary: starts the next queued control frame, if any. */
+static bool ctrl_next(wisp_tx *tx) {
+    uint8_t body[WISP_CTRL_BODY] = {0};
+    uint16_t seq;
+    if (tx->resync_queued) {
+        tx->resync_queued = false;
+        body[0] = WISP_OP_SESSION_RESYNC;
+        seq = tx->resync_seq;
+    } else if (tx->credit_queued) {
+        tx->credit_queued = false;
+        body[0] = WISP_OP_SESSION_CREDIT;
+        seq = tx->credit_seq;
+    } else {
+        return false;
+    }
+    wisp_put16(body + 4, seq);
+    int n = wisp_frame_encode(tx->ctrl, sizeof tx->ctrl, WISP_SVC_SESSION, tx->ctrl_route & 0x0Fu, WISP_FF_CTRL, 0,
+                              body, sizeof body);
+    tx->ctrl_off = 0;
+    tx->ctrl_len = (uint8_t)n;
+    return true;
+}
+
 size_t wisp_tx_pull(wisp_tx *tx, uint8_t *out, size_t cap) {
     size_t n = 0;
     while (n < cap) {
+        if (tx->ctrl_off < tx->ctrl_len) {
+            size_t k = min_sz((size_t)(tx->ctrl_len - tx->ctrl_off), cap - n);
+            memcpy(out + n, tx->ctrl + tx->ctrl_off, k);
+            tx->ctrl_off = (uint8_t)(tx->ctrl_off + k);
+            n += k;
+            continue;
+        }
         if (tx->frame_left == 0) {
             apply_pending(tx);
+            if (ctrl_next(tx)) continue;
             if (tx->sent == tx->used) break;
             tx->frame_left = frame_size_at(tx, tx->sent);
         }
@@ -253,4 +322,22 @@ size_t wisp_tx_pull(wisp_tx *tx, uint8_t *out, size_t cap) {
     return n;
 }
 
-size_t wisp_tx_pending(const wisp_tx *tx) { return tx->used - tx->sent; }
+bool wisp_tx_tick(wisp_tx *tx, uint32_t now_ms) {
+    uint32_t timeout = tx->ack_timeout_ms ? tx->ack_timeout_ms : WISP_ACK_TIMEOUT_DEFAULT_MS;
+    /* Nothing held, an ack came in, or frames still going out: nothing to wait for yet. */
+    if (!tx->nframes || tx->acked || tx->sent < tx->used || tx->frame_left) {
+        tx->acked = false;
+        tx->progress_ms = now_ms;
+        return false;
+    }
+    if ((uint32_t)(now_ms - tx->progress_ms) < timeout) return false;
+    wisp_tx_resend_all(tx);
+    tx->timeouts++;
+    tx->progress_ms = now_ms;
+    return true;
+}
+
+size_t wisp_tx_pending(const wisp_tx *tx) {
+    return tx->used - tx->sent + (size_t)(tx->ctrl_len - tx->ctrl_off) +
+           (tx->credit_queued ? WISP_CTRL_FRAME : 0u) + (tx->resync_queued ? WISP_CTRL_FRAME : 0u);
+}

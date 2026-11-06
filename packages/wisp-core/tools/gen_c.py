@@ -38,7 +38,7 @@ def gen_h():
     for sym, _, _, _, _, fields in layouts():
         if fields:
             lines.append("typedef struct {")
-            for fname, ftype, _ in fields:
+            for fname, ftype, _, _ in fields:
                 if ftype in ARRAYS:
                     ctype, n = ARRAYS[ftype]
                     lines.append(f"    {ctype} {fname}[{n}];")
@@ -58,9 +58,11 @@ def gen_c():
         fields_ref = "NULL"
         if fields:
             lines.append(f"static const wisp_field {sym}_fields[] = {{")
-            for fname, ftype, item in fields:
+            names = [f[0] for f in fields]
+            for fname, ftype, item, count in fields:
                 item_ref = f"&wisp_{item}_desc" if item else "NULL"
-                lines.append(f'    {{"{fname}", WISP_T_{ftype.upper()}, offsetof(wisp_{sym}_t, {fname}), {item_ref}}},')
+                count_ref = names.index(count) + 1 if count else 0
+                lines.append(f'    {{"{fname}", WISP_T_{ftype.upper()}, {count_ref}, offsetof(wisp_{sym}_t, {fname}), {item_ref}}},')
             lines.append("};")
             fields_ref = f"{sym}_fields"
         size = f"sizeof(wisp_{sym}_t)" if fields else "0"

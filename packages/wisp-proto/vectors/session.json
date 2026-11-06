@@ -8,13 +8,13 @@
     "req": 256,
     "fields": {
       "proto_major": 0,
-      "proto_minor": 1,
+      "proto_minor": 2,
       "max_frame": 4096,
       "rx_window": 16384,
       "app_id": "dev.wisp.demo",
       "client_name": "wisp-sdk-ts"
     },
-    "hex": "0100000100010010004000006465762e776973702e64656d6f000000776973702d73646b2d74730000000000"
+    "hex": "0100000100020010004000006465762e776973702e64656d6f000000776973702d73646b2d74730000000000"
   },
   {
     "name": "session/hello-response",
@@ -25,7 +25,7 @@
     "req": 257,
     "fields": {
       "proto_major": 0,
-      "proto_minor": 1,
+      "proto_minor": 2,
       "max_frame": 4096,
       "rx_window": 32768,
       "fw_name": "wisp",
@@ -41,7 +41,7 @@
       "session_timeout_ms": 10000,
       "l2cap_psm": 128
     },
-    "hex": "01010101000100100080000077697370000000000000000000000000302e312e30000000000000000000000002ff070e008002e00104100000100000008000102700008000"
+    "hex": "01010101000200100080000077697370000000000000000000000000302e312e30000000000000000000000002ff070e008002e00104100000100000008000102700008000"
   },
   {
     "name": "session/credit-request",
@@ -135,13 +135,13 @@
     "req": 7,
     "fields": {
       "proto_major": 0,
-      "proto_minor": 1,
+      "proto_minor": 2,
       "max_frame": 4096,
       "rx_window": 16384,
       "app_id": "",
       "client_name": ""
     },
-    "hex": "010007000001001000400000",
+    "hex": "010007000002001000400000",
     "decode_only": true
   },
   {
@@ -184,12 +184,32 @@
     "req": 10,
     "fields": {
       "proto_major": 0,
-      "proto_minor": 1,
+      "proto_minor": 2,
       "max_frame": 4096,
       "rx_window": 16384,
       "app_id": "0123456789abcdef",
       "client_name": ""
     },
-    "hex": "01000a0000010010004000003031323334353637383961626364656600000000000000000000000000000000"
+    "hex": "01000a0000020010004000003031323334353637383961626364656600000000000000000000000000000000"
+  },
+  {
+    "name": "session/ping-request-field-cut-in-half",
+    "kind": "message",
+    "svc": 0,
+    "op": 4,
+    "mflags": 0,
+    "req": 11,
+    "malformed": true,
+    "hex": "04000b00aabb"
+  },
+  {
+    "name": "session/hello-request-cut-inside-str16",
+    "kind": "message",
+    "svc": 0,
+    "op": 1,
+    "mflags": 0,
+    "req": 12,
+    "malformed": true,
+    "hex": "01000c0000020010004000006465762e77697370"
   }
 ]

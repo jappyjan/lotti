@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rng } from '../testing/random.ts';
-import { toHex } from './bytes.ts';
+import { ByteWriter, toHex } from './bytes.ts';
 import {
   ErrorPayload,
   Messages,
@@ -11,7 +11,13 @@ import {
   findMessage,
   type MessageDef,
 } from './messages.ts';
-import type { FieldType, Fields, Struct, Values } from './struct.ts';
+import {
+  PayloadError,
+  type FieldType,
+  type Fields,
+  type Struct,
+  type Values,
+} from './struct.ts';
 import { decodeSamples } from './constants.ts';
 
 const RANGES: Record<string, [number, number]> = {
@@ -30,14 +36,21 @@ function randomValues(
 ): Values<Fields> {
   const out: Record<string, unknown> = {};
   for (const [k, t] of Object.entries(fields)) out[k] = randomValue(t, r);
-  for (const [k, t] of Object.entries(fields))
-    if (typeof t !== 'string') out[t.count] = (out[k] as unknown[]).length;
+  for (const [k, t] of Object.entries(fields)) {
+    if (typeof t === 'string') continue;
+    if ('bytes' in t) {
+      out[t.count] = r.int(0, 4);
+      out[k] = r.bytes((out[t.count] as number) * r.int(1, 8));
+    } else out[t.count] = (out[k] as unknown[]).length;
+  }
   return out as Values<Fields>;
 }
 
 function randomValue(t: FieldType, r: ReturnType<typeof rng>): unknown {
   if (typeof t !== 'string')
-    return Array.from({ length: r.int(0, 4) }, () => randomValues(t.item, r));
+    return 'bytes' in t
+      ? new Uint8Array(0)
+      : Array.from({ length: r.int(0, 4) }, () => randomValues(t.item, r));
   if (t === 'str16')
     return ['', 'a', 'demo', 'exactly sixteen!', 'ü€'][r.int(0, 4)];
   if (t === 'utf8') return ['', 'hello 🙂', 'x'.repeat(100)][r.int(0, 2)];
@@ -107,7 +120,7 @@ test('field widths match the spec tables', () => {
   assert.equal(Messages.display.blit.request!.encode({}).length, 2 + 2 * 7);
   assert.equal(
     Messages.resource.putBegin.request!.encode({}).length,
-    2 + 3 + 4 + 16,
+    2 + 2 + 4 + 16, // 0.2: no codec
   );
   assert.equal(
     Messages.system.info.response!.encode({}).length,
@@ -156,12 +169,77 @@ test('sensor samples', () => {
   const b = Uint8Array.from([
     0x01, 0x00, 0xff, 0xff, 0x10, 0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00,
   ]);
-  assert.deepEqual(decodeSamples('accelerometer', b), [
+  assert.deepEqual(decodeSamples('accelerometer', b, 2), [
     { x: 1, y: -1, z: 16 },
     { x: 2, y: 3, z: 4 },
   ]);
   assert.deepEqual(
     decodeSamples('battery', Uint8Array.from([80, 0x10, 0x0f, 1])),
     [{ soc: 80, mv: 0x0f10, charging: true }],
+  );
+  // count is authoritative: 8-byte samples carry a field we don't know yet
+  assert.deepEqual(
+    decodeSamples(
+      'accelerometer',
+      Uint8Array.from([1, 0, 2, 0, 3, 0, 9, 9]),
+      1,
+    ),
+    [{ x: 1, y: 2, z: 3 }],
+  );
+  assert.throws(() => decodeSamples('accelerometer', b, 5), PayloadError);
+  assert.throws(() => decodeSamples('wear', Uint8Array.of(1), 0), PayloadError);
+});
+
+test('counted lists: count is authoritative, items may grow or shrink', () => {
+  const list = Messages.resource.list.response!;
+  const entry = (res: number, extra: number[]) =>
+    new ByteWriter()
+      .u16(res)
+      .u8(1)
+      .u8(0)
+      .u32(100 + res)
+      .fixed(new Uint8Array(16), 16)
+      .bytes(Uint8Array.from(extra))
+      .finish();
+  const grown = new ByteWriter()
+    .u16(2)
+    .bytes(entry(7, [1, 2]))
+    .bytes(entry(8, [3, 4]))
+    .finish();
+  assert.deepEqual(
+    list.decode(grown).entries.map((e) => [e.res, e.size]),
+    [
+      [7, 107],
+      [8, 108],
+    ],
+  );
+  // 4-byte items: size and hash missing, read as 0
+  const short = Uint8Array.from([2, 0, 7, 0, 1, 0, 8, 0, 1, 0]);
+  assert.deepEqual(
+    list.decode(short).entries.map((e) => [e.res, e.size]),
+    [
+      [7, 0],
+      [8, 0],
+    ],
+  );
+  assert.deepEqual(list.decode(Uint8Array.from([0, 0])).entries, []);
+  assert.throws(
+    () => list.decode(grown.subarray(0, grown.length - 1)),
+    PayloadError,
+  );
+  assert.throws(() => list.decode(Uint8Array.from([0, 0, 1])), PayloadError);
+  // 5-byte items cut `size` in half
+  assert.throws(
+    () => list.decode(Uint8Array.from([2, 0, 7, 0, 1, 0, 9, 8, 0, 1, 0, 9])),
+    PayloadError,
+  );
+  // a field cut in half is a bad payload too
+  assert.throws(
+    () => Session.ping.request!.decode(Uint8Array.of(1, 2)),
+    PayloadError,
+  );
+  assert.throws(
+    () => Messages.audio.tone.request!.encode({ count: 2, steps: [] }),
+    RangeError,
   );
 });

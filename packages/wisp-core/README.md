@@ -6,14 +6,14 @@ Rules for everything in here: C11, no hardware dependencies, no `malloc`, no glo
 
 ## Modules
 
-| Header           | What                                                                                                                                                 |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wisp/crc.h`     | CRC-16/CCITT-FALSE (frames), CRC-32C MSB-first (EVENOTA), zlib CRC-32. Nibble tables, 192 bytes                                                      |
-| `wisp/frame.h`   | `wisp_frame_encode`; `wisp_rx` streaming receiver (any chunking, resync, duplicate drop); `wisp_tx` sender credit window with retransmit from a ring |
-| `wisp/msg.h`     | message header, error codes, the table-driven payload codec (`wisp_pack` / `wisp_unpack`, append-only rules)                                         |
-| `wisp/msgs.h`    | generated: a struct and a `wisp_desc` per message, op and service ids                                                                                |
-| `wisp/codec.h`   | RLE4 encode/decode, LZ4 block decode and a small greedy encoder, XOR delta, `wisp_pixels_decode` for any codec                                       |
-| `wisp/session.h` | session state machine: `HELLO` gating (error 7 before it), `PING`, `TIME_SYNC`, `CREDIT`/`RESYNC` events, timeout                                    |
+| Header           | What                                                                                                                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wisp/crc.h`     | CRC-16/CCITT-FALSE (frames), CRC-32C MSB-first (EVENOTA), zlib CRC-32. Nibble tables, 192 bytes                                                                                                       |
+| `wisp/frame.h`   | `wisp_frame_encode`; `wisp_rx` streaming receiver (any chunking, resync, control frames, duplicates); `wisp_tx` sender credit window with retransmit from a ring, control-frame queue and ack timeout |
+| `wisp/msg.h`     | message header, error codes, the table-driven payload codec (`wisp_pack` / `wisp_unpack`, append-only rules, counted lists)                                                                           |
+| `wisp/msgs.h`    | generated: a struct and a `wisp_desc` per message, op and service ids                                                                                                                                 |
+| `wisp/codec.h`   | RLE4 encode/decode, LZ4 block decode and a small greedy encoder, XOR delta, `wisp_pixels_decode` for any codec                                                                                        |
+| `wisp/session.h` | session state machine: `HELLO` gating (error 7 before it), `PING`, `TIME_SYNC`, `BYE`, `CREDIT`/`RESYNC` events in any state, timeout                                                                 |
 
 A receive loop on the glasses, roughly:
 
@@ -21,18 +21,21 @@ A receive loop on the glasses, roughly:
 do {
     size_t n = wisp_rx_feed(&rx, data, len, &ev, &f);
     data += n; len -= n;
-    if (ev == WISP_RX_RESYNC) send_resync(rx.last_good_seq);
-    if (ev != WISP_RX_FRAME) continue;
+    if (ev == WISP_RX_RESYNC) wisp_tx_queue_resync(&tx, rx.last_good_seq);
+    if (ev == WISP_RX_DUPLICATE) wisp_tx_queue_credit(&tx, rx.last_good_seq);
+    if (ev != WISP_RX_FRAME && ev != WISP_RX_CONTROL) continue;
     wisp_session_rx(&session, f.svc, f.body, f.len, now_us, reply, sizeof reply, &r);
     if (r.reply_len) wisp_tx_send(&tx, f.svc, 0, reply, r.reply_len);
     switch (r.event) {
     case WISP_SESSION_STARTED: wisp_tx_set_peer(&tx, session.max_frame, session.peer_window); break;
     case WISP_SESSION_CREDIT: wisp_tx_ack(&tx, r.seq); break;
     case WISP_SESSION_RESYNC: wisp_tx_resync(&tx, r.seq); break;
-    case WISP_SESSION_DISPATCH: /* display, resource, … */ break;
+    case WISP_SESSION_DISPATCH: /* display, resource, …: answer every req != 0 once */ break;
     default: break;
     }
 } while (ev != WISP_RX_NONE);
+/* elsewhere: queue a coalesced CREDIT after consuming frames, call wisp_tx_tick(&tx, now_ms)
+ * every few ms (ack timeout), and pull bytes for the link with wisp_tx_pull */
 ```
 
 ## Message table and vectors
@@ -55,7 +58,7 @@ pnpm nx run wisp-core:generate   # regenerate msgs.h/msgs.c and the vectors
 
 Needs CMake ≥ 3.20, a C11 compiler and Python 3; `build-arm` needs `arm-none-eabi-gcc`. On a Nix host the targets fetch missing tools through `nix shell` by themselves (`tools/with-tools.sh`).
 
-The randomized tests run a sender and a receiver over a link that corrupts, truncates and drops chunks (with CREDIT and RESYNC going back) and require every message exactly once and in order, including across a seq wrap.
+The randomized tests run two endpoints over a link that corrupts, truncates and drops chunks in both directions, so CREDIT and RESYNC control frames get lost and damaged as well; recovery relies on RESYNC, a CREDIT for every duplicate and the ack timeout. They require every message exactly once and in order, including across a seq wrap.
 
 ## License
 

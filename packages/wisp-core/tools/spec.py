@@ -1,4 +1,4 @@
-"""Wisp protocol v0 message table, transcribed from docs/wisp/protocol.md.
+"""Wisp protocol v0.2 message table, transcribed from docs/wisp/protocol.md.
 
 The single source for the generated C structs (gen_c.py) and the golden
 vectors (gen_vectors.py). Keep it in the spec's order and naming; append
@@ -7,7 +7,13 @@ fields only at the end of a message.
 Field types: u8 i8 u16 i16 u32 i32 u64 (little-endian), str16 (16 bytes
 UTF-8, zero-padded), hash16 (16 bytes), sha256 (32 bytes). The last field may
 be a tail that takes the rest of the payload: bytes, utf8, or items:<struct>
-(a run of fixed-size structs).
+(a run of structs). A tail with [field] after its type is a counted list:
+`field` (an earlier field) holds the item count, which is authoritative,
+and each item is remaining / count bytes; a remainder that isn't a multiple
+of the count is malformed. Items may be longer than the struct we know
+(readers skip the rest of each item) or shorter (missing fields read as 0).
+bytes[field] is a counted list whose item layout the message doesn't fix
+(sensor samples).
 """
 
 SERVICES = {
@@ -63,13 +69,13 @@ MESSAGES = [
     ("display", 11, "req", "tween", "layer u8, prop u8, easing u8, to i16, duration_ms u16"),
     ("display", 12, "req", "clear_all", ""),
 
-    ("resource", 1, "req", "put_begin", "res u16, type u8, codec u8, flags u8, size u32, hash hash16"),
+    ("resource", 1, "req", "put_begin", "res u16, type u8, flags u8, size u32, hash hash16"),
     ("resource", 1, "rsp", "put_begin", "status u8"),
     ("resource", 2, "req", "put_data", "res u16, offset u32, data bytes"),
     ("resource", 3, "req", "put_end", "res u16"),
     ("resource", 4, "req", "delete", "res u16"),
     ("resource", 5, "req", "list", ""),
-    ("resource", 5, "rsp", "list", "count u16, entries items:list_entry"),
+    ("resource", 5, "rsp", "list", "count u16, entries items:list_entry[count]"),
 
     ("input", 1, "req", "config", "mask u8, tap_max_ms u16, double_gap_ms u16, long_ms u16"),
     ("input", 2, "evt", "touch", "lens u8, pad u8, phase u8, pos u16, t_us u32"),
@@ -77,14 +83,14 @@ MESSAGES = [
 
     ("sensor", 1, "req", "subscribe", "sensor u8, rate_hz u16, batch_ms u16"),
     ("sensor", 2, "req", "unsubscribe", "sensor u8"),
-    ("sensor", 3, "evt", "data", "sensor u8, count u8, t0_us u32, dt_us u32, samples bytes"),
+    ("sensor", 3, "evt", "data", "sensor u8, count u8, t0_us u32, dt_us u32, samples bytes[count]"),
     ("sensor", 4, "req", "read", "sensor u8"),
     ("sensor", 4, "rsp", "read", "sample bytes"),
 
     ("audio", 1, "req", "mic_start", "codec u8, rate_hz u16, channels u8, frame_ms u8, lc3_bytes u8"),
     ("audio", 2, "req", "mic_stop", ""),
     ("audio", 3, "evt", "mic_data", "seq u16, t_us u32, data bytes"),
-    ("audio", 4, "req", "tone", "count u8, steps items:tone_step"),
+    ("audio", 4, "req", "tone", "count u8, steps items:tone_step[count]"),
 
     ("update", 1, "req", "begin", "size u32, sha256 sha256, version str16"),
     ("update", 2, "req", "data", "offset u32, data bytes"),
@@ -113,19 +119,22 @@ TAILS = ("bytes", "utf8", "items")
 
 
 def parse_fields(spec):
-    """'a u8, b items:x' -> [('a', 'u8', None), ('b', 'items', 'x')]"""
+    """'a u8, b items:x[a]' -> [('a', 'u8', None, None), ('b', 'items', 'x', 'a')]"""
     out = []
     for part in filter(None, (p.strip() for p in spec.split(","))):
         name, ftype = part.split()
-        item = None
+        item = count = None
+        if ftype.endswith("]"):
+            ftype, count = ftype[:-1].split("[")
         if ftype.startswith("items:"):
             ftype, item = ftype.split(":")
         assert ftype in SIZES or ftype in TAILS, part
-        out.append((name, ftype, item))
-    for name, ftype, _ in out[:-1]:
+        assert count is None or (ftype in ("items", "bytes") and count in [n for n, _, _, _ in out]), part
+        out.append((name, ftype, item, count))
+    for name, ftype, _, _ in out[:-1]:
         assert ftype not in TAILS, f"tail field {name} must be last"
     return out
 
 
 def fixed_size(fields):
-    return sum(SIZES.get(t, 0) for _, t, _ in fields)
+    return sum(SIZES.get(t, 0) for _, t, _, _ in fields)

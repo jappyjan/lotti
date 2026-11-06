@@ -6,6 +6,12 @@ export const FRAME_HEADER_SIZE = 8;
 export const FRAME_OVERHEAD = 10;
 export const DEFAULT_MAX_FRAME = 4096;
 
+/** `fflags` bits. `ctrl`: an unsequenced control frame (`CREDIT`, `RESYNC`). */
+export const FrameFlag = { ctrl: 1 } as const;
+/** Reserved bits: nonzero makes a frame bad. */
+export const FFLAGS_RESERVED = 0xfe;
+export const ROUTE_RESERVED = 0xf0;
+
 /** `route` lens values (bits 0–1 destination, bits 2–3 source). */
 export const Lens = { connected: 0, left: 1, right: 2, both: 3 } as const;
 export type LensValue = (typeof Lens)[keyof typeof Lens];
@@ -25,6 +31,8 @@ export function routeByte(dest: number, source = 0): number {
 export function encodeFrame(f: Omit<Frame, 'fflags'> & { fflags?: number }) {
   const len = f.body.length;
   if (len > 0xffff) throw new RangeError('frame body longer than 65535');
+  if (f.route & ROUTE_RESERVED || (f.fflags ?? 0) & FFLAGS_RESERVED)
+    throw new RangeError('reserved route or fflags bits set');
   const out = new Uint8Array(len + FRAME_OVERHEAD);
   const v = new DataView(out.buffer);
   out[0] = FRAME_MAGIC;
@@ -42,7 +50,7 @@ export function encodeFrame(f: Omit<Frame, 'fflags'> & { fflags?: number }) {
   return out;
 }
 
-export type FrameError = 'garbage' | 'crc' | 'length';
+export type FrameError = 'garbage' | 'crc' | 'length' | 'reserved';
 
 export interface FrameDecoderOptions {
   /** Largest body accepted; longer `len` values count as corruption. */
@@ -53,10 +61,11 @@ export interface FrameDecoderOptions {
 
 /**
  * Reassembles frames from a byte stream delivered in arbitrary chunks. On a
- * bad magic, length or CRC it drops bytes until the next magic that starts a
- * frame with a valid CRC. A corrupt `len` that points past the data received
- * so far is caught as soon as a complete valid frame shows up behind it.
- * Sequence numbers are the link's business.
+ * bad magic, a `len` above `maxFrame`, reserved bits set in `route` or
+ * `fflags`, or a bad CRC it drops bytes until the next magic that starts a
+ * frame with a valid CRC. A corrupted `len` that still fits waits for that
+ * many bytes; the sender's ack timeout makes sure they come. Sequence
+ * numbers are the link's business.
  */
 export class FrameDecoder {
   private buf = new Uint8Array(0);
@@ -117,16 +126,12 @@ export class FrameDecoder {
         drop('length');
         continue;
       }
-      const total = len + FRAME_OVERHEAD;
-      if (this.end - s < total) {
-        // Frames never overlap: a valid frame starting inside this one means
-        // its header is corrupt (otherwise a bad `len` stalls the stream).
-        if (this.validFrameAt(s + 1)) {
-          drop('length');
-          continue;
-        }
-        break;
+      if (b[s + 2]! & ROUTE_RESERVED || b[s + 3]! & FFLAGS_RESERVED) {
+        drop('reserved');
+        continue;
       }
+      const total = len + FRAME_OVERHEAD;
+      if (this.end - s < total) break;
       const want = b[s + 8 + len]! | (b[s + 9 + len]! << 8);
       if (crc16(b, s, s + 8 + len) !== want) {
         drop('crc');
@@ -147,22 +152,6 @@ export class FrameDecoder {
       });
     }
     if (firstError) onError?.(firstError, dropped);
-  }
-
-  /** Whether a complete frame with a valid CRC starts at or after `from`. */
-  private validFrameAt(from: number): boolean {
-    const b = this.buf;
-    for (let i = from; i + FRAME_OVERHEAD <= this.end; i++) {
-      if (b[i] !== FRAME_MAGIC) continue;
-      const len = b[i + 4]! | (b[i + 5]! << 8);
-      if (len > this.maxFrame || i + len + FRAME_OVERHEAD > this.end) continue;
-      if (
-        crc16(b, i, i + 8 + len) ===
-        (b[i + 8 + len]! | (b[i + 9 + len]! << 8))
-      )
-        return true;
-    }
-    return false;
   }
 
   private append(chunk: Uint8Array) {

@@ -2,6 +2,7 @@ import { Emitter } from '../events.ts';
 import {
   DEFAULT_MAX_FRAME,
   FRAME_OVERHEAD,
+  FrameFlag,
   encodeFrame,
   seqDiff,
   type Frame,
@@ -14,12 +15,11 @@ import {
   Session,
   decodeBody,
   encodeBody,
-  type MessageBody,
   type MessageDef,
   type RequestOf,
   type ResponseOf,
 } from '../protocol/messages.ts';
-import type { Fields, Struct } from '../protocol/struct.ts';
+import { PayloadError, type Fields, type Struct } from '../protocol/struct.ts';
 import { clearTimer, setTimer, type TimerHandle } from '../timers.ts';
 import { LinkClosedError, WispError, WispTimeoutError } from './errors.ts';
 import { FrameReceiver } from './receiver.ts';
@@ -34,6 +34,11 @@ export interface LinkOptions {
   requestTimeoutMs?: number;
   /** Longest a consumed frame waits for its `CREDIT`. Default 20 ms. */
   creditDelayMs?: number;
+  /**
+   * Unacknowledged frames and no `CREDIT` for this long: resend them all.
+   * Recovers a lost last frame or a lost `CREDIT`. Default 1000 ms.
+   */
+  ackTimeoutMs?: number;
   /** `route` byte for frames that don't set one (see `routeByte`). Default 0. */
   route?: number;
 }
@@ -64,7 +69,11 @@ export interface RequestOptions {
 export interface LinkStats {
   txFrames: number;
   rxFrames: number;
+  /** Control frames (`CREDIT`, `RESYNC`) sent and received. */
+  txControl: number;
+  rxControl: number;
   retransmits: number;
+  ackTimeouts: number;
   resyncsSent: number;
   resyncsReceived: number;
   corrupt: number;
@@ -75,9 +84,10 @@ export interface LinkEvents {
   /** Unsolicited messages (`EVENT` flag). */
   event: Incoming;
   /**
-   * Requests from the peer. If nobody listens, requests that want a response
-   * get error `unsupported op`. `PING`, `CREDIT` and `RESYNC` are handled by
-   * the link itself.
+   * Requests from the peer. A listener must answer every request with
+   * `req ≠ 0` exactly once (`respond`, `respondError`); `req = 0` gets no
+   * answer. If nobody listens, requests that want a response get error
+   * `unsupported op`. `PING`, `CREDIT` and `RESYNC` are handled by the link.
    */
   request: Incoming;
   close: Error | undefined;
@@ -92,8 +102,6 @@ interface Outgoing {
 interface Sent {
   seq: number;
   frame: Uint8Array;
-  /** Bytes counted against the peer's window (0 for CREDIT / RESYNC). */
-  weight: number;
 }
 
 interface Pending {
@@ -104,29 +112,29 @@ interface Pending {
 }
 
 const CONTROL_OPS = new Set([Session.credit.op, Session.resync.op]);
-/** Acknowledge after this many unacknowledged control frames. */
-const CONTROL_ACK_EVERY = 32;
-const RESYNC_HOLDOFF_MS = 100;
-/** Window full and no CREDIT for this long: probe with RESYNC (a CREDIT may be lost). */
-const STALL_PROBE_MS = 250;
+const DEFAULT_RX_WINDOW = 16384;
 
 /**
  * One Wisp connection: frames, byte credits, resync and request/response
  * correlation over a {@link Transport}. Symmetric, so it also serves as the
  * glasses side in tests and simulators.
  *
- * Flow control as read from the spec: `CREDIT` and `RESYNC` frames carry a
- * `seq` like any frame but are never held back by the window and don't count
- * against it (otherwise two full windows could deadlock). A lost `CREDIT`
- * would stall a full window forever, so a sender that waits too long sends
- * `RESYNC`, which makes the peer resend its unacknowledged frames.
+ * Flow control (protocol 0.2): `CREDIT` and `RESYNC` travel in control
+ * frames (`fflags.CTRL`, seq 0), outside the window and never acknowledged
+ * or retransmitted; both are cumulative, so a lost one is repaired by the
+ * next. Every duplicate we receive is answered with a `CREDIT`, and frames
+ * unacknowledged for `ackTimeoutMs` are resent, so a lost `CREDIT` (even
+ * with a full window), `RESYNC` or last frame never stalls the link.
  */
 export class WispLink {
   readonly events = new Emitter<LinkEvents>();
   readonly stats: LinkStats = {
     txFrames: 0,
     rxFrames: 0,
+    txControl: 0,
+    rxControl: 0,
     retransmits: 0,
+    ackTimeouts: 0,
     resyncsSent: 0,
     resyncsReceived: 0,
     corrupt: 0,
@@ -137,6 +145,7 @@ export class WispLink {
   readonly rxWindow: number;
   private readonly requestTimeoutMs: number;
   private readonly creditDelayMs: number;
+  private readonly ackTimeoutMs: number;
   private readonly route: number;
 
   private peerMaxFrame = DEFAULT_MAX_FRAME;
@@ -150,16 +159,17 @@ export class WispLink {
   private inflight = 0;
 
   private writing = false;
+  /** Frames waiting for the transport; the head may be partly written. */
   private readonly txChunks: Uint8Array[] = [];
+  private headPartial = false;
+  private readonly controlFrames = new WeakSet<Uint8Array>();
   private drained: (() => void)[] = [];
   lastTxAt = 0;
   lastRxAt = 0;
 
   private ackBytes = 0;
-  private ackControl = 0;
   private creditTimer: TimerHandle | undefined;
-  private resyncHold: TimerHandle | undefined;
-  private stallTimer: TimerHandle | undefined;
+  private ackTimer: TimerHandle | undefined;
 
   private nextReq = 1;
   private readonly pending = new Map<number, Pending>();
@@ -171,9 +181,10 @@ export class WispLink {
     opts: LinkOptions = {},
   ) {
     this.maxFrame = opts.maxFrame ?? DEFAULT_MAX_FRAME;
-    this.rxWindow = opts.rxWindow ?? 16384;
+    this.rxWindow = opts.rxWindow ?? DEFAULT_RX_WINDOW;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 5000;
     this.creditDelayMs = opts.creditDelayMs ?? 20;
+    this.ackTimeoutMs = opts.ackTimeoutMs ?? 1000;
     this.route = opts.route ?? 0;
     this.receiver = new FrameReceiver(this.maxFrame);
     transport.attach({
@@ -186,10 +197,10 @@ export class WispLink {
     return this.closed !== undefined;
   }
 
-  /** Applies the peer's `max_frame` and `rx_window` (from `HELLO`). */
+  /** Applies the peer's `max_frame` and `rx_window` (from `HELLO`; 0 = defaults). */
   setPeerLimits(limits: { maxFrame: number; rxWindow: number }) {
     this.peerMaxFrame = limits.maxFrame || DEFAULT_MAX_FRAME;
-    this.peerWindow = limits.rxWindow;
+    this.peerWindow = limits.rxWindow || DEFAULT_RX_WINDOW;
     this.pump();
   }
 
@@ -220,8 +231,8 @@ export class WispLink {
         `message of ${body.length} bytes exceeds max_frame ${this.peerMaxFrame}`,
       );
     const route = opts.route ?? this.route;
-    if (svc === Service.session && CONTROL_OPS.has(op))
-      this.transmit(svc, route, body, 0);
+    if (svc === Service.session && CONTROL_OPS.has(op) && !body[1])
+      this.transmitControl(route, body);
     else {
       this.queue.push({ svc, route, body });
       this.pump();
@@ -272,6 +283,8 @@ export class WispLink {
     } catch (err) {
       if (err instanceof WispError && !err.op)
         throw new WispError(err.code, err.detail, def.name);
+      if (err instanceof PayloadError)
+        throw new WispError(ErrorCode.badPayload, err.message, def.name);
       throw err;
     }
   }
@@ -324,34 +337,43 @@ export class WispLink {
     while (this.queue.length && !this.closed) {
       const next = this.queue[0]!;
       const size = next.body.length + FRAME_OVERHEAD;
-      if (this.inflight > 0 && this.inflight + size > this.peerWindow) {
-        this.armStallProbe();
-        break;
-      }
+      if (this.inflight > 0 && this.inflight + size > this.peerWindow) break;
       this.queue.shift();
-      this.transmit(next.svc, next.route, next.body, size);
+      this.transmit(next.svc, next.route, next.body);
     }
     if (!this.queue.length && !this.writing && !this.txChunks.length)
       this.resolveDrained();
   }
 
-  private transmit(
-    svc: number,
-    route: number,
-    body: Uint8Array,
-    weight: number,
-  ) {
+  private transmit(svc: number, route: number, body: Uint8Array) {
     const seq = this.txSeq;
     this.txSeq = (this.txSeq + 1) & 0xffff;
     const frame = encodeFrame({ svc, route, seq, body });
-    this.unacked.push({ seq, frame, weight });
-    this.inflight += weight;
+    this.unacked.push({ seq, frame });
+    this.inflight += frame.length;
     this.stats.txFrames++;
     this.write(frame);
+    this.armAckTimer();
   }
 
-  private write(frame: Uint8Array) {
-    this.txChunks.push(frame);
+  /** A control frame: seq 0, outside the window, ahead of queued data. */
+  private transmitControl(route: number, body: Uint8Array) {
+    this.stats.txControl++;
+    const frame = encodeFrame({
+      svc: Service.session,
+      route,
+      fflags: FrameFlag.ctrl,
+      seq: 0,
+      body,
+    });
+    this.controlFrames.add(frame);
+    this.write(frame, true);
+  }
+
+  private write(frame: Uint8Array, urgent = false) {
+    // The head chunk may be half written; anything behind it starts at a frame boundary.
+    if (urgent && this.txChunks.length) this.txChunks.splice(1, 0, frame);
+    else this.txChunks.push(frame);
     if (!this.writing) void this.writeLoop();
   }
 
@@ -373,6 +395,7 @@ export class WispLink {
           const n = Math.min(c.length, out.length - o);
           out.set(c.subarray(0, n), o);
           o += n;
+          this.headPartial = n < c.length;
           if (n === c.length) this.txChunks.shift();
           else this.txChunks[0] = c.subarray(n);
         }
@@ -400,48 +423,59 @@ export class WispLink {
     this.lastRxAt = Date.now();
     const r = this.receiver;
     const before = r.corrupt;
+    let duplicate = false;
     for (const e of r.push(chunk)) {
-      if (e.kind === 'resync') this.sendResync(e.lastGoodSeq);
-      else if (e.kind === 'early') {
-        // CREDIT and RESYNC are cumulative, so they act even out of order;
-        // otherwise two sides that both see a gap would drop each other's
-        // RESYNC forever.
-        const msg = decodeBody(e.frame.body);
-        if (msg && isControl(e.frame.svc, msg)) this.onControl(msg);
-      } else this.onFrame(e.frame);
+      if (e.kind === 'frame') this.onFrame(e.frame);
+      else if (e.kind === 'control') this.onControl(e.frame);
+      else if (e.kind === 'duplicate') duplicate = true;
+      else if (e.kind === 'resync') this.sendResync(e.lastGoodSeq);
+      // 'early' frames are dropped: our RESYNC or the peer's ack timeout brings them back.
+      if (this.closed) return;
     }
+    // Every duplicate gets a CREDIT; one covers all of them in this chunk.
+    if (duplicate) this.sendCredit();
     this.stats.corrupt += r.corrupt - before;
     this.stats.duplicates = r.duplicates;
   }
 
   private onFrame(f: Frame) {
     this.stats.rxFrames++;
-    if (this.resyncHold !== undefined) {
-      clearTimer(this.resyncHold);
-      this.resyncHold = undefined;
-    }
-    const msg = decodeBody(f.body);
-    const control = msg !== undefined && isControl(f.svc, msg);
-    if (control) this.ackControl++;
-    else this.ackBytes += f.body.length + FRAME_OVERHEAD;
+    this.ackBytes += f.body.length + FRAME_OVERHEAD;
     this.scheduleCredit();
+    const msg = decodeBody(f.body);
     if (!msg) return;
-    if (control) return this.onControl(msg);
 
     const incoming: Incoming = { svc: f.svc, route: f.route, ...msg };
     if (msg.mflags & MFlags.response) return this.settle(incoming);
     if (msg.mflags & MFlags.event) return this.events.emit('event', incoming);
-    if (f.svc === Service.session && msg.op === Session.ping.op)
-      return this.respond(incoming, msg.payload.slice(0, 4));
+    if (f.svc === Service.session && msg.op === Session.ping.op) {
+      try {
+        const { token } = Session.ping.request!.decode(msg.payload);
+        return this.respond(incoming, Session.ping.response!.encode({ token }));
+      } catch (err) {
+        if (!(err instanceof PayloadError)) throw err;
+        return this.respondError(incoming, ErrorCode.badPayload, err.message);
+      }
+    }
     if (this.events.listenerCount('request'))
       this.events.emit('request', incoming);
     else this.respondError(incoming, ErrorCode.unsupportedOp);
   }
 
-  private onControl(msg: MessageBody) {
-    if (msg.op === Session.credit.op)
-      this.onCredit(Session.credit.request!.decode(msg.payload).ackSeq);
-    else this.onResync(Session.resync.request!.decode(msg.payload).lastGoodSeq);
+  private onControl(f: Frame) {
+    this.stats.rxControl++;
+    const msg = decodeBody(f.body);
+    // Only CREDIT and RESYNC requests exist as control frames; ignore anything else.
+    if (
+      !msg ||
+      f.svc !== Service.session ||
+      msg.mflags ||
+      msg.payload.length < 2
+    )
+      return;
+    const seq = msg.payload[0]! | (msg.payload[1]! << 8);
+    if (msg.op === Session.credit.op) this.onCredit(seq);
+    else if (msg.op === Session.resync.op) this.onResync(seq);
   }
 
   private settle(m: Incoming) {
@@ -450,17 +484,21 @@ export class WispLink {
     this.pending.delete(m.req);
     clearTimer(p.timer);
     if (m.mflags & MFlags.error) {
-      const e = ErrorPayload.decode(m.payload);
+      let e = {
+        code: ErrorCode.badPayload as number,
+        message: 'malformed ERROR',
+      };
+      try {
+        e = ErrorPayload.decode(m.payload);
+      } catch (err) {
+        if (!(err instanceof PayloadError)) throw err;
+      }
       p.reject(new WispError(e.code, e.message));
     } else p.resolve(m);
   }
 
   private scheduleCredit() {
-    if (
-      this.ackBytes >= this.rxWindow / 4 ||
-      this.ackControl >= CONTROL_ACK_EVERY
-    )
-      return this.sendCredit();
+    if (this.ackBytes >= this.rxWindow / 4) return this.sendCredit();
     if (this.ackBytes > 0 && this.creditTimer === undefined)
       this.creditTimer = setTimer(() => this.sendCredit(), this.creditDelayMs);
   }
@@ -470,7 +508,6 @@ export class WispLink {
     this.creditTimer = undefined;
     if (this.closed) return;
     this.ackBytes = 0;
-    this.ackControl = 0;
     this.notify(Session.credit, { ackSeq: this.receiver.lastGoodSeq });
   }
 
@@ -478,58 +515,63 @@ export class WispLink {
     if (this.closed) return;
     this.stats.resyncsSent++;
     this.notify(Session.resync, { lastGoodSeq });
-    // If this RESYNC gets lost too, allow another one after a while.
-    if (this.resyncHold !== undefined) clearTimer(this.resyncHold);
-    this.resyncHold = setTimer(() => {
-      this.resyncHold = undefined;
-      this.receiver.rearmResync();
-    }, RESYNC_HOLDOFF_MS);
   }
 
-  /** Asks the peer to resend everything after the last frame we got in order. */
-  private probe() {
-    this.receiver.rearmResync();
-    this.sendResync(this.receiver.lastGoodSeq);
-  }
-
-  private ackThrough(seq: number) {
+  /** Frees every frame up to `seq`; true when that freed any. */
+  private ackThrough(seq: number): boolean {
     // Ignore acks for frames we never sent.
-    if (seqDiff(seq, (this.txSeq - 1) & 0xffff) > 0) return;
-    while (this.unacked.length && seqDiff(seq, this.unacked[0]!.seq) >= 0) {
-      this.inflight -= this.unacked.shift()!.weight;
-    }
+    if (seqDiff(seq, (this.txSeq - 1) & 0xffff) > 0) return false;
+    const before = this.unacked.length;
+    while (this.unacked.length && seqDiff(seq, this.unacked[0]!.seq) >= 0)
+      this.inflight -= this.unacked.shift()!.frame.length;
+    return this.unacked.length < before;
   }
 
   private onCredit(ackSeq: number) {
-    this.ackThrough(ackSeq);
-    this.disarmStallProbe();
+    if (this.ackThrough(ackSeq)) this.armAckTimer(true);
     this.pump();
-  }
-
-  private armStallProbe() {
-    if (this.stallTimer !== undefined) return;
-    this.stallTimer = setTimer(() => {
-      this.stallTimer = undefined;
-      if (this.closed || !this.queue.length) return;
-      this.probe();
-      this.armStallProbe();
-    }, STALL_PROBE_MS);
-  }
-
-  private disarmStallProbe() {
-    if (this.stallTimer !== undefined) clearTimer(this.stallTimer);
-    this.stallTimer = undefined;
   }
 
   private onResync(lastGoodSeq: number) {
     this.stats.resyncsReceived++;
     this.ackThrough(lastGoodSeq);
-    this.disarmStallProbe();
+    this.retransmitAll();
+    this.armAckTimer(true);
+    this.pump();
+  }
+
+  private retransmitAll() {
+    // Data frames still waiting to be written would go out twice (and pile
+    // up under heavy loss): drop them, keeping control frames and a
+    // half-written head. Every data frame not yet acked is in `unacked`.
+    const keep = this.txChunks.filter(
+      (c, i) => (i === 0 && this.headPartial) || this.controlFrames.has(c),
+    );
+    this.txChunks.splice(0, this.txChunks.length, ...keep);
     for (const s of this.unacked) {
       this.stats.retransmits++;
       this.write(s.frame);
     }
-    this.pump();
+  }
+
+  /** Starts the ack timeout if frames wait for a CREDIT (`restart`: count from now). */
+  private armAckTimer(restart = false) {
+    if (restart && this.ackTimer !== undefined) {
+      clearTimer(this.ackTimer);
+      this.ackTimer = undefined;
+    }
+    if (this.ackTimer !== undefined || !this.unacked.length || this.closed)
+      return;
+    this.ackTimer = setTimer(() => {
+      this.ackTimer = undefined;
+      if (this.closed || !this.unacked.length) return;
+      // Still writing them out: the peer can't have acknowledged them yet.
+      if (!this.txChunks.length) {
+        this.stats.ackTimeouts++;
+        this.retransmitAll();
+      }
+      this.armAckTimer();
+    }, this.ackTimeoutMs);
   }
 
   // ── session upkeep ─────────────────────────────────────────────────────
@@ -570,7 +612,7 @@ export class WispLink {
     if (this.closed) return;
     this.closed = new LinkClosedError(reason);
     this.stopKeepalive();
-    for (const t of [this.creditTimer, this.resyncHold, this.stallTimer])
+    for (const t of [this.creditTimer, this.ackTimer])
       if (t !== undefined) clearTimer(t);
     for (const p of this.pending.values()) {
       clearTimer(p.timer);
@@ -581,10 +623,6 @@ export class WispLink {
     this.resolveDrained();
     this.events.emit('close', reason);
   }
-}
-
-function isControl(svc: number, msg: MessageBody): boolean {
-  return svc === Service.session && CONTROL_OPS.has(msg.op) && !msg.mflags;
 }
 
 const EMPTY: Struct = {

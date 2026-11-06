@@ -9,12 +9,11 @@
     "fields": {
       "res": 258,
       "type": 17,
-      "codec": 18,
-      "flags": 19,
-      "size": 286133000,
-      "hash": "05060708090a0b0c0d0e0f1011121314"
+      "flags": 18,
+      "size": 218827015,
+      "hash": "0405060708090a0b0c0d0e0f10111213"
     },
-    "hex": "010022010201111213080b0e1105060708090a0b0c0d0e0f1011121314"
+    "hex": "010022010201111207090b0d0405060708090a0b0c0d0e0f10111213"
   },
   {
     "name": "resource/put-begin-response",
@@ -84,7 +83,7 @@
     "mflags": 1,
     "req": 296,
     "fields": {
-      "count": 258,
+      "count": 2,
       "entries": [
         {
           "res": 1029,
@@ -102,6 +101,107 @@
         }
       ]
     },
-    "hex": "05012801020105041213080b0e1105060708090a0b0c0d0e0f101112131408071314090d1115060708090a0b0c0d0e0f101112131415"
+    "hex": "05012801020005041213080b0e1105060708090a0b0c0d0e0f101112131408071314090d1115060708090a0b0c0d0e0f101112131415"
+  },
+  {
+    "name": "resource/list-response-grown-items",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 513,
+    "fields": {
+      "count": 2,
+      "entries": [
+        {
+          "res": 2571,
+          "type": 20,
+          "flags": 21,
+          "size": 420744970,
+          "hash": "0708090a0b0c0d0e0f10111213141516"
+        },
+        {
+          "res": 7197,
+          "type": 26,
+          "flags": 27,
+          "size": 824580880,
+          "hash": "0d0e0f101112131415161718191a1b1c"
+        }
+      ]
+    },
+    "hex": "0501010202000b0a14150a0f14190708090a0b0c0d0e0f10111213141516a0a1a2a3a4a51d1c1a1b101b26310d0e0f101112131415161718191a1b1ca0a1a2a3a4a5",
+    "decode_only": true
+  },
+  {
+    "name": "resource/list-response-short-items",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 514,
+    "fields": {
+      "count": 2,
+      "entries": [
+        {
+          "res": 2571,
+          "type": 20,
+          "flags": 21,
+          "size": 0,
+          "hash": "00000000000000000000000000000000"
+        },
+        {
+          "res": 7197,
+          "type": 26,
+          "flags": 27,
+          "size": 0,
+          "hash": "00000000000000000000000000000000"
+        }
+      ]
+    },
+    "hex": "0501020202000b0a14151d1c1a1b",
+    "decode_only": true
+  },
+  {
+    "name": "resource/list-response-empty",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 515,
+    "fields": {
+      "count": 0,
+      "entries": []
+    },
+    "hex": "050103020000"
+  },
+  {
+    "name": "resource/list-response-count-doesnt-divide",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 516,
+    "malformed": true,
+    "hex": "0501040205000b0a14150a0f14190708090a0b0c0d0e0f101112131415161d1c1a1b101b26310d0e0f101112131415161718191a1b1c"
+  },
+  {
+    "name": "resource/list-response-count-0-with-items",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 517,
+    "malformed": true,
+    "hex": "0501050200000b0a14150a0f14190708090a0b0c0d0e0f10111213141516"
+  },
+  {
+    "name": "resource/list-response-item-field-cut-in-half",
+    "kind": "message",
+    "svc": 3,
+    "op": 5,
+    "mflags": 1,
+    "req": 518,
+    "malformed": true,
+    "hex": "0501060202000b0a14150a1d1c1a1b10"
   }
 ]

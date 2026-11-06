@@ -32,6 +32,26 @@ static size_t field_size(uint8_t type) {
     }
 }
 
+/* A counted field's value (u8, u16 or u32). */
+static uint32_t get_count(const wisp_field *f, const uint8_t *s) {
+    const uint8_t *v = s + f->offset;
+    switch (f->type) {
+    case WISP_T_U8: return *v;
+    case WISP_T_U16: { uint16_t x; memcpy(&x, v, 2); return x; }
+    default: { uint32_t x; memcpy(&x, v, 4); return x; }
+    }
+}
+
+/* count items share len bytes evenly; no items means no bytes. */
+static bool list_fits(size_t len, uint32_t count) { return count ? len % count == 0 : len == 0; }
+
+/* Whether items of `size` bytes would end inside one of the item's fields. */
+static bool cuts_field(const wisp_desc *item, size_t size) {
+    size_t end = 0;
+    for (unsigned i = 0; i < item->nfields && end < size; i++) end += field_size(item->fields[i].type);
+    return end > size;
+}
+
 int wisp_pack(const wisp_desc *d, const void *msg, uint8_t *out, size_t cap) {
     const uint8_t *s = msg;
     size_t n = 0;
@@ -41,6 +61,7 @@ int wisp_pack(const wisp_desc *d, const void *msg, uint8_t *out, size_t cap) {
         size_t size = field_size(f->type);
         const wisp_bytes *tail = (const wisp_bytes *)(const void *)v;
         if (!size) size = tail->len;
+        if (f->count && !list_fits(size, get_count(&d->fields[f->count - 1], s))) return WISP_E_ARG;
         if (cap - n < size) return WISP_E_SPACE;
         uint8_t *o = out + n;
         switch (f->type) {
@@ -73,6 +94,11 @@ int wisp_unpack(const wisp_desc *d, const uint8_t *in, size_t len, void *msg) {
         size_t size = field_size(f->type);
         if (!size) {
             wisp_bytes tail = {p, len - n};
+            if (f->count) {
+                uint32_t count = get_count(&d->fields[f->count - 1], s);
+                if (!list_fits(tail.len, count)) return WISP_E_MALFORMED;
+                if (f->item && count && cuts_field(f->item, tail.len / count)) return WISP_E_MALFORMED;
+            }
             memcpy(v, &tail, sizeof tail);
             break;
         }
@@ -114,9 +140,14 @@ const wisp_desc *wisp_desc_find(uint8_t svc, uint8_t op, uint8_t mflags) {
     return NULL;
 }
 
-size_t wisp_items_count(const wisp_desc *item, wisp_bytes items) { return items.len / item->fixed_size; }
+size_t wisp_list_count(const wisp_desc *d, const void *msg, const wisp_field *tail) {
+    return tail->count ? get_count(&d->fields[tail->count - 1], msg) : 0;
+}
 
-int wisp_items_get(const wisp_desc *item, wisp_bytes items, size_t i, void *out) {
-    if (i >= wisp_items_count(item, items)) return WISP_E_ARG;
-    return wisp_unpack(item, items.data + i * item->fixed_size, item->fixed_size, out);
+size_t wisp_list_stride(wisp_bytes items, size_t count) { return count ? items.len / count : 0; }
+
+int wisp_items_get(const wisp_desc *item, wisp_bytes items, size_t count, size_t i, void *out) {
+    if (i >= count) return WISP_E_ARG;
+    size_t stride = wisp_list_stride(items, count);
+    return wisp_unpack(item, items.data + i * stride, stride, out);
 }
