@@ -252,4 +252,133 @@ struct WispUpdateModelTests {
         #expect(model.stock?.fromCache == true)
         #expect(model.stock?.sha256 == WispStockStore.sha256(stock))
     }
+
+    // MARK: System connection (iOS itself holds the arm)
+
+    private var logText: String { model.log.entries.map(\.text).joined(separator: "\n") }
+
+    @Test func systemConnectedArmIsRefusedByDefault() async {
+        fake.systemConnected = [.left]
+        await model.readVersion()
+        #expect(model.readback == nil)
+        #expect(model.error?.contains("iOS") == true)
+        #expect(model.systemConnectionSeen)
+        #expect(!model.systemConnectionAccepted)
+        #expect(fake.openAttempts.map(\.acceptSystemConnection) == [false])
+    }
+
+    @Test func acceptedSystemConnectionPassesForOneAttemptOnly() async {
+        fake.systemConnected = [.left]
+        await model.readVersion()
+        model.systemConnectionAccepted = true
+        await model.readVersion()  // the retry
+        #expect(model.readback?.leftVersion == "2.2.6.10")
+        #expect(model.error == nil)
+        #expect(!model.systemConnectionAccepted)  // used up by that attempt
+        #expect(model.systemConnectionSeen)  // still shown, for the send
+        #expect(fake.openAttempts.map(\.acceptSystemConnection) == [false, true])
+        #expect(logText.contains("user ACCEPTED iOS's own connection to the left temple"))
+        #expect(logText.contains("acceptance reset (used by this read)"))
+        // Every log line carries its timestamp.
+        let line = model.log.entries.first { $0.text.contains("user ACCEPTED") }?.text ?? ""
+        #expect(line.range(of: #"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"#, options: .regularExpression) != nil)
+
+        await model.readVersion()  // without a new acceptance: refused again
+        #expect(model.error?.contains("iOS") == true)
+        #expect(fake.openAttempts.last?.acceptSystemConnection == false)
+    }
+
+    @Test func templeChangeResetsTheAcceptance() async {
+        fake.systemConnected = [.left, .right]
+        await model.readVersion()
+        model.systemConnectionAccepted = true
+        model.temple = .right
+        #expect(!model.systemConnectionAccepted && !model.systemConnectionSeen)
+        #expect(logText.contains("acceptance reset (temple changed)"))
+        await model.readVersion()
+        #expect(model.readback == nil)
+        #expect(fake.openAttempts.last?.side == .right && fake.openAttempts.last?.acceptSystemConnection == false)
+    }
+
+    @Test func closingTheScreenResetsTheAcceptance() async {
+        fake.systemConnected = [.left]
+        await model.readVersion()
+        model.systemConnectionAccepted = true
+        model.screenClosed()
+        #expect(!model.systemConnectionAccepted)
+        #expect(logText.contains("acceptance reset (screen closed)"))
+    }
+
+    /// Steps 1–3 with a system-connected left arm, accepted for the read.
+    private func readySystemConnected() async {
+        fake.systemConnected = [.left]
+        await model.readVersion()
+        model.systemConnectionAccepted = true
+        await model.readVersion()
+        await model.fetchStock()
+        await model.prepareRung1()
+        model.evenAppAcknowledged = true
+        model.typedTemple = "left"
+    }
+
+    @Test func sendNeedsTheAcceptanceAgainAndResetsIt() async {
+        await readySystemConnected()
+        #expect(model.readback != nil)
+        #expect(model.canSend)  // the acceptance is not a gate…
+        await model.send()  // …but the send's own open is refused without it
+        #expect(model.error?.contains("could not open") == true)
+        #expect(!model.isSending && model.final == nil)
+        #expect(fake.state(.left)?.packetsWritten == 0)
+
+        model.evenAppAcknowledged = true
+        model.typedTemple = "left"
+        model.systemConnectionAccepted = true
+        await model.send()
+        #expect(model.isSending)
+        #expect(!model.systemConnectionAccepted)  // reset after the send
+        #expect(fake.openAttempts.last?.acceptSystemConnection == true)
+        #expect(logText.contains("acceptance reset (used by this send)"))
+        await waitForResult()
+        guard case .success = model.final else { Issue.record("\(String(describing: model.final))"); return }
+    }
+
+    @Test func acceptanceDoesNotReplaceAnySendGate() async {
+        await readySystemConnected()
+        // Each gate missing in turn, with the acceptance on: refused, nothing opened, nothing sent.
+        let cases: [(String, () -> Void)] = [
+            ("typed", { self.model.typedTemple = "" }),
+            ("even", { self.model.evenAppAcknowledged = false }),
+            ("session", { self.fake.blocker = "A Lotti glasses session is active." }),
+        ]
+        for (id, breakGate) in cases {
+            model.evenAppAcknowledged = true
+            model.typedTemple = "left"
+            fake.blocker = nil
+            breakGate()
+            model.systemConnectionAccepted = true
+            #expect(gate(id)?.ok == false, "\(id)")
+            #expect(!model.canSend, "\(id)")
+            let attempts = fake.openAttempts.count
+            await model.send()
+            #expect(fake.openAttempts.count == attempts, "\(id)")  // refused before opening
+            #expect(!model.systemConnectionAccepted, "\(id)")  // a refused send resets it too
+            #expect(!model.isSending)
+        }
+        fake.blocker = nil
+        #expect(fake.state(.left)?.packetsWritten == 0)
+    }
+
+    @Test func acceptanceDoesNotReplaceTheBatteryOrVersionReRead() async throws {
+        await readySystemConnected()
+        fake.battery = 79  // drained since step 1
+        model.systemConnectionAccepted = true
+        await model.send()
+        #expect(model.error?.contains("79 %") == true)
+        #expect(model.final == nil)
+        #expect(fake.state(.left)?.packetsWritten == 0)
+        // Below 80 % the battery gate itself now fails.
+        model.evenAppAcknowledged = true
+        model.typedTemple = "left"
+        #expect(gate("battery")?.ok == false && !model.canSend)
+    }
 }
