@@ -1,0 +1,31 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * wisp_g2 pin control. Only the debug UART is muxed in M0.
+ *
+ * TODO(G2 pins): UART1 TX/RX pads are NOT verified on the G2 board. These are the
+ * apollo510b_evb pads (P12/P14, from the fork's apollo510b_evb-pinctrl.dtsi, Apache-2.0,
+ * Ambiq Micro). The stock firmware logs on UART1 (g2emu notes), but the pads still have to be
+ * read out of the stock image's pin table before this runs on glasses.
+ */
+
+#include <apollo510/ambiq-apollo510-pinmux.h>
+
+&pinctrl {
+	uart1_default: uart1_default {
+		group1 {
+			pinmux = <UART1TX_P12>;
+		};
+
+		group2 {
+			pinmux = <UART1RX_P14>;
+			input-enable;
+		};
+	};
+
+	uart1_sleep: uart1_sleep {
+		group1 {
+			pinmux = <GPIO_P12>, <GPIO_P14>;
+		};
+	};
+};

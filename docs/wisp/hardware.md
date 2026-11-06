@@ -27,9 +27,12 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 | Power          | Board A: nPM1300 `0x6B`. Board B: BQ25180 `0x6A` + BQ27427 gauge `0x55`                  | I2C7                       | [C]                                  |
 | Battery        | 96 mAh per temple                                                                        | —                          | [C]                                  |
 | Sound out      | **No speaker.** PWM piezo buzzer (GPIO145)                                               | PWM                        | [C]                                  |
+| Debug UART     | stock log + CLI shell; UART2 = case link                                                 | UART1 `0x4003A000`         | [C] g2emu (stock in Renode)          |
 | Case           | STM32G0B1 (dual-bank, ROM bootloader) + CH340 USB-UART, pogo UART 1 Mbaud to each temple | —                          | [C]                                  |
 | Ring (R1)      | nRF52840, **signed** Nordic Secure DFU — out of scope                                    | BLE                        | [C]                                  |
 | Camera         | none                                                                                     | —                          | [C]                                  |
+
+Memory detail (hal_ambiq `am_apollo510.h`, g2emu): DTCM is `0x20000000–0x20080000` and SSRAM `0x20080000–0x20380000`. Ambiq's Zephyr DTS maps only the first `0x7C000` of DTCM; stock puts its initial SP at `0x2007FB00`, in the last 16 KiB. Ambiq's Zephyr `flash0` starts at `0x410000` (the SBL is outside it), so devicetree partition offsets are relative to `0x410000`.
 
 ## MRAM map (Apollo510, per temple)
 
