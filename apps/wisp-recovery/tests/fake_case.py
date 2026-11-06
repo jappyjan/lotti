@@ -60,7 +60,13 @@ class FakeTemple:
 
 
 class FakeCase:
-    def __init__(self, flash_length, temples=None, yhm=IDLE_YHM, rom_reply_banner=BANNER):
+    def __init__(self, flash_length, temples=None, yhm=IDLE_YHM, rom_reply_banner=BANNER,
+                 rts_resets=True, status_line=None):
+        # rts_resets=False models a driver whose RTS changes never reach the case: the app
+        # keeps running and only prints its periodic status line (status_line) when listened to.
+        self.rts_resets = rts_resets
+        self.status_line = status_line
+        self.host_bytes = bytearray()
         self.flash = synthetic_flash(flash_length)
         self.temples = temples or {"left": FakeTemple("left"), "right": FakeTemple("right")}
         self.yhm = bytearray(yhm)
@@ -90,8 +96,13 @@ class FakeCase:
         with self.cond:
             self.port = port
         self.set_lines(port.dtr, port.rts)
+        if self.mode == "normal" and self.status_line:
+            self._emit(self.status_line, need=(1_000_000, "N"))
 
     def set_lines(self, dtr, rts):
+        if not self.rts_resets:
+            self.mode = "normal"
+            return
         was_reset = self.rts
         self.dtr, self.rts = dtr, rts
         if rts and not was_reset:
@@ -129,6 +140,7 @@ class FakeCase:
 
     # ---------------------------------------------------------------- host bytes in
     def receive(self, data: bytes):
+        self.host_bytes += data
         if self.mode.startswith("rom") and (self.port.baudrate, self.port.parity) == (115_200, "E"):
             self.rom_in.extend(data)
             try:

@@ -7,6 +7,7 @@ python3 -I apps/wisp-recovery/step0.py --plan                         # what it 
 uv run --with pyserial==3.5 python -I apps/wisp-recovery/step0.py --side left
 uv run --with pyserial==3.5 python -I apps/wisp-recovery/step0.py --restore   # reset the case into its own app
 pnpm nx run wisp-recovery:test                                       # no hardware
+uv run --with pyserial==3.5 python -I apps/wisp-recovery/step0.py --probe-reset  # diagnostic, see below
 ```
 
 ## Why not drdaeman's relay as-is
@@ -61,3 +62,9 @@ The temple receives exactly 5 bytes. No temple reset, no OTA (`0x52`–`0x55`), 
 - ROM sync fails: macOS's built-in CH34x driver may not do even parity; the WCH driver does.
 
 **Undo**: the tool resets the case into its own application at the end, also after an error. The bridge lives only in case SRAM (and is zeroed anyway); a reset ends it. By hand: `step0.py --restore`. The case has a battery, so unplugging USB alone does not restart it; if a run was cut off mid-way, plug back in and run `--restore`.
+
+## `--probe-reset` (diagnostic)
+
+Does only step 1: opens the port at 1 Mbaud with DTR asserted (app boot) and RTS asserted (reset held), releases RTS after 50 ms, and listens for 6 s. It sends no bytes and never enters the ROM loader. It reports every line change and every received chunk with timestamps, and whether a **fresh boot** appeared: the `****** B200 x.y.z <serial>******` banner plus `Power up...`, which the case prints only at start-up. Its periodic `****** B200 vol:…` status lines don't count. Exit 0 = fresh boot on 1.2.57, 2 = no fresh boot, 3 = another version. Step 0's own first listen keeps the same full capture in its report.
+
+First hardware run (2026-11-06, Apple's built-in CH34x driver): step 0 saw only status lines and stopped before the ROM loader. `--probe-reset` exists to tell "RTS doesn't reset the case on this driver" apart from "the banner was missed".

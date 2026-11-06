@@ -79,7 +79,7 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
          "temple_request": br.temple_request(operation, image).hex()})
 
     before = case_banner(device, opener, sleep, clock)
-    log({"case_banner_before": before["banner"].strip()[-400:], "case_version": before["version"]})
+    log({"case_listen_before": {k: before[k] for k in ("version", "fresh_boot", "banner_t", "lines", "chunks")}})
     report["case_version_before"] = before["version"]
     if before["version"] != pins.CASE_VERSION:
         raise Step0Error(f"case reports {before['version']!r}, expected {pins.CASE_VERSION}; nothing loaded")
@@ -159,12 +159,36 @@ def run(device: str, side: str, opener=serial_opener, sleep=time.sleep, clock=ti
     finally:
         after = case_banner(device, opener, sleep, clock)
         report["case_version_after"] = after["version"]
+        log({"case_listen_after": {k: after[k] for k in ("version", "fresh_boot", "banner_t", "lines", "chunks")}})
         log({"case_back_to_stock": after["version"] == pins.CASE_VERSION, "case_version": after["version"]})
 
     if report["case_version_after"] != pins.CASE_VERSION:
         raise Step0Error("case did not come back with its 1.2.57 banner")
     report["success"] = True
     return report
+
+
+def probe_reset(device: str, out: Path, opener=serial_opener, sleep=time.sleep, clock=time.monotonic,
+                echo=print) -> int:
+    """Only the app-boot reset (same line sequence as step 0's first listen), listening for
+    the whole window. Sends no bytes; never enters the ROM loader."""
+    result = case_banner(device, opener, sleep, clock, listen_full=True)
+    report = {"mode": "probe-reset", "device": device, **{k: result[k] for k in
+              ("version", "fresh_boot", "banner_t", "lines", "chunks")}}
+    for line in result["lines"]:
+        echo(f"line  t={line['t']:.4f}s  {line['action']}")
+    for chunk in result["chunks"]:
+        echo(f"rx    t={chunk['t']:.4f}s  {chunk['n']:4d} B  {chunk['text']!r}")
+    verdict = (f"fresh boot banner at t={result['banner_t']}s, case version {result['version']}"
+               if result["fresh_boot"] else "NO fresh boot banner: the RTS pulse did not visibly reset the case")
+    echo(f"probe-reset: {verdict}")
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"probe-reset-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json"
+    path.write_text(json.dumps(report, indent=2) + "\n")
+    echo(f"report: {path}")
+    if not result["fresh_boot"]:
+        return 2
+    return 0 if result["version"] == pins.CASE_VERSION else 3
 
 
 def main(argv=None) -> int:
@@ -174,12 +198,17 @@ def main(argv=None) -> int:
     p.add_argument("--plan", action="store_true", help="print what would be sent, touch nothing")
     p.add_argument("--restore", action="store_true",
                    help="only reset the case into its normal app and print its banner")
+    p.add_argument("--probe-reset", action="store_true",
+                   help="diagnostic: pulse RTS with DTR in the app-boot state, listen, report "
+                        "whether a fresh boot banner appeared; no ROM entry, no loading, no bridge")
     p.add_argument("--out", type=Path, default=Path(__file__).resolve().parents[1] / "runs")
     a = p.parse_args(argv)
     if a.plan:
         print(PLAN.replace("<side>", a.side))
         return 0
     device = a.port or find_case_port()
+    if a.probe_reset:
+        return probe_reset(device, a.out)
     if a.restore:
         result = case_banner(device, serial_opener)
         print(result["banner"])
