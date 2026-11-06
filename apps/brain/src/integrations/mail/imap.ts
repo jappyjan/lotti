@@ -2,7 +2,7 @@ import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
 import type { App } from '../../app.ts';
-import { stripHtml } from '../../util/text.ts';
+import { mailText } from '../../util/text.ts';
 import { strList } from '../accounts.ts';
 import type { AccountRow, MailFull, MailMessage } from '../index.ts';
 import { reSubject } from './gmail.ts';
@@ -137,16 +137,22 @@ async function inMailbox<T>(
 const fmtAddr = (a?: { name?: string; address?: string }) =>
   a ? (a.name ? `${a.name} <${a.address}>` : String(a.address ?? '')) : '';
 
-async function snippetOf(source: Buffer | undefined): Promise<string> {
-  if (!source) return '';
+/** How much of each message a list fetch reads: headers alone can take 10 KB, HTML mail much more. */
+const LIST_FETCH_BYTES = 64_000;
+
+async function textOf(
+  source: Buffer | undefined,
+): Promise<{ snippet: string; text: string }> {
+  if (!source) return { snippet: '', text: '' };
   try {
     const p = await simpleParser(source);
-    return (p.text || stripHtml(typeof p.html === 'string' ? p.html : ''))
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 240);
+    const text = mailText(p.text, typeof p.html === 'string' ? p.html : '');
+    return {
+      snippet: text.replace(/\s+/g, ' ').slice(0, 240),
+      text: text.slice(0, 4000),
+    };
   } catch {
-    return '';
+    return { snippet: '', text: '' };
   }
 }
 
@@ -241,7 +247,7 @@ export function imapBackend(
         envelope: true,
         internalDate: true,
         flags: true,
-        source: { start: 0, maxLength: 6000 },
+        source: { start: 0, maxLength: LIST_FETCH_BYTES },
       },
       { uid: true },
     )) {
@@ -249,7 +255,7 @@ export function imapBackend(
         id: `${acc.id}:${m.uid}:${box}`,
         from: fmtAddr(m.envelope?.from?.[0]),
         subject: String(m.envelope?.subject ?? ''),
-        snippet: await snippetOf(m.source),
+        ...(await textOf(m.source)),
         receivedAt: new Date(m.internalDate ?? m.envelope?.date ?? 0).getTime(),
         unread: !m.flags?.has?.('\\Seen'),
         ...(m.envelope?.messageId
@@ -337,9 +343,10 @@ export function imapBackend(
         subject: String(r.envelope?.subject ?? ''),
         snippet: '',
         receivedAt: new Date(r.internalDate ?? 0).getTime(),
-        body:
-          parsed.text ||
-          stripHtml(typeof parsed.html === 'string' ? parsed.html : ''),
+        body: mailText(
+          parsed.text,
+          typeof parsed.html === 'string' ? parsed.html : '',
+        ),
       };
     },
     async reply(native, a: ReplyArgs) {
