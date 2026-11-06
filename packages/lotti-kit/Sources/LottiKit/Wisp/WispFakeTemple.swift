@@ -9,20 +9,30 @@ import JavaScriptCore
 /// the JS file.
 @MainActor
 public final class WispFakeTempleAccess: WispTempleAccess {
-    /// What the simulated arm reports for sid 0x09 READ.
+    /// What the right arm reports for sid 0x09 READ (one value; whose battery it is is unknown on
+    /// the real glasses too).
     public var battery: Int?
     public var charging = false
     /// Version per installed image (main CRC-32C, `0x…`); the starting image is `stock`.
     public private(set) var versions: [String: String] = [:]
     public var stockVersion: String
-    /// False makes `readStatus` time out, like an arm that never answers.
+    /// False makes `readStatus` time out on every arm.
     public var answersStatus = true
+    /// The arms that answer sid 0x09 READ_BASIC. Like the real glasses (hardware.md, 2026-11-06),
+    /// only the right arm (the master) answers, with both temples' versions; the left arm ignores
+    /// it and the read times out.
+    public var statusArms: Set<G2Side> = [.right]
     public var blocker: String?
     /// Arms the simulated phone already holds at system level (iOS's own connection): `open`
     /// refuses them with `connectedElsewhere` unless the attempt accepts it, like `G2Link`.
     public var systemConnected: Set<G2Side> = []
     /// Every `open` attempt and whether it accepted a system connection, for tests.
     public private(set) var openAttempts: [(side: G2Side, acceptSystemConnection: Bool)] = []
+    /// What happened on the arms in order ("open right", "read right", "close right", "refused left:
+    /// …"), for tests that check the sequence.
+    public private(set) var events: [String] = []
+    /// The arms open right now.
+    public var openArms: [G2Side] { sessions.values.filter { !$0.closed }.map(\.temple) }
     /// Fault options for the next temple (wisp-ota-jsc `FaultSpec`), e.g. `["dropVerdict": true]`.
     public var faults: [String: Any] = [:]
     public var restartDelayMs = 50
@@ -59,9 +69,17 @@ public final class WispFakeTempleAccess: WispTempleAccess {
 
     public func open(_ side: G2Side, acceptSystemConnection: Bool) async throws -> any WispTempleSession {
         openAttempts.append((side, acceptSystemConnection))
-        if let blocker { throw WispSessionError.blocked(blocker) }
-        _ = try G2ExclusiveArmError.checkSystemConnection(side, systemConnected: systemConnected.contains(side),
-                                                          acceptSystemConnection: acceptSystemConnection)
+        do {
+            if let blocker { throw WispSessionError.blocked(blocker) }
+            // Like `G2Link.openExclusiveArm`: one exclusive arm at a time.
+            guard openArms.isEmpty else { throw G2ExclusiveArmError.alreadyOpen }
+            _ = try G2ExclusiveArmError.checkSystemConnection(side, systemConnected: systemConnected.contains(side),
+                                                              acceptSystemConnection: acceptSystemConnection)
+        } catch {
+            events.append("refused \(side): \(error.localizedDescription)")
+            throw error
+        }
+        events.append("open \(side)")
         let id = temples[side] ?? createTemple(side)
         temples[side] = id
         let session = WispFakeTempleSession(access: self, templeID: id, temple: side)
@@ -107,7 +125,11 @@ public final class WispFakeTempleAccess: WispTempleAccess {
         return readBytes(value) ?? []
     }
 
+    fileprivate func note(_ event: String) { events.append(event) }
+
     fileprivate func version(of side: G2Side) -> String? {
+        // A temple never opened yet still runs its starting stock image.
+        guard temples[side] != nil else { return stockVersion }
         guard let installed = state(side)?.installed else { return nil }
         guard let crc = installed.crc32c else { return stockVersion }
         return versions[String(format: "0x%08x", crc)] ?? "unknown"
@@ -225,15 +247,20 @@ final class WispFakeTempleSession: WispTempleSession {
 
     func readStatus() async throws -> G2Settings.Readback {
         guard !closed, let access else { throw WispSessionError.closed }
+        access.note("read \(temple)")
         try await Task.sleep(for: .milliseconds(150))
-        guard access.answersStatus else { throw GlassesLinkError.timeout("reading the \(temple) arm's status") }
-        let version = access.version(of: temple)
+        guard access.answersStatus, access.statusArms.contains(temple) else {
+            throw GlassesLinkError.timeout("reading the \(temple) arm's status")
+        }
+        // The right arm reports both temples' versions (hardware.md, 2026-11-06).
         return G2Settings.Readback(
-            leftVersion: temple == .left ? version : nil, rightVersion: temple == .right ? version : nil,
+            leftVersion: access.version(of: .left),
+            rightVersion: temple == .right ? access.version(of: .right) : nil,
             battery: access.battery, charging: access.charging, isReply: true)
     }
 
     func close() {
+        if !closed { access?.note("close \(temple)") }
         closed = true
         if access?.sessions[templeID] === self { access?.sessions[templeID] = nil }
     }
