@@ -1,0 +1,110 @@
+diff --git a/boards/ambiq/apollo510b_evb/board.c b/boards/ambiq/apollo510b_evb/board.c
+index a7fdde21..d1abaec7 100644
+--- a/boards/ambiq/apollo510b_evb/board.c
++++ b/boards/ambiq/apollo510b_evb/board.c
+@@ -124,6 +124,9 @@ static void em9305_cs_release(void)
+ 	(void)gpio_pin_set_dt(&em9305_cs_gpio, 0);
+ }
+ 
++/* Wisp patch (docs/wisp/safety.md rule 8): the CM pad (configuration mode, used only by the
++ * EM9305 firmware update) is never driven; the HAL's update path is compiled out. */
++#if defined(WISP_EM9305_NVM_WRITE)
+ static void em9305_set_cm(bool state)
+ {
+ 	(void)gpio_pin_set_dt(&em9305_cm_gpio, state ? 1 : 0);
+@@ -155,6 +158,7 @@ static void em9305_cm_pwm_ctrl(bool enable)
+ 	}
+ }
+ #endif
++#endif /* WISP_EM9305_NVM_WRITE */
+ 
+ static void em9305_hsclk_req(bool enable)
+ {
+@@ -200,10 +204,6 @@ static int board_em9305_extref_init(void)
+ 	am_devices_em9305_register_gpio_ops(em9305_set_reset, em9305_get_reset,
+ 					    em9305_irq_pin_state, em9305_cs_set,
+ 					    em9305_cs_release);
+-	am_devices_em9305_register_cm_gpio(em9305_set_cm);
+-#if !IS_ENABLED(CONFIG_BT)
+-	am_devices_em9305_register_cm_pwm_ops(em9305_cm_pwm_ctrl);
+-#endif
+ 
+ 	if (gpio_pin_configure_dt(&em9305_clkreq_gpio, GPIO_OUTPUT_INACTIVE) != 0) {
+ 		return -EIO;
+@@ -222,7 +222,8 @@ static int board_em9305_extref_init(void)
+ 
+ 	cb.reset = am_devices_em9305_controller_reset;
+ 	cb.transceive = em9305_spi_transceive;
+-	cb.skip_fw_update = IS_ENABLED(CONFIG_BT);
++	/* Wisp patch (docs/wisp/safety.md rule 8): never update or recover the EM9305 firmware. */
++	cb.skip_fw_update = true;
+ 
+ 	st = am_devices_em9305_init(&cb);
+ 	if (st != AM_DEVICES_EM9305_STATUS_SUCCESS) {
+diff --git a/drivers/bluetooth/hci/apollox_blue.c b/drivers/bluetooth/hci/apollox_blue.c
+index ff6375cc..0a24c078 100644
+--- a/drivers/bluetooth/hci/apollox_blue.c
++++ b/drivers/bluetooth/hci/apollox_blue.c
+@@ -271,6 +271,9 @@ static void bt_em9305_cs_release(void)
+ 	gpio_pin_set_dt(&cs_gpio, 0);
+ }
+ 
++/* Wisp patch (docs/wisp/safety.md rule 8): the CM pad (configuration mode, which only the
++ * EM9305 firmware update uses) is never driven; the HAL's update path is compiled out. */
++#if defined(WISP_EM9305_NVM_WRITE)
+ static void bt_em9305_set_cm(bool state)
+ {
+ 	gpio_pin_set_dt(&cm_gpio, state ? 1 : 0);
+@@ -304,6 +307,8 @@ static void bt_em9305_cm_pwm_ctrl(bool enable)
+ 	}
+ }
+ 
++#endif /* WISP_EM9305_NVM_WRITE */
++
+ static bool em9305_poll_rdy(bool high)
+ {
+ 	for (uint32_t i = 0; i < WAIT_EM9305_RDY_TIMEOUT; i++) {
+@@ -694,8 +699,6 @@ int bt_hci_transport_setup(const struct device *dev)
+ 	/* Register GPIO operations for EM9305 device driver */
+ 	am_devices_em9305_register_gpio_ops(bt_em9305_set_reset, bt_em9305_get_reset, irq_pin_state,
+ 					    bt_em9305_cs_set, bt_em9305_cs_release);
+-	am_devices_em9305_register_cm_gpio(bt_em9305_set_cm);
+-	am_devices_em9305_register_cm_pwm_ops(bt_em9305_cm_pwm_ctrl);
+ 
+ 	/* Configure RST pin and hold BLE in Reset */
+ 	ret = gpio_pin_configure_dt(&rst_gpio, GPIO_OUTPUT_ACTIVE);
+@@ -797,9 +800,11 @@ int bt_apollo_controller_init(spi_transmit_fun transmit, bt_spi_transceive_fun t
+ #if (CONFIG_SOC_APOLLO510B)
+ 	ARG_UNUSED(transmit);
+ 
++	/* Wisp patch (docs/wisp/safety.md rule 8): never update or recover the EM9305 firmware. */
+ 	am_devices_em9305_callback_t cb = {
+ 		.reset = am_devices_em9305_controller_reset,
+ 		.transceive = transceive,
++		.skip_fw_update = true,
+ 	};
+ 
+ 	/* Initialize the BLE controller */
+@@ -1066,17 +1071,11 @@ static int bt_em9305_set_tx_power(int8_t dbm)
+ int bt_apollo_set_public_addr(const uint8_t addr[6])
+ {
+ #if (CONFIG_SOC_APOLLO510B)
+-	int ret;
+-
+-	if (addr == NULL) {
+-		return -EINVAL;
+-	}
+-	ret = bt_em9305_send_vsc(HCI_VSC_SET_DEV_PUB_ADDR_CMD_OPCODE,
+-				 HCI_VSC_SET_DEV_PUB_ADDR_CMD_LENGTH, addr);
+-	if (ret) {
+-		LOG_ERR("EM9305: set public BD addr VSC failed (%d)", ret);
+-	}
+-	return ret;
++	/* Wisp patch (docs/wisp/safety.md rule 8): whether VSC 0xFC43 persists the address in
++	 * the EM9305's NVM is not documented, and the controller already holds the temple's
++	 * own address. Never sent. */
++	ARG_UNUSED(addr);
++	return -ENOTSUP;
+ #else
+ 	ARG_UNUSED(addr);
+ 	return -ENOTSUP;

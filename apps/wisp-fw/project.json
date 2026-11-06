@@ -30,7 +30,13 @@
     },
     "test": {
       "executor": "nx:run-commands",
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build",
+        {
+          "projects": ["wisp-sdk-ts"],
+          "target": "build"
+        }
+      ],
       "options": {
         "command": "apps/wisp-fw/scripts/test.sh"
       },
@@ -58,5 +64,6 @@
       },
       "cache": false
     }
-  }
+  },
+  "implicitDependencies": ["wisp-core"]
 }

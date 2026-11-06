@@ -1,11 +1,12 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * Link HAL: a reliable, ordered byte pipe to the phone (BLE GATT or L2CAP CoC on native;
- * WebSocket in the sim). Framing, CRC, credits and resync live in the core (protocol.md
- * "Frames"); the HAL only moves bytes and reports connection state.
+ * Link HAL: what a link target provides to src/link/wisp_link.c (the transport adapter that
+ * drives wisp-core's wisp_conn). Native: Zephyr GATT, src/ble/wisp_ble.c. Host tests: a fake.
  *
- * Native BLE is milestone M6 and gated by safety rule 8 (no EM9305 reflash, ever).
+ * The target only moves bytes and reports connection state. Framing, CRC, credits, resync
+ * and the session live in wisp-core (protocol.md "Frames"); which advertising mode to use and
+ * when to drop an idle link is decided by the adapter, so it is the same everywhere.
  */
 #ifndef WISP_HAL_LINK_H
 #define WISP_HAL_LINK_H
@@ -14,21 +15,30 @@
 #include <stddef.h>
 #include <stdint.h>
 
+enum wisp_adv_mode {
+	WISP_ADV_OFF = 0,
+	WISP_ADV_FAST = 1, /* right after boot or a disconnect: found quickly */
+	WISP_ADV_SLOW = 2, /* after that: cheap */
+};
+
 enum wisp_link_profile {
 	WISP_LINK_IDLE = 0,
 	WISP_LINK_INTERACTIVE = 1,
 	WISP_LINK_BULK = 2,
 };
 
-struct wisp_link_cbs {
-	void (*connected)(void *ctx, uint16_t mtu);
-	void (*disconnected)(void *ctx);
-	void (*rx)(void *ctx, const uint8_t *data, size_t len);
-	void (*tx_ready)(void *ctx); /* room again after WISP_HAL_EBUSY */
+struct wisp_hal_link_ops {
+	/*
+	 * One notification of at most the link's payload size (ATT MTU - 3). Returns 0 once it is
+	 * queued (tx_done() follows when the stack has sent it), WISP_HAL_EBUSY when no buffer is
+	 * free (the adapter retries the same bytes after the next tx_done()), or another negative
+	 * code (the bytes are dropped; the protocol's ack timeout resends them).
+	 */
+	int (*notify)(void *ctx, const uint8_t *data, size_t len);
+	/* Drop the current connection (it was idle without a session for too long). */
+	void (*disconnect)(void *ctx);
+	/* Start, switch or stop connectable advertising of the Wisp service. */
+	void (*advertise)(void *ctx, enum wisp_adv_mode mode);
 };
-
-int wisp_hal_link_start(const struct wisp_link_cbs *cbs, void *ctx);
-int wisp_hal_link_send(const uint8_t *data, size_t len);
-int wisp_hal_link_profile(enum wisp_link_profile p);
 
 #endif /* WISP_HAL_LINK_H */

@@ -4,8 +4,8 @@
  * wisp_g2 — one temple of the Even Realities G2, running Wisp natively.
  *
  * Template: the fork's apollo510b_evb (AmbiqMicro/ambiqzephyr, Apache-2.0). Facts and
- * sources: docs/wisp/hardware.md. Milestone M0 enables only what boots and logs (UART1);
- * every other G2 part is listed below as a disabled bus node with a TODO.
+ * sources: docs/wisp/hardware.md. Enabled: the debug UART (UART1) and the EM9305 BLE
+ * controller (IOM6); every other G2 part is listed below as a disabled bus node with a TODO.
  */
 
 /dts-v1/;
@@ -26,6 +26,7 @@
 		zephyr,code-partition = &wisp_partition;
 		zephyr,console = &uart1;
 		zephyr,shell-uart = &uart1;
+		zephyr,bt-hci = &bt_hci;
 	};
 
 	/* Same split as the evb: 1.5 MiB cached SSRAM for the app ... */
@@ -124,15 +125,52 @@
 };
 
 /*
- * TODO(BLE, milestone M6): IOM6 SPI — EM9305 BLE controller (ambiq,bt-hci-spi), Even's own
- * EM9305 firmware. Stays disabled until the HAL's EM9305 update path is compiled out and
- * skip_fw_update is forced (safety rule 8; checked by scripts/check_rule8.py). Do not copy
- * the evb's bt-hci node here before that.
+ * BLE: the EM9305 controller (ambiq,bt-hci-spi) on IOM6, running Even's own EM9305 firmware.
+ * Enabled for the Wisp GATT service. Safety rule 8: the HAL's EM9305 update, recovery and
+ * trim paths are compiled out by Wisp's patch (third_party/ambiq/), every caller forces
+ * skip_fw_update = true, and scripts/check_rule8.py proves both on every image.
+ *
+ * TODO(G2 pins): the pads are the apollo510b_evb's (fork, Apache-2.0, Ambiq Micro). On the
+ * Apollo510B the EM9305 is in the package (SiP; the evb's board.c calls it "SIP EM9305"), so
+ * these are probably the same on the G2, but they are unverified until read out of the stock
+ * image. The CM pad is configured as an input and never driven (configuration mode is only
+ * used by the firmware update, which is compiled out).
  */
 &iom6 {
 	spi6: spi {
-		status = "disabled";
+		pinctrl-0 = <&spi6_default>;
+		pinctrl-names = "default";
+		clock-frequency = <DT_FREQ_M(16)>;
+		cs-gpios = <&gpio128_159 21 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		status = "okay";
+
+		bt_hci: bt-hci@0 {
+			compatible = "ambiq,bt-hci-spi";
+			reg = <0>;
+			spi-max-frequency = <DT_FREQ_M(16)>;
+			irq-gpios = <&gpio96_127 21 GPIO_ACTIVE_HIGH>;
+			reset-gpios = <&gpio64_95 29 GPIO_ACTIVE_LOW>;
+			clkreq-gpios = <&gpio128_159 8 GPIO_ACTIVE_HIGH>;
+			cm-gpios = <&gpio0_31 15 GPIO_ACTIVE_HIGH>;
+			status = "okay";
+		};
 	};
+};
+
+&gpio0_31 {
+	status = "okay";
+};
+
+&gpio64_95 {
+	status = "okay";
+};
+
+&gpio96_127 {
+	status = "okay";
+};
+
+&gpio128_159 {
+	status = "okay";
 };
 
 /*

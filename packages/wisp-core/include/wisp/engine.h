@@ -19,9 +19,6 @@
 #include "resource.h"
 #include "session.h"
 
-#define WISP_PROTO_MAJOR 0u
-#define WISP_PROTO_MINOR 2u
-
 /* caps bits (protocol.md, HELLO) */
 enum {
     WISP_CAP_DISPLAY = 1u << 0,

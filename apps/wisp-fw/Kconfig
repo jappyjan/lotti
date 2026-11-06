@@ -5,23 +5,107 @@ mainmenu "Wisp native firmware"
 menu "Wisp"
 
 config WISP_HEARTBEAT_MS
-	int "Heartbeat period (ms)"
+	int "Heartbeat period (ms), 0 = off"
 	default 1000
+	help
+	  A debug line on the console. Costs UART power on hardware; the Renode boot test
+	  asserts on it.
 
 config WISP_BT_ALLOWED
-	bool "Allow Bluetooth (milestone M6+)"
+	bool "Allow Bluetooth"
 	help
-	  Off in M0. Turning Bluetooth on also needs WISP_EM9305_SKIP_FW_UPDATE and a
-	  HAL whose EM9305 update path is compiled out; scripts/check_rule8.py enforces
-	  both (docs/wisp/safety.md rule 8).
+	  Bluetooth needs Wisp's EM9305 patches (third_party/ambiq/patches/, applied by
+	  scripts/setup.sh): the HAL's EM9305 update, recovery and trim paths compiled out and
+	  skip_fw_update forced true. cmake/rule8.cmake fails the build without them and
+	  scripts/check_rule8.py proves the result on the linked image (docs/wisp/safety.md
+	  rule 8).
 
 config WISP_EM9305_SKIP_FW_UPDATE
 	bool "Never update or recover the EM9305 firmware"
 	default y
 	help
 	  Asserts that every am_devices_em9305_init() caller sets skip_fw_update = true.
-	  This is a promise checked at build time, not a switch: the fork's apollox_blue.c
-	  leaves skip_fw_update false, so a BT build on the unpatched fork fails.
+	  This is a promise checked at build time, not a switch: the unpatched fork's
+	  apollox_blue.c leaves skip_fw_update false, so a BT build on it fails.
+
+menuconfig WISP_BLE
+	bool "Wisp GATT service (docs/wisp/protocol.md, Links)"
+	depends on BT_PERIPHERAL
+	default y
+	help
+	  Advertises the Wisp service and carries a wisp-core session over it (src/ble/,
+	  src/link/).
+
+if WISP_BLE
+
+config WISP_LENS
+	int "Lens this image reports in HELLO (1 left, 2 right)"
+	range 1 2
+	default 1
+	help
+	  TODO(hardware.md): read the temple side from the hardware instead.
+
+config WISP_SESSION_TIMEOUT_MS
+	int "Session timeout reported in HELLO (ms)"
+	default 10000
+
+config WISP_LINK_MAX_FRAME
+	int "Largest frame body we accept (HELLO max_frame)"
+	default 4096
+
+config WISP_LINK_RX_WINDOW
+	int "Receive window announced in HELLO (bytes)"
+	default 16384
+
+config WISP_LINK_TX_RING
+	int "Send ring: frames kept until acknowledged (bytes)"
+	default 8192
+
+config WISP_LINK_QUEUE
+	int "Bodies waiting for the phone's window (bytes)"
+	default 4096
+
+config WISP_LINK_RX_RING
+	int "Bytes written by the phone, waiting for the link thread"
+	default 4096
+	help
+	  Overflow drops bytes; the protocol's RESYNC brings them back.
+
+config WISP_LINK_STACK_SIZE
+	int "Link work queue stack"
+	default 2048
+
+config WISP_LINK_PRIORITY
+	int "Link work queue priority"
+	default 5
+
+config WISP_LINK_TX_IN_FLIGHT
+	int "Notifications queued in the Bluetooth stack at once"
+	default 3
+	help
+	  Keep below the stack's ATT/ACL TX buffers so a notification never blocks.
+
+config WISP_LINK_IDLE_DROP_MS
+	int "Drop a connection that carries no session after (ms), 0 = never"
+	default 10000
+
+config WISP_ADV_FAST_MS
+	int "Fast advertising after boot or a disconnect (ms)"
+	default 30000
+
+config WISP_ADV_FAST_INTERVAL
+	int "Fast advertising interval (0.625 ms units)"
+	default 244
+	help
+	  152.5 ms: one of Apple's recommended intervals, found within a second or two.
+
+config WISP_ADV_SLOW_INTERVAL
+	int "Slow advertising interval (0.625 ms units)"
+	default 1636
+	help
+	  1022.5 ms: Apple's longest recommended interval; reconnects within a few seconds.
+
+endif # WISP_BLE
 
 endmenu
 
