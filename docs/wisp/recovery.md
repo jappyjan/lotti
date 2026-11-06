@@ -214,7 +214,7 @@ What can actually interrupt one second of a running, battery-powered temple: its
 
 `apps/wisp-fw/tests/boot/w18.py` runs the **patched bootloader** (rebuilt by `w18.py` from the cache) on the rung-3 platform with the stock 2.4.0.24 main app, and replaces UART2 by `WispCaseLink` (`renode/models/WispCaseLink.cs`): a lockstep TCP bridge, so the **real `w18.py` host code** (`Session`, the loader protocol, the pinned RAM programs) drives the **real loader** byte for byte, as it would through the case relay. Virtual time stops while the host thinks, the deterministic equivalent of the relay's G2TX/G2RX exchange.
 
-Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs end in their expected state** (7 session and boot cases, 27 install end states).
+Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs end in their expected state** (7 session and boot cases, 27 install end states). `recover-relay` was added the same evening and passes; the other session and boot cases passed again with it. In that rerun, two install states over the 2.4.0.24 bootloader, k = 35 and 36, stopped Renode answering its monitor. The base branch's harness hangs the same way on k = 35. These cases run no host code, so the hang is unrelated to the relay changes; it is still open.
 
 | Case                                                                           | What runs                                                                    | Result                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -223,6 +223,7 @@ Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs 
 | `hello`                                                                        | `loader-hello`'s session                                                     | `HELO` → `HOLD` → `OKAY` (HMAC checked) → `checksum.bin` of `[0x410000, +155,648)` = `63cd8dda` twice → flag `0xFFFFFFFF` → `CONT` → `RLSD` → stock app boots                                                                                |
 | `info`                                                                         | `info-dump`'s session, synthetic INFO0                                       | MCUCTRL/PWRCTRL read, INFO0 2,048 B read back exactly, INFOC and DCU **skipped** because their domains are off, stock app boots                                                                                                              |
 | `recover`                                                                      | app region **erased** (a dead temple), `recover` with the pinned stock image | the loader takes over before the (missing) app; 3,700,080 B streamed through `recover.bin` and the bootloader's MRAM routine, body CRC, vectors, full CRC `1c340963`; MRAM = stock, bootloader unchanged; release → **stock 2.4.0.24 boots** |
+| `recover-relay`                                                                | the same, every frame through the case relay's framing                       | `RelayPortLink` (the G2RQ, G2TX/G2RX and G2EX/G2RS code `CaseRelayLink` runs) over `relay_model.RelayModel` (drdaeman's `case_exchange.c` in Python): 245,795 exchanges, the same MRAM end state, relay exit status 6; stock 2.4.0.24 boots |
 | `recover-cut-40pct`                                                            | the same, **power cut after ROM write 5,781** (about 40 %)                   | session 1 sees a `HELO` instead of a reply and stops (`TempleReset`, no release). The temple reboots into the loader again because the app is still dead. A fresh session 2 writes and verifies everything; stock boots                      |
 | `install-over-2.4.0.24-k` (k = 0, 1, 2, 9, 10, 11, 19, 29, 30, 31, 36, 37, 38) | MRAM = first k of the 38 new pages, the rest the 2.4.0.24 bootloader         | k = 0: boots stock. **k = 1 … 37: brick** (UsageFault loop in the bootloader, no `HELO`, no app). k = 38: boots stock with the loader's `HELO`                                                                                               |
 | `install-over-2.3.2.14-k` (k = 0 … 38 as above, plus 35)                       | the same over a 2.3.2.14 bootloader                                          | k ≤ 30: boots stock (those pages are byte-identical). **k = 31 … 37: brick** (the hook page `0x42E000` is new, the loader pages `0x434000`–`0x435FFF` aren't yet). k = 38: boots stock with `HELO`                                           |
@@ -248,9 +249,52 @@ Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 by
 | `bootloader-install --side S --address A --battery N --go TOKEN` | **MRAM `0x410000–0x435FFF` of side S, via the stock BLE OTA** | `--go` is exactly `W18-LEFT-87e2d4e0a7a6` (or `-RIGHT-`); N ≥ 80; a passed step-0 report for side S from the last 24 h (case 1.2.57, app 2.4.0.24, hardware 5); every pin; the BLE name says side S; MTU ≥ 243; stock authentication passes. Sends only the pinned image, never replays a block, accepts only END status 8                                                                           |
 | `loader-hello --side S`                                          | nothing (temple reset by the case)                            | the bootloader region's CRC is the pinned image's                                                                                                                                                                                                                                                                                                                                                    |
 | `info-dump --side S`                                             | nothing                                                       | as above. Reads MCUCTRL, PWRCTRL; INFO0 (MRAM or, if powered, OTP); INFOC and the DCU/LCS registers **only if their power domain is already on**; it never powers anything up                                                                                                                                                                                                                        |
+| `link-soak --side S [--bytes N]`                                 | nothing (temple reset by the case)                            | as `loader-hello`. Streams N bytes (default 1 MiB, about 65,536 exchanges) of the app region **out** with `dump`, checks them against `checksum` of the same range, and reports the exchange count and time per exchange. A session as long and dense as `recover`'s, without a write |
 | `recover --side S --image .wisp-cache/stock/g2-2.4.0.24.bin`     | MRAM `0x438000–0x7BF56F` of side S, via the loader            | the image is the pinned stock 2.4.0.24 main (`df8cfddf…`); the bootloader CRC matches; the update flag is clear (else `--allow-pending-flag`); every write is inside the app region (the flag record and everything else are refused in code). Writes the body, checks its CRC, then the 16 vector bytes, then the full CRC. A HELO in the middle (temple reset) stops the session without a release |
 
-Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`) and `wisp-fw:w18-test` (Renode).
+Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`, and sessions through the relay framing on a relay model and on drdaeman's real relay binary under Unicorn) and `wisp-fw:w18-test` (Renode).
+
+Every session's report keeps the error that stopped it, the step and write position, the cleanup failures beside it, and the last 16 exchanges (sent, received, time); the case's relay record is decoded. A relay exit status other than 6 is an error.
+
+### Step F on hardware: the stall of 2026-11-06
+
+Both runs of `recover` on the left temple (19:30 and 19:37 UTC, the second after a reseat) stopped the same way. Everything up to the writer passed: `HELO`, hold, bootloader CRC `63cd8dda`, flag clear, app CRC `d9864941`. Then no reply came, three 60 s timeouts ran out, and the relay never answered `G2EX`. The temple was unharmed ([hardware log](safety.md)). The analysis below was done on t3-worker, from code, emulation and the relay record the tool read back. Nothing in it touched hardware.
+
+**Root cause: not found with confidence.** What is settled:
+
+- **It is not our framing [C].** Every host frame is byte-identical to drdaeman's reference host code at `1d22097`. That covers `protocol.py` `request` (RQST, INPUT_DATA = count, 16 data bytes, CRC-32) and `link.py` `exchange` (G2TX length and checksum, the G2RX checks). In emulation, his real relay binary under Unicorn forwards a streamed write behind the unmodified `CaseRelayLink` (`tests/test_relay.py`). A full stock `recover` also passes in Renode through the relay framing: 245,795 exchanges (`recover-relay` above). His own hardware test of `recv` through the relay covered a 1 KiB range (programmed, read back, restored): a few hundred exchanges per session, not hundreds of thousands [C, PROTOCOL.md].
+- **The case MCU stopped running the relay [C, relay record].** The record layout comes from our disassembly of the bridge and from `case_exchange.c`:
+  - Word 1 = 1: the bridge's exit path (route restore, `G2RS`, reset) never ran.
+  - YHM writes `0x00f` and reads-after-restore `0x000`: the route restore never started.
+  - Word 10 = 32: the last frame the relay handed to the temple was a 32-byte request. So the cleanup's 9-byte `CONT` never reached it.
+  - The capture holds `RESP INPUT 16`, and the UART error flags are 0.
+
+  Every loop in the relay is bounded at 64,000,000 polls. That is about 15–20 s at 64 MHz, the clock that the bridge's `BRR = 556` for 115,200 Bd implies [I]. Every way out of those loops either sends a `G2RX` (status 2 when the temple is silent) or ends in `G2RS`. A host that waits 60 s, then sends `CONT`, then `G2EX`, would have seen one of them. So the case was stuck outside the relay's own loops, or it had reset.
+- **The temple cannot cause that silence [C].** If the temple hangs, the relay answers status 2 within its poll bound. If the temple reboots, it sends a `HELO`; the relay forwards it, and the tool reports it as `temple rebooted`.
+- **`relay_exit_status 6` (steps D, E) is the normal end [C].** It is the bridge's status for "extension returned, route restore verified, no step-0 capture", and the W18 relay always zeroes its capture count on exit. Status 7 would mean the restore did not verify. The tool now checks for 6.
+- **Where in the stream it stopped is not known [I].** The record looks the same after every input exchange, because each one requests 16 bytes. The old tool printed progress only every 64 KiB, which is 4,352 exchanges. The two runs lasted 212 s and 273 s, of which 180 s were the three timeouts and about 20–30 s were setup and cleanup. So run 2 stopped within seconds of the first `INPUT_DATA`, and run 1 about a minute later, still before 64 KiB. It is not a fixed point in the stream.
+
+Hypotheses, most likely first:
+
+1. **The case hangs in stock case code that the relay calls on every exchange [I, mechanism not identified].** Per exchange, the relay calls into the case 1.2.57 flash with interrupts masked:
+   - the UART3 re-init to TX-only and back to RX-only (`HAL_UART_DeInit`/`HAL_UART_Init`, `0x08006CF8`/`0x08006C80`);
+   - `HAL_UART_Transmit` (through `0x08003BB0`, timeout `0xFFFF`).
+
+   With interrupts masked, SysTick is frozen, so none of their HAL timeouts can expire. Their error path (`Error_Handler`, `0x08003E90`) is `cpsid i; b .`. A rare stall there would not show in sessions of a few hundred exchanges (steps D and E), but would likely show in one of thousands.
+2. **The case MCU resets [I].** A brown-out or a fault through the ROM's vector table would reset it. With DTR released, it then boots its ROM loader, which says nothing to `G2TX` or `G2EX`. SRAM survives a reset, which fits the intact record.
+3. **Something specific to `INPUT_DATA` [I, least likely].** This could be data patterns on the pogo line, or the first 256-byte MRAM program on the temple. No mechanism was found: the relay never looks at the data, and a temple-side fault would show as status 2 or a `HELO`.
+
+**The cheapest experiment that decides between them is read-only:** `w18.py link-soak --side left`. It streams 1 MiB of the app region *out* with `dump` and checks it against the temple's CRC of the same range. That is OUTPUT/OUTPUT_ACK, the same 32-byte frames in both directions and the same relay path per exchange, 65,536 exchanges, about 15–25 min. Nothing is written.
+- If the soak stalls too, it is (1) or (2): long relay sessions are the problem, not `recv`. Its report says after how many exchanges and how many seconds. In that case `recover` must not run as one 45-minute session. The options are then shorter sessions (a write split over fresh claims, each part verified by CRC) or a relay that never calls case HAL code with interrupts masked.
+- If the soak passes, it points at (3). Rerun `recover` with the new diagnostics, which name the exchange where it stopped.
+
+**Fixed in the tool:**
+- The error that ended a session is kept and reported. Cleanup failures are listed beside it (`cleanup_errors`, and as notes on the exception), not instead of it. Before, the restore timeout replaced it.
+- Every report carries the step and write position, the exchange count, the last 16 exchanges (sent, received, time, error) and the decoded relay record. On failure, the last frames are also printed.
+- `recover` prints its first progress line after the first verified 256-byte block, so a stall in the stream shows within seconds.
+- The relay exit status is checked; 6 is expected.
+- Step C's liveness check uses a new BLE connection and is informational: a missing answer is reported, not fatal.
+- New tests: sessions through the relay framing, on the relay model (a port of `case_exchange.c`) and on drdaeman's real relay binary under Unicorn, both behind the code `CaseRelayLink` runs. Making the case stop while it forwards the first `INPUT_DATA` reproduces the hardware's relay record byte for byte in the model and field for field in the binary, and the report shows the original timeout with the cleanup failures beside it. `recover-relay` covers the same path in Renode.
 
 ### Step by step for Jan (Mac, left temple first)
 
@@ -266,7 +310,7 @@ Success: `OK: left temple firmware 2.4.0.24, hardware 5 …`. Stop on anything e
 
 **C. The install: Jan's go for this flash is the `--go` token.** Both temples out of the case (they are one pair), folded, flat on the table; battery ≥ 80 % read in the Even app; then force-quit the Even app and Lotti, phone Bluetooth off.
 `uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py bootloader-install --side left --address <LEFT-ID> --battery <N> --go W18-LEFT-87e2d4e0a7a6`
-Success: `38` lines `…/155648 bytes staged`, `END status 8: the app is copying…`, then `main app still answers after the copy`, and a report under `apps/wisp-recovery/runs/`. Don't touch the temple during the ~1 s after `END status 8`.
+Success: `38` lines `…/155648 bytes staged`, `END status 8: the app is copying…`, and a report under `apps/wisp-recovery/runs/`. After 5 s the tool opens a **new** BLE connection and authenticates as a liveness check: `main app still answers after the copy`, or a `NOTE: the liveness check got no answer`. That note alone is not a failure (on the same connection this check timed out on 2026-11-06 although the app was fine): END 8 was accepted, so leave the temple for a minute and go to D. Don't touch the temple during the ~1 s after `END status 8`.
 Stops and what they mean:
 
 - `REFUSED …`: nothing was sent. Fix the named precondition.
@@ -277,7 +321,7 @@ Stops and what they mean:
 **D. Prove the loader.** Put the left temple in the case (seated, lid open), case on USB.
 `uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py loader-hello --side left`
 The case resets the temple; the loader sends `HELO`; the tool claims it, reads the bootloader CRC twice, reads the flag, releases.
-Success: `OK: patched loader answers on the left temple; bootloader CRC-32 63cd8dda twice; update flag 0xffffffff`, the case back on 1.2.57, and the temple boots normally (Even app connects). Then add a hardware-log row in safety.md.
+Success: `OK: patched loader answers on the left temple; bootloader CRC-32 63cd8dda twice; update flag 0xffffffff`, `relay_exit_status 6` (the normal end), the case back on 1.2.57, and the temple boots normally (Even app connects). Then add a hardware-log row in safety.md.
 Stops:
 
 - `relay failed to arm`, `relay did not arm` or a timeout reading the boot beacon: no `HELO`. The bootloader may have kept stock behaviour (drdaeman's loader silently falls back if the stock UART2 state is not as expected), or the temple isn't seated. The temple boots normally either way. Reseat and rerun once; then stop and report.
@@ -286,10 +330,17 @@ Stops:
 
 **E. Read-only INFO dump.** `… w18.py info-dump --side left`. Success: JSON with MCUCTRL, PWRCTRL, INFO0, and INFOC/DCU, or `skipped` for each domain that is powered off. Paste it into the hardware log. If the temple hangs in the loader (a read faulted; no reply), rerun `loader-hello`: the reset clears it.
 
-**F. Prove recovery** (W17's proof; budget about 45 min with the temple seated and the case on USB).
+**F. Prove recovery** (W17's proof). The first attempts stalled ([above](#step-f-on-hardware-the-stall-of-2026-11-06)), so F now starts with a read-only soak.
+
+**F1. Soak the link (read-only; budget about 25 min,** with the temple seated, lid open, the case on USB, and the Mac on its charger with `caffeinate`).
+`… w18.py link-soak --side left`
+Success: progress every 64 KiB, then `OK: 1048576 bytes streamed and matched the temple's CRC (…) in … s, … exchanges, … ms each`, boot released, `relay_exit_status 6`, the case back on 1.2.57, and the temple boots normally. Note the ms per exchange: × 245,800 gives F2's duration.
+Stops: `STOPPED: …` with `while: stream … bytes out` and the last frames means the relay stalled with nothing written. **Do not run F2.** Report the exchange count and the time, then rerun `loader-hello` once, which resets the temple into its normal boot.
+
+**F2. Write** (only after F1 passed; budget F1's ms per exchange × 245,800, about 45 min).
 `… w18.py recover --side left --image .wisp-cache/stock/g2-2.4.0.24.bin`
-Success: progress lines every 64 KiB, `OK: stock 2.4.0.24 main app written and verified (<crc>)`, boot released, then the temple boots and the Even app and Lotti work.
-Stops: any error **before** the first write changes nothing. After that, the vectors (first 16 bytes) are written last, so an interrupted run leaves the old vector table in place. With stock over stock the bytes are identical anyway. In a real recovery the app stays dead, but the loader runs before it, so just run `recover` again. A `temple rebooted mid-session` message means a reset or power cut. Rerun.
+Success: a first progress line after 256 bytes (within seconds), then one every 64 KiB, `OK: stock 2.4.0.24 main app written and verified (<crc>)`, boot released, then the temple boots and the Even app and Lotti work.
+Stops: any error **before** the first write changes nothing. After it, the vectors (first 16 bytes) are written last, so an interrupted run leaves the old vector table in place. With stock over stock the bytes are identical anyway. In a real recovery the app stays dead, but the loader runs before it, so `recover` can simply run again. A `temple rebooted mid-session` message means a reset or power cut: rerun. Any other stop prints the step, the write position (`sent`, `verified`), the cleanup failures and the last frames, and the report keeps them: do not rerun, send the report as it is.
 
 **Then the right temple:** only after A–F passed on the left, with its own go: the same steps with `--side right`.
 
@@ -298,6 +349,7 @@ Stops: any error **before** the first write changes nothing. After that, the vec
 - Jan's case firmware version (1.2.57 expected) and the temples' hardware version (drdaeman tested hardware 5).
 - Whether the bootloader in MRAM is the 2.4.0.24 one. It can't be read before the install ([W18 procedure](#what-gets-installed)); the install replaces it entirely.
 - INFOC / INFO0 / DCU contents: is SWD open, is SBL wired recovery provisioned, is secure boot off? Step 3 answers this.
+- Why the case relay stalled in step F (hypotheses and the deciding soak: [Step F on hardware](#step-f-on-hardware-the-stall-of-2026-11-06)).
 - How long a full `recover` takes on hardware: estimated 30–45 min ([timing](#timing-on-hardware-estimates-i)), not 40 s: every 16 bytes costs one request/reply with a 6-tick delay in the loader. Whether the temple stays seated that long.
 - How long the stock app's bootloader copy really takes (its log line `Write file to MRAM success, time = %d ms`; estimated about 1 s).
 - The pogo pin count and the 1.8 V/3.3 V levels on the UART lines (the case's YHM2510 level-shifts them).

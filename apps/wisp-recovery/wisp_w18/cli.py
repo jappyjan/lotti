@@ -6,6 +6,8 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   bootloader-install  the one bootloader write, over the stock BLE OTA; needs --go <token>
   loader-hello        read-only: claim the loader through the case, CRC the bootloader twice, release
   info-dump           read-only: MCUCTRL, PWRCTRL, INFO0, INFOC, DCU/LCS (when powered), release
+  link-soak           read-only: stream N bytes of the app region out through the loader (dump), as
+                      long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
 """
 
@@ -22,7 +24,7 @@ from pathlib import Path
 
 from . import image, pins
 from .links import CaseRelayLink, SocketLink
-from .session import Session
+from .session import BLOCK, Session, SessionError
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
 
@@ -142,11 +144,8 @@ def cmd_install(args) -> int:
             finally:
                 report["blocks_acked"], report["end_status"] = ota.blocks_acked, ota.end_status
             print(f"END status {status}: the app is copying the file to MRAM 0x410000 now")
-            # Liveness only (a fresh stock request is served after the synchronous copy).
-            await asyncio.sleep(5)
-            await ota.authenticate()
-            print("main app still answers after the copy")
-            return 0
+        report["liveness"] = await liveness(args)
+        return 0
 
     try:
         code = asyncio.run(run())
@@ -164,19 +163,71 @@ def cmd_install(args) -> int:
     return code
 
 
+LIVENESS_DELAY = 5.0  # s after END 8; the copy is synchronous in the app's OTA task (~1 s)
+
+
+async def liveness(args) -> dict:
+    """After END 8: does the main app still serve a stock request? On a NEW BLE connection:
+    re-authenticating on the install connection times out on hardware (2026-11-06, step C),
+    though the app is fine. Informational only; it sends nothing that changes the temple, and
+    step D (loader-hello) is the proof of what is in MRAM."""
+    from .ble import BleakGatt, StockOta, side_of
+
+    await asyncio.sleep(LIVENESS_DELAY)
+    try:
+        async with BleakGatt(args.address, args.adapter) as gatt:
+            if side_of(gatt.name) != args.side:
+                raise RuntimeError(f"reconnected to {gatt.name!r}, not the {args.side} temple")
+            await StockOta(gatt, log=lambda m: None).authenticate()
+        print("main app still answers after the copy (new BLE connection, stock authentication OK)")
+        return {"ok": True}
+    except Exception as error:  # noqa: BLE001 - informational
+        print(f"NOTE: the liveness check got no answer ({error!r}). By itself this is not a failure: END "
+              "status 8 was accepted and the copy runs inside the app. Do NOT resend. Leave the temple on "
+              "the table for a minute, then go to step D (loader-hello), which proves what is in MRAM.",
+              file=sys.stderr)
+        return {"ok": False, "error": repr(error)}
+
+
+def short_frames(recent: list[dict], n: int = 6) -> list[str]:
+    out = []
+    for e in recent[-n:]:
+        got = e.get("received")
+        out.append(f"#{e['n']} t={e['t']}s > {e['sent'][:64]} < {got[:64] if got else e.get('error', 'no reply')}")
+    return out
+
+
 def with_session(args, name: str, body) -> int:
     patched = image.build_patched_bootloader()
     report: dict = {"side": args.side, "command": name}
     code = 1
+    link = session = None
     try:
-        with Session(make_link(args)) as session:
+        link = make_link(args)
+        session = Session(link)
+        with session:
             session.require_patched_bootloader(patched)
             report.update(body(session, patched) or {})
         report["success"] = True
         code = 0
     except BaseException as error:  # noqa: BLE001 - reported
+        # The error that ended the session, not whatever the cleanup ran into afterwards.
         report["error"] = repr(error)
         print(f"STOPPED: {error!r}", file=sys.stderr)
+        if session is not None:
+            report["stopped_in"] = session.step
+            report["position"] = session.position
+            report["cleanup_errors"] = session.cleanup_errors
+            print(f"  while: {session.step} {session.position or ''}", file=sys.stderr)
+            for failure in session.cleanup_errors:
+                print(f"  cleanup also failed: {failure}", file=sys.stderr)
+    finally:
+        if link is not None and hasattr(link, "diagnostics"):
+            report["link"] = link.diagnostics()
+            if not report.get("success"):
+                print("  last frames (> host, < temple):", file=sys.stderr)
+                for line in short_frames(report["link"]["recent"]):
+                    print(f"    {line}", file=sys.stderr)
     print(f"report: {save(report, f'w18-{name}-{args.side}')}")
     return code
 
@@ -201,6 +252,40 @@ def cmd_info(args) -> int:
     return with_session(args, "info-dump", body)
 
 
+def cmd_soak(args) -> int:
+    length = args.bytes
+    if not 16 <= length <= pins.RECOVER_END - pins.RECOVER_BASE or length % 16:
+        print(f"REFUSED: --bytes must be a multiple of 16 in [16, {pins.RECOVER_END - pins.RECOVER_BASE}]",
+              file=sys.stderr)
+        return 2
+
+    def body(session, patched):
+        start = time.monotonic()
+        last = [0]
+
+        def progress(count):
+            if count - last[0] >= 64 * 1024 or count == length:
+                last[0] = count
+                rate = count / max(time.monotonic() - start, 1e-3)
+                print(f"{count}/{length} bytes read ({rate / 1024:.2f} KiB/s, "
+                      f"{session.link.recent.count} exchanges)", flush=True)
+
+        session.step = f"stream {length} bytes out (dump)"
+        session.position = {"target": f"{pins.RECOVER_BASE:#x}+{length}"}
+        data = session.dump(pins.RECOVER_BASE, length, progress)
+        seconds = time.monotonic() - start
+        session.step = "CRC of the same range"
+        crc = session.checksum(pins.RECOVER_BASE, length)
+        if crc != zlib.crc32(data):
+            raise SessionError(f"streamed bytes CRC {zlib.crc32(data):08x} != temple CRC {crc:08x}")
+        exchanges = session.link.recent.count
+        print(f"OK: {length} bytes streamed and matched the temple's CRC ({crc:08x}) in {seconds:.0f} s, "
+              f"{exchanges} exchanges, {1000 * seconds / max(exchanges, 1):.1f} ms each; releasing boot")
+        return {"bytes": length, "crc32": f"{crc:08x}", "seconds": round(seconds, 1), "exchanges": exchanges}
+
+    return with_session(args, "link-soak", body)
+
+
 def cmd_recover(args) -> int:
     data = Path(args.image).read_bytes()
     try:
@@ -219,9 +304,10 @@ def cmd_recover(args) -> int:
             raise SystemExit("REFUSED: the update flag is set; the bootloader would install the staged OTA "
                              "file after release. Pass --allow-pending-flag if that is intended.")
         start = time.monotonic()
+        first = BLOCK  # the first verified block shows at once that streaming works
 
         def progress(count):
-            if count % (64 * 1024) == 0 or count >= len(stock) - 16:
+            if count == first or count % (64 * 1024) == 0 or count >= len(stock) - 16:
                 rate = count / max(time.monotonic() - start, 1e-3)
                 print(f"{count}/{len(stock)} bytes written and read back ({rate / 1024:.1f} KiB/s)", flush=True)
 
@@ -254,10 +340,14 @@ def main(argv=None) -> int:
     sp.add_argument("--go", required=True, help="the token bootloader-plan prints")
     common(sub.add_parser("loader-hello", help="read-only loader check through the case"))
     common(sub.add_parser("info-dump", help="read-only INFO0/INFOC/debug-lock dump"))
+    sp = sub.add_parser("link-soak", help="read-only: stream the app region out through the loader")
+    common(sp)
+    sp.add_argument("--bytes", type=lambda v: int(v, 0), default=1 << 20,
+                    help="bytes of the app region to stream (default 1 MiB, about 65,536 exchanges)")
     sp = sub.add_parser("recover", help="write the pinned stock main app through the loader")
     common(sp)
     sp.add_argument("--image", required=True, help="the 2.4.0.24 bundle (.wisp-cache/stock/g2-2.4.0.24.bin) or its raw main image")
     sp.add_argument("--allow-pending-flag", action="store_true")
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
-            "info-dump": cmd_info, "recover": cmd_recover}[a.command](a)
+            "info-dump": cmd_info, "link-soak": cmd_soak, "recover": cmd_recover}[a.command](a)
