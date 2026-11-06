@@ -128,7 +128,7 @@ The app confirms a good boot through a fixed services table at `0x438200` (`stag
 
 ## Rung 3: fallback-to-stock with the real Even bootloader (`wisp-fw:boot-test`)
 
-**What runs.** The unmodified stock 2.2.6.10 bootloader (`ota/s200_bootloader.bin` from the pinned bundle in `.wisp-cache/`, SHA-256 checked, never committed) at `0x410000`, started the way the SBL hands off. In front of nothing but Renode peripheral models: no code patches, no hooks in Even's code. The NOR is a 32 MiB file with a littlefs image built on the host (`tests/boot/tools/wisp_lfs.c`, the same littlefs source as Wisp Boot) holding `ota/s200_firmware_ota.bin` (the Wisp image as `wisp-ota pack-main` packs it, so wisp-ota's guards run on every test image) and `wisp/rescue.bin` (the stock main payload). Start state = "Wisp was installed through the stock OTA path": Wisp in MRAM, flag `0x55555555` still set (the bootloader never clears it, see hardware.md), so the bootloader reinstalls Wisp on every boot until the rescue replaces the staging file.
+**What runs.** The unmodified stock bootloader (2.4.0.24 by default, the version on Jan's temples; `WISP_STOCK_VERSION` picks another cached bundle) (`ota/s200_bootloader.bin` from the pinned bundle in `.wisp-cache/`, SHA-256 checked, never committed) at `0x410000`, started the way the SBL hands off. In front of nothing but Renode peripheral models: no code patches, no hooks in Even's code. The NOR is a 32 MiB file with a littlefs image built on the host (`tests/boot/tools/wisp_lfs.c`, the same littlefs source as Wisp Boot) holding `ota/s200_firmware_ota.bin` (the Wisp image as `wisp-ota pack-main` packs it, so wisp-ota's guards run on every test image) and `wisp/rescue.bin` (the stock main payload). Start state = "Wisp was installed through the stock OTA path": Wisp in MRAM, flag `0x55555555` still set (the bootloader never clears it, see hardware.md), so the bootloader reinstalls Wisp on every boot until the rescue replaces the staging file.
 
 **Models** (`renode/models/`, MIT, written for this rung; register maps from hal_ambiq's CMSIS `apollo510.h`, protocols from AmbiqSuite's HAL):
 
@@ -153,7 +153,7 @@ Plus g2emu's MIT models (`third_party/g2emu/`): CLKGEN/RTC, PWRCTRL, UART1 and, 
 
 Power cuts are positioned from a reference run (milestones on Wisp Boot functions and the NOR operation count): rescue decided but not started, five points inside the 3.5 MB staging copy (14 654 NOR program/erase operations), copy committed, verified-but-no-flag, right after the flag write, and inside / right after the bootloader's own stock install.
 
-Result on t3-worker, 2026-11-06, stock 2.2.6.10 bootloader, Wisp Boot `wisp_boot.bin` SHA-256 `8dd8fd69ef4b…` — **all 26 runs end in their expected state** (`.wisp-cache/rung3/2.2.6.10/report.md`):
+Result on t3-worker, 2026-11-06, Wisp Boot `wisp_boot.bin` SHA-256 `8dd8fd69ef4b…`: **all 26 runs end in their expected state, on both the stock 2.2.6.10 and the stock 2.4.0.24 bootloader** (`.wisp-cache/rung3/<version>/report.md`; 47 min wall for 2.4.0.24). The table is the 2.2.6.10 run. On 2.4.0.24 every case has the same verdict and end state, and only the NOR operation counts of the copy cut points differ (2.4.0.24: 326 / 3866 / 7713 / 11560 / 15100), because its main image is larger. The 2.4.0.24 bootloader logs `Nor flash chip: MX25U25643G` (the model's RDID); its GD25LE256H path is not exercised:
 
 | Case                            | Fault                                                       | Expected | Result | End state                                                 | Run                                                   |
 | ------------------------------- | ----------------------------------------------------------- | -------- | ------ | --------------------------------------------------------- | ----------------------------------------------------- |
@@ -223,7 +223,7 @@ Resets count every reset (watchdog, SWPOR, cut); a power cut is processed when R
 Before rung 3 can be signed off (see safety.md "Rung 3 status"):
 
 1. Jan reviews the terminal states and rules 11–12 in safety.md.
-2. Repeat `boot-test` with the bootloader version actually installed on the temples (`WISP_STOCK_VERSION=<x.y.z.w> pnpm nx run wisp-fw:boot-test`; only 2.2.6.10 has been run).
+2. ~~Repeat `boot-test` with the bootloader version actually installed on the temples~~ done 2026-11-06: 2.4.0.24, 26/26. Still open: which bootloader is really in MRAM (the Even app may install the bundle's bootloader component only on some updates; 2.3.2.14's and 2.4.0.24's DFU code is identical either way), and a NOR model answering as GD25LE256H in case the temples have that part.
 3. Put the real native app (Zephyr, relinked at `0x448000`, feeding the watchdog and calling `confirm()`) behind Wisp Boot instead of the bare-metal fault apps.
 
 Toward rung 4 (hardware), none of which emulation can answer:
