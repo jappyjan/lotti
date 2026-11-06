@@ -55,6 +55,14 @@
         "cwd": "packages/wisp-core"
       },
       "cache": false
+    },
+    "bench": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tools/bench.sh",
+        "cwd": "packages/wisp-core"
+      },
+      "cache": false
     }
   }
 }

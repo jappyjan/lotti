@@ -5,7 +5,8 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-set(WISP_CORE_SOURCES src/crc.c src/frame.c src/msg.c src/msgs.c src/codec.c src/session.c)
+set(WISP_CORE_SOURCES src/crc.c src/frame.c src/msg.c src/msgs.c src/codec.c src/session.c
+    src/sha256.c src/pool.c src/display.c src/resource.c src/text.c src/anim.c src/input.c src/engine.c)
 set(WISP_WARNINGS -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Werror)
 
 option(WISP_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
@@ -26,6 +27,10 @@ if(WISP_TESTS)
   add_executable(test_core tests/test_core.c)
   target_link_libraries(test_core wisp_core)
   add_test(NAME core COMMAND test_core)
+
+  add_executable(test_engine tests/test_engine.c)
+  target_link_libraries(test_engine wisp_core)
+  add_test(NAME engine COMMAND test_engine)
 
   add_executable(test_vectors tests/test_vectors.c tests/json.c)
   target_link_libraries(test_vectors wisp_core)

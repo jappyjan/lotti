@@ -22,3 +22,6 @@ export * from './image/hash.ts';
 
 export { Emitter } from './events.ts';
 export * from './client.ts';
+
+export * from './font/font.ts';
+export * from './font/bdf.ts';
