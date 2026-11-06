@@ -94,14 +94,14 @@ a per-service pointer table (searched the image for a `{sid → fn}` table, 0 hi
 `0x04–0x91` and `0xC0–0xC7` are in use [C: `protocols.md:97-104`,
 `capabilities.md:73-84`].
 
-| Fact | Value | Source |
-| --- | --- | --- |
-| `TPL_Init` | `0x004B892C`, called once at `0x004C9502` (slot 0, 4 callbacks) | [C] `apollo_main.tsv:2909`; disasm |
-| `TPL_ReceivePacket` | `0x004B910C`; its only caller is the write callback at `0x004BDF46` | [C] `apollo_main.tsv:2919`; disasm |
-| RX-complete callback | `Thread_MsgRxFromBle` `0x0048F12C` → BLE-RX thread queue | [C] `apollo_main.tsv:2043`; disasm |
-| Category router | `_thread_pb_msg_handler` `0x0048EEAC` (routes 0x80, 0xC0–0xC7, 0x200, 0x400) | [C] `apollo_main.tsv:2039`; disasm |
-| `TPL_SendPacket` | `0x004B9640`, fragments ≤4096 B and appends CRC-16 | [C] `apollo_main.tsv:2920` |
-| CRC-16/CCITT-FALSE leaf | `0x0049ACD4` | [C] `protocols.md:110` |
+| Fact                    | Value                                                                        | Source                             |
+| ----------------------- | ---------------------------------------------------------------------------- | ---------------------------------- |
+| `TPL_Init`              | `0x004B892C`, called once at `0x004C9502` (slot 0, 4 callbacks)              | [C] `apollo_main.tsv:2909`; disasm |
+| `TPL_ReceivePacket`     | `0x004B910C`; its only caller is the write callback at `0x004BDF46`          | [C] `apollo_main.tsv:2919`; disasm |
+| RX-complete callback    | `Thread_MsgRxFromBle` `0x0048F12C` → BLE-RX thread queue                     | [C] `apollo_main.tsv:2043`; disasm |
+| Category router         | `_thread_pb_msg_handler` `0x0048EEAC` (routes 0x80, 0xC0–0xC7, 0x200, 0x400) | [C] `apollo_main.tsv:2039`; disasm |
+| `TPL_SendPacket`        | `0x004B9640`, fragments ≤4096 B and appends CRC-16                           | [C] `apollo_main.tsv:2920`         |
+| CRC-16/CCITT-FALSE leaf | `0x0049ACD4`                                                                 | [C] `protocols.md:110`             |
 
 **The hook:** redirect the category router `_thread_pb_msg_handler`
 (`0x0048EEAC`) so that a chosen **private sid** is handed to the Wisp module and
@@ -128,20 +128,20 @@ Stock drives a **576×288** LVGL surface (not the full panel) at colour depth L8
 through a `0x14400`-byte (82,944 B) draw buffer, and pushes to the µLED panel
 over MSPI0 [C: `libraries.md:150-151`, `findings-codec-em9305.md:1117`].
 
-| Fact | Value | Source |
-| --- | --- | --- |
-| LVGL draw buffer base | `0x20080000` (start of SSRAM) | [C] `findings-codec-em9305.md:1117`; disasm (`0x46ca6e` returns it) |
-| Buffer size | `0x14400` B = 576×288×8bpp | [C] disasm `0x473792` (`mov r1,#0x14400`) |
-| Display init (576×288) | `0x00473782` → draw-buf init `0x0048AEF8` | [C] disasm; `findings-apollo-platform.md:733` |
-| Flush callback | `0x004736F4` → `0x0047366C` → display-manager `0x00474066` | [C] disasm; `apollo_main.tsv:1440` |
-| Display write (MSPI) | `0x0059CCDC`: reads buffer `+0x14`, length `+0x0C`, **cleans D-cache** at `0x0059CD10`, then blocking MSPI `0x004C2098` | [C] `findings-apollo-platform.md:299` |
-| D-cache clean body | `0x0047510E..0x00475194`, arg `{u32 addr; s32 len}` | [C] `findings-apollo-platform.md:281` |
-| Panel push (JBD4010) | quad-pixel opcode `0x62`, addr `((row<<10)&0x7FC00\|col&0x3FF)<<8\|0xFF`, **640×480 4bpp**; commit `0x97` | [C] `findings-hardware-drivers.md:358-366` |
-| MSPI0 completion | binary semaphore `0x20074534`, IRQ 20 | [C] `findings-hardware-drivers.md:348` |
-| Panel record / brightness | active record `0x20074530`; `uled_mspi_setBrightness` `0x004CA1EE` | [C] `findings-hardware-drivers.md:349,382` |
+| Fact                      | Value                                                                                                                   | Source                                                              |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| LVGL draw buffer base     | `0x20080000` (start of SSRAM)                                                                                           | [C] `findings-codec-em9305.md:1117`; disasm (`0x46ca6e` returns it) |
+| Buffer size               | `0x14400` B = 576×288×8bpp                                                                                              | [C] disasm `0x473792` (`mov r1,#0x14400`)                           |
+| Display init (576×288)    | `0x00473782` → draw-buf init `0x0048AEF8`                                                                               | [C] disasm; `findings-apollo-platform.md:733`                       |
+| Flush callback            | `0x004736F4` → `0x0047366C` → display-manager `0x00474066`                                                              | [C] disasm; `apollo_main.tsv:1440`                                  |
+| Display write (MSPI)      | `0x0059CCDC`: reads buffer `+0x14`, length `+0x0C`, **cleans D-cache** at `0x0059CD10`, then blocking MSPI `0x004C2098` | [C] `findings-apollo-platform.md:299`                               |
+| D-cache clean body        | `0x0047510E..0x00475194`, arg `{u32 addr; s32 len}`                                                                     | [C] `findings-apollo-platform.md:281`                               |
+| Panel push (JBD4010)      | quad-pixel opcode `0x62`, addr `((row<<10)&0x7FC00\|col&0x3FF)<<8\|0xFF`, **640×480 4bpp**; commit `0x97`               | [C] `findings-hardware-drivers.md:358-366`                          |
+| MSPI0 completion          | binary semaphore `0x20074534`, IRQ 20                                                                                   | [C] `findings-hardware-drivers.md:348`                              |
+| Panel record / brightness | active record `0x20074530`; `uled_mspi_setBrightness` `0x004CA1EE`                                                      | [C] `findings-hardware-drivers.md:349,382`                          |
 
 **The hook:** the clean design is for Wisp to own its own full-panel buffer
-(640×480 4bpp = 153,600 B — too large for the 399 KiB MRAM gap *and* a frame, so
+(640×480 4bpp = 153,600 B — too large for the 399 KiB MRAM gap _and_ a frame, so
 it lives in SSRAM, not MRAM) and drive the panel write path (`0x0059CCDC` or the
 display-manager `reflash` message, id 3) directly: build the transfer, **clean
 the D-cache over the exact byte range**, push over MSPI0, wait on the semaphore.
@@ -163,13 +163,13 @@ the surface; on expiry, stock's display task resumes.
 
 ### 3. Touch / gesture events
 
-| Fact | Value | Source |
-| --- | --- | --- |
-| Touch controller | PSoC 4000T, IOM5/I2C bus 5 @ `0x0C`, attention GPIO27 (active low) | [C] `findings-hardware-drivers.md:45,92` |
-| Attention handler | `0x0055BA64` → `input_msg_send_touch` `0x00513056` | [C] `findings-hardware-drivers.md:92` |
-| Input thread | `INP_ThreadHandler` `0x00512EF0` (init `0x00512CBC`) | [C] `apollo_main.tsv:4471-4475` |
-| Transport slots | RAM `0x20073E24` (cmd/raw write/read) | [C] `apollo_main.tsv` |
-| Wire | host→touch cmd = `rx[0]` (≤8); 16-B reports | [C] `protocols.md` §9 |
+| Fact              | Value                                                              | Source                                   |
+| ----------------- | ------------------------------------------------------------------ | ---------------------------------------- |
+| Touch controller  | PSoC 4000T, IOM5/I2C bus 5 @ `0x0C`, attention GPIO27 (active low) | [C] `findings-hardware-drivers.md:45,92` |
+| Attention handler | `0x0055BA64` → `input_msg_send_touch` `0x00513056`                 | [C] `findings-hardware-drivers.md:92`    |
+| Input thread      | `INP_ThreadHandler` `0x00512EF0` (init `0x00512CBC`)               | [C] `apollo_main.tsv:4471-4475`          |
+| Transport slots   | RAM `0x20073E24` (cmd/raw write/read)                              | [C] `apollo_main.tsv`                    |
+| Wire              | host→touch cmd = `rx[0]` (≤8); 16-B reports                        | [C] `protocols.md` §9                    |
 
 **The hook:** tap `input_msg_send_touch` (`0x00513056`) — the single choke point
 every touch report passes through on its way from the attention ISR to the input
@@ -181,14 +181,14 @@ thread when disarmed so stock gestures keep working on lease expiry.
 
 ### 4. Sensors: IMU, ALS, wear, battery
 
-| Source | Function / address | Bus | Source |
-| --- | --- | --- | --- |
-| IMU ICM-45608 | INT1 (data-ready) GPIO38 → `0x004A6AE8` | IOM4 @ `0x69` | [C] `findings-hardware-drivers.md:44,94` |
-| Sensor-hub thread | `hub_thread_entry` `0x004A6868` | — | [C] `apollo_main.tsv:2428` |
-| ALS OPT3007 | `ti_opt3007_assignRegistermap` `0x005135E0`; sync msg `0x10E` | IOM2 @ `0x45` | [C] `findings-apollo-platform.md:729`, `:186` |
-| Battery / PMIC | `power_init` `0x005093D4`; nPM1300 `0x00511002..`; telemetry record `0x20073B18` (+0 status, +4 SOC, +8 mV, +0xC current, +0x10 temp) | IOM7 @ `0x6B` | [C] `findings-hardware-drivers.md:83,189` |
-| Battery sync | sync service `0x105`, 12-B record, handler `0x005F958C` | — | [C] `findings-hardware-drivers.md:199` |
-| Wear | not isolated to one symbol; lens byte `0x20075045`, surfaced via pb setting service `0x09` | — | [?] `findings-cross-cutting.md:493` |
+| Source            | Function / address                                                                                                                    | Bus           | Source                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------- |
+| IMU ICM-45608     | INT1 (data-ready) GPIO38 → `0x004A6AE8`                                                                                               | IOM4 @ `0x69` | [C] `findings-hardware-drivers.md:44,94`      |
+| Sensor-hub thread | `hub_thread_entry` `0x004A6868`                                                                                                       | —             | [C] `apollo_main.tsv:2428`                    |
+| ALS OPT3007       | `ti_opt3007_assignRegistermap` `0x005135E0`; sync msg `0x10E`                                                                         | IOM2 @ `0x45` | [C] `findings-apollo-platform.md:729`, `:186` |
+| Battery / PMIC    | `power_init` `0x005093D4`; nPM1300 `0x00511002..`; telemetry record `0x20073B18` (+0 status, +4 SOC, +8 mV, +0xC current, +0x10 temp) | IOM7 @ `0x6B` | [C] `findings-hardware-drivers.md:83,189`     |
+| Battery sync      | sync service `0x105`, 12-B record, handler `0x005F958C`                                                                               | —             | [C] `findings-hardware-drivers.md:199`        |
+| Wear              | not isolated to one symbol; lens byte `0x20075045`, surfaced via pb setting service `0x09`                                            | —             | [?] `findings-cross-cutting.md:493`           |
 
 **The hook:** for first bring-up, **read, don't hook** — poll the stock
 telemetry record `0x20073B18` (battery) and the ALS/IMU results the sensor hub
@@ -204,11 +204,11 @@ and must not starve the sensor-hub thread.
 
 ### 5. Mic: PCM / LC3
 
-| Fact | Value | Source |
-| --- | --- | --- |
-| Capture ISR | `AUD_CodecDmaInt` `0x0053C6F2` → `SVC_PcmAppProcessData` `0x0057ADF8` | [C] `findings-cross-cutting.md:175` |
-| LC3 encode | `SVC_Lc3EncodeMono` `0x0057A940` (liblc3, 16 kHz mono, 10 ms, 40 B/frame) | [C] `findings-cross-cutting.md:175`, `:217` |
-| Stream out | body 205 B (5 LC3 frames + metadata) → `AttsHandleValueNtf(conn, 0x0864, 205, …)` = ESS notify `…6402` | [C] `findings-cross-cutting.md:199` |
+| Fact                  | Value                                                                                                      | Source                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| Capture ISR           | `AUD_CodecDmaInt` `0x0053C6F2` → `SVC_PcmAppProcessData` `0x0057ADF8`                                      | [C] `findings-cross-cutting.md:175`                         |
+| LC3 encode            | `SVC_Lc3EncodeMono` `0x0057A940` (liblc3, 16 kHz mono, 10 ms, 40 B/frame)                                  | [C] `findings-cross-cutting.md:175`, `:217`                 |
+| Stream out            | body 205 B (5 LC3 frames + metadata) → `AttsHandleValueNtf(conn, 0x0864, 205, …)` = ESS notify `…6402`     | [C] `findings-cross-cutting.md:199`                         |
 | **PCM consumer hook** | `SVC_PcmAppRegister` `0x0057AB78` (source 0/1) **replaces** the owner; `SVC_PcmAppUnregister` `0x0057ACD0` | [C] `findings-cross-cutting.md:179`, `apollo_main.tsv:6350` |
 
 **The hook:** register a Wisp PCM consumer through `SVC_PcmAppRegister`. The
@@ -273,7 +273,7 @@ single switch that both arms Wisp and guarantees stock comes back.
   armed. The lease check itself must run from a stock timer/thread Wisp does
   **not** disable, so a hung Wisp module still expires.
 
-Fail-open is the core safety property: the *default* state of every hook is
+Fail-open is the core safety property: the _default_ state of every hook is
 "call stock and return", and arming is a positive, time-bounded, phone-driven
 exception. There is no state in which a silent or crashed Wisp module leaves a
 hook pointing away from stock. This mirrors the rung-2 exit check: "10 cold
@@ -350,17 +350,17 @@ before the next. The first step is deliberately almost nothing.
 
 ## Risks per hook (and which run before BLE)
 
-| Hook | Runs before BLE? | Risk | Main hazard |
-| --- | --- | --- | --- |
-| 1 TPL private sid | No (on RX) | low | fall-through must be exact; wrong sid choice collides with stock |
-| 2 Display / MSPI | No | medium | MSPI/panel shared with stock; D-cache clean range must be exact |
-| 3 Touch tap | No | low | must still feed stock's input thread when disarmed |
-| 4 Sensor reads | No | low | reads of stock state; a real callback hook must not starve the hub thread |
-| 5 Mic PCM/LC3 | No | low-medium | `SVC_PcmAppRegister` **replaces** the owner; disarm must restore it |
-| 6 Buzzer | No | low | direct driver calls; no hook |
-| 7 Inter-temple | No | low | private TinyFrame type; stock types must fall through |
-| 8 Conn params / PHY | No | low | request only; lease restores stock params |
-| Boot / `board_init` / auto-init | **Yes — forbidden** | — | **never hook**: runs before BLE and before any lease |
+| Hook                            | Runs before BLE?    | Risk       | Main hazard                                                               |
+| ------------------------------- | ------------------- | ---------- | ------------------------------------------------------------------------- |
+| 1 TPL private sid               | No (on RX)          | low        | fall-through must be exact; wrong sid choice collides with stock          |
+| 2 Display / MSPI                | No                  | medium     | MSPI/panel shared with stock; D-cache clean range must be exact           |
+| 3 Touch tap                     | No                  | low        | must still feed stock's input thread when disarmed                        |
+| 4 Sensor reads                  | No                  | low        | reads of stock state; a real callback hook must not starve the hub thread |
+| 5 Mic PCM/LC3                   | No                  | low-medium | `SVC_PcmAppRegister` **replaces** the owner; disarm must restore it       |
+| 6 Buzzer                        | No                  | low        | direct driver calls; no hook                                              |
+| 7 Inter-temple                  | No                  | low        | private TinyFrame type; stock types must fall through                     |
+| 8 Conn params / PHY             | No                  | low        | request only; lease restores stock params                                 |
+| Boot / `board_init` / auto-init | **Yes — forbidden** | —          | **never hook**: runs before BLE and before any lease                      |
 
 Forbidden pre-BLE region, for completeness: the reset vector `0x005E4233`, the
 IAR entry `0x005E4254`, the auto-init table (`0x006D1E0C`, `board_init`
