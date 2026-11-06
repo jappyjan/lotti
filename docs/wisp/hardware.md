@@ -53,7 +53,7 @@ Memory detail (hal_ambiq `am_apollo510.h`, g2emu): DTCM is `0x20000000–0x20080
 3. Main app at `0x438000`. **It alone** contains the BLE host (Cordio), GATT, and the OTA service [C]. The bootloader has no BLE [C].
 4. OTA (phone → app): EVENOTA bundle over sid `0xC0/0xC1`; for the main component the app writes the littlefs staging file, verifies its CRC, writes `0x55555555` to the flag and resets after 3 s [C, `findings-hardware-drivers.md:606`].
 
-**Consequences:** single slot, no rollback, no boot counter [C]. A main app that crashes before BLE is up cannot take an OTA any more → SWD-only recovery [C, g2flash README]. SWD pads are undocumented [?]; SBL UART recovery depends on per-device INFO0 provisioning nobody has read yet [?].
+**Consequences:** single slot, no rollback, no boot counter [C]. A main app that crashes before BLE is up cannot take an OTA any more → SWD-only recovery [C, g2flash README]. SWD pads are undocumented [?]; SBL UART recovery depends on per-device INFO0 provisioning nobody has read yet [?]. The stock bootloader has no UART receive path at all ([recovery.md](recovery.md#do-the-charging-pins-carry-anything-besides-power)).
 
 ### What the 2.2.6.10 bootloader does, step by step (rung 3)
 
@@ -156,7 +156,7 @@ All addresses in [host-mode.md](host-mode.md), and the openCFW citations (openCF
 
 - Which NOR part our temples have (MX25U25643G or GD25LE256H). It decides whether any main app older than 2.2.9.22 is safe to install (Even app device info or a stock log line `Nor flash chip: %s` might tell).
 - How long 2.4.0.24's RESULT_CHECK readback of the staged 3.6 MB file takes (its log line `fs readback verify … cost %d ms`).
-- SWD pad location and a working attach (needed before any native flash, see [safety.md](safety.md)).
+- SWD pad location and a working attach: unlabelled, unmapped, behind a glued pod; see [recovery.md](recovery.md#1-swd-on-the-temples).
 - INFO0/INFOC provisioning (does SBL UART recovery exist on retail units?).
 - Which power board our units have (nPM1300 or BQ25180 + BQ27427).
 - Which panel variant our units have (JBD4010 or A6N-G); panel init sequences.
