@@ -4,7 +4,7 @@ EVENOTA inspector, packer and verifier for Wisp (Even Realities G2). Every image
 
 - **Library** (`@wisp/ota`): TypeScript, zero runtime dependencies, `Uint8Array`/plain integers only. Runs in Node, browsers and React Native, so the phone app can install Wisp over stock with the same code.
 - **CLI** (`wisp-ota`): a thin Node wrapper.
-- **No BLE, no transfer code.** Nothing in this package talks to glasses.
+- **No BLE code.** Nothing in this package opens a radio. The stock OTA sender (`src/transfer/`) is a transport-agnostic state machine: the caller hands it a connected `StockLink`.
 
 ## Usage
 
@@ -74,6 +74,57 @@ Every guard has at least one failing test in `src/guards.test.ts`, and the pack-
 ## How `repack-main` changes the version
 
 The version is the header string (`s200_v2.2.6.10` → `s200_v2.2.6.19`) **and** every standalone copy of the version inside the main image: word-aligned, NUL before and after (10 such copies in 2.2.6.10, 7 in 2.0.1.14). Copies that are part of another string (`master:v2.2.6.10-0-g…`, `Launch:2.3.2.14`) or that sit unaligned (inside compressed data) are left alone. The new version must have the same length, so no byte moves; it must also differ from stock, so the version the glasses report tells whether the repack was installed. Build date and time and the main entry id (6, or 5 in the five-component 2.2.0.24 / 2.2.4.34 bundles) are kept. The other stock components are dropped (rule 2).
+
+## Stock OTA sender (rung 1)
+
+`sendStockOta` / `StockOtaTransfer` (`src/transfer/`) send a bundle to **one** temple over the stock OTA import protocol, so a phone app can flash a `repack-main` image (rung 1 in [safety.md](../../docs/wisp/safety.md)) with no cable. It runs `verifyBundle` itself and refuses anything not **sendable** (main-only, every guard green), before touching the link; there is no override. The temple is a required `'left' | 'right'` and must match the link's temple; there is no "both".
+
+```ts
+import { sendStockOta } from '@wisp/ota';
+
+const result = await sendStockOta({ temple: 'left', bundle, link, onProgress });
+// result.outcome === 'staged': the glasses accepted the image and set the update flag;
+// they reset and the Even bootloader installs it. Reconnect and read the version.
+```
+
+### Wire protocol
+
+All OTA packets go to the OTA characteristic `…0001` (service `…1001`), replies come on `…0002`; a sid `0x80` heartbeat goes to the control characteristic `…5401` every 12 s. Packets use the stock TPL envelope (`AA 21 seq len total num sid 00 …`, CRC-16/CCITT-FALSE, 232-byte chunks). Replies are `AA 12 …` with payload `{subcommand, status}`.
+
+| Step         | Phone sends                                                             | Glasses answer                                                                     |
+| ------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| START        | `C0 {00}`                                                               | `{0, status}`: resets the import state, heals the fs, fast conn params             |
+| INFORMATION  | `C0 {01, 128-byte component header}`                                    | `{1, status}`: deletes and re-creates `ota/s200_firmware_ota.bin`                  |
+| FILE         | per 4 KiB block: `C0 {02}` then the block as one `C1` message, same seq | `{2, status}` on `C1`, after the block is written and read back                    |
+| RESULT_CHECK | `C0 {03}`                                                               | `{3, 8 UPDATING}` when size and CRC-32C match, else `{3, 7}` (file deleted)        |
+| NOTIFY       | —                                                                       | `{4, 9 SYS_RESTART}` after writing flag `0x55555555`; disconnect + reset 3 s later |
+
+Status codes: 0 success, 1 header, 2 path, 3 CRC, 4 timeout, 5 no resources, 6 flash write, 7 check fail, 8 updating, 9 restart, 10 fail.
+
+### Failure handling
+
+| Event                                          | What the sender does                                                                                                                                   |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No reply to START (8 s)                        | resend START (idempotent), 3 tries, then `start-timeout`                                                                                               |
+| START status ≠ 0                               | `start-rejected`                                                                                                                                       |
+| INFORMATION status 1/2                         | `information-rejected` (deterministic)                                                                                                                 |
+| Block NAK 3 / 4 / 5 (CRC, timeout, no buffer)  | the block never reached the parser: resend it in place, 3 tries                                                                                        |
+| No block reply (4 s), bad-CRC reply, status 6  | the write outcome is unknown or the file is gone: **restart the component from INFORMATION** (never replay the block); 3 runs, then `component-failed` |
+| RESULT_CHECK `{3, 7}`                          | stock deleted the file, flag clear: restart the component                                                                                              |
+| RESULT_CHECK verdict lost                      | `{4, 9}` alone proves staging; with neither: `result-unknown` (`stockIntact: 'unknown'`). RESULT_CHECK is never resent                                 |
+| Disconnect / write failure before RESULT_CHECK | `disconnected` / `write-failed`, `stockIntact: true`                                                                                                   |
+| Disconnect after UPDATING                      | the expected reset: success                                                                                                                            |
+| `abort()`                                      | allowed until RESULT_CHECK is sent; `aborted`, `stockIntact: true`                                                                                     |
+
+**Why an interrupted transfer leaves stock intact:** the stock app writes the main image only into the littlefs staging file on the external NOR, never into MRAM. The Even bootloader installs that file only when the update flag reads `0x55555555`, and the app sets the flag in one place, after RESULT_CHECK has matched the closed file's size and CRC-32C against the header. Before RESULT_CHECK the flag cannot be set; the partial file is never read, and the next INFORMATION deletes it. This is also why the sender refuses to abort after RESULT_CHECK, and why a lost verdict is reported as unknown instead of retried.
+
+### Preconditions (the `StockLink` guarantees them)
+
+Connected to the named temple, services discovered, notifications on **both** `…0002` and `…5402`, the phone already bonded (stock never prompts; the Even app's bond is reused), the Even app force-quit (safety.md rule 6). No sid `0x80` auth handshake is needed for OTA: webflasher's hardware-validated path sends none, and the stock OTA transport's auth gate is compiled as constant-true (openCFW `ota_transport.c` `OTA_SendPacket`). After `staged`, reconnecting and checking the version is the caller's job (webflasher allows about 130 s for the install).
+
+Tested against a fake stock temple (`src/testing/fake-stock-glasses.ts`, written from the documented receiver behaviour) with injected aborts, disconnects, lost and bad-CRC replies, corrupted and lost packets, flash-write and CRC-32C failures; after every failure the tests reset the fake and check that it still boots stock.
+
+Sources: openCFW (MIT) `g2/src/apollo-main/app/a-02-ota-service/ota_service_file_parse.c` (`_fileCmdParse`, `_fileRawDataParse`), `a-12-ota-transport/ota_transport.c`, `g2/docs/reference/protocols.md` §3, §5–6; webflasher (MIT) `src/lib/g2BleOta.js` (`G2BleOtaSession`: characteristics, heartbeat, timeouts, NAK vs. timeout policy, status names); `docs/spikes/s1-ble.md` and `packages/lotti-kit` `G2Frame.swift` (framing). Facts only from GPL projects; none were needed here.
 
 ## Stock firmware
 
