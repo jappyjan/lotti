@@ -1,0 +1,52 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * Wisp Boot — the few Apollo510 registers it touches. Offsets and keys: hal_ambiq CMSIS
+ * apollo510.h; usage as in AmbiqSuite (am_hal_wdt.c, am_hal_reset.c, am_hal_mram.c,
+ * am_hal_pwrctrl.c). Nothing here has run on glasses (rung 3 is emulation only).
+ */
+#ifndef WISP_BOOT_HW_H
+#define WISP_BOOT_HW_H
+
+#include <stdint.h>
+
+#define REG(a) (*(volatile uint32_t *)(a))
+
+/* RSTGEN */
+#define RSTGEN_CFG   REG(0x40000000u) /* bit 1 WDREN: watchdog resets the chip */
+#define RSTGEN_SWPOR REG(0x40000008u) /* 0xD4: software POR (what the Even bootloader uses) */
+
+/* PWRCTRL */
+#define PWRCTRL_DEVPWREN     REG(0x40021004u)
+#define PWRCTRL_DEVPWRSTATUS REG(0x40021008u)
+#define PWRCTRL_MEMPWREN     REG(0x40021014u)
+#define PWRCTRL_MEMPWRSTATUS REG(0x40021018u)
+#define PWRCTRL_DEV_MSPI1    0x8000u
+#define PWRCTRL_MEM_ROM_EN   0x20u
+#define PWRCTRL_MEM_ROM_ST   0x80u
+
+/* WDT */
+#define WDT_CFG   REG(0x40024000u)
+#define WDT_RSTRT REG(0x40024004u)
+#define WDT_LOCK  REG(0x40024008u)
+
+/* UART1 (debug log) */
+#define UART1_DR REG(0x4003A000u)
+#define UART1_FR REG(0x4003A018u)
+
+/* SCB / NVIC */
+#define SCB_VTOR  REG(0xE000ED08u)
+#define NVIC_ICER(n) REG(0xE000E180u + 4u * (n))
+#define NVIC_ICPR(n) REG(0xE000E280u + 4u * (n))
+
+void hw_wdt_arm(void);
+void hw_wdt_feed(void);
+void hw_log(const char *s);
+void hw_log_hex(const char *label, uint32_t v);
+_Noreturn void hw_reset(void);
+/* Writes the documented update-flag record {0x55555555, ~0, ~0, ~0} at 0x7FE000 through the
+ * boot ROM and reads it back. The only MRAM write in Wisp Boot. Returns 0 on success. */
+int hw_flag_set_install(void);
+_Noreturn void hw_jump(uint32_t vector_table);
+
+#endif /* WISP_BOOT_HW_H */

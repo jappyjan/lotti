@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # wisp-fw:test. Emulation and host only — nothing here talks to hardware.
 #
-#   1. Wisp Boot decision logic, host unit tests (gcc + ASan/UBSan)
+#   1. Wisp Boot decision logic, host unit tests (gcc + ASan/UBSan); Wisp Boot build + the
+#      image and rule 8 gates on it (the rung-3 fault tests are wisp-fw:boot-test)
 #   2. post-build gate unit tests (synthetic images, configs, maps, symbols)
 #   3. Renode boot of the built image: banner + heartbeats on UART1
 #   4. safety rule 8 negative builds: each must FAIL, with the rule 8 message
@@ -25,6 +26,8 @@ cc -std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-
 	-I"$APP_DIR/src/boot" "$APP_DIR/src/boot/wisp_boot.c" "$APP_DIR/tests/boot/test_wisp_boot.c" \
 	-o "$out/test_wisp_boot"
 "$out/test_wisp_boot"
+"$APP_DIR/scripts/build_boot.sh" >/dev/null
+echo "ok: Wisp Boot built, check_image + check_rule8 passed"
 
 step "2/4 post-build gate unit tests"
 python3 -I "$APP_DIR/tests/scripts/test_checks.py"

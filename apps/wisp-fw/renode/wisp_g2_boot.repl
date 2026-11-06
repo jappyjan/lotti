@@ -1,0 +1,159 @@
+// wisp_g2_boot: the rung-3 platform (Wisp Boot fallback-to-stock with the REAL Even bootloader).
+//
+// Same memory map as wisp_g2.repl (derived from g2emu's apollo510-m1-fast.repl, MIT, see
+// third_party/g2emu/) plus the models the stock boot chain needs, all Wisp-authored (MIT,
+// renode/models/): RSTGEN + reset rules, watchdog, boot-ROM MRAM helpers, ADC board detect,
+// MSPI1 with the MX25U25643G NOR. Every other peripheral range is WispTrace: plain register
+// storage that can log accesses (`logLevel 2 <name>`) to find what a stalled guest polls.
+// Renode's generic PL011 UARTs (uart0/2/3 in wisp_g2.repl) are replaced by WispUartIdle (nothing
+// attached, always idle): Ambiq's UART HAL does not clear the PL011 TX interrupt the way Renode's
+// model expects, which left IRQ 17 asserted forever under the stock bootloader.
+// The C# models are compiled by `include` in boot.resc BEFORE this file is loaded.
+//
+// Bases: hal_ambiq CMSIS apollo510.h (RSTGEN 0x40000000, CLKGEN 0x40004000, STIMER 0x40008800,
+// PWRCTRL 0x40021000, WDT 0x40024000, ADC 0x40038000, UART1 0x4003A000, MSPI1 0x40061000).
+
+cpu: CPU.CortexM @ sysbus
+    cpuType: "cortex-m55"
+    nvic: nvic
+    PerformanceInMips: 250
+
+nvic: IRQControllers.NVIC @ sysbus 0xE000E000
+    -> cpu@0
+
+itcm: Memory.MappedMemory @ sysbus 0x00000000
+    size: 0x00040000
+
+// Ambiq boot ROM helper table (0x0200FF0C..): WispBootRom writes `bx lr` stubs here and hooks them.
+bootrom_mem: Memory.MappedMemory @ sysbus 0x02000000
+    size: 0x00010000
+
+// MRAM 0x400000-0x800000: SBL (empty here), Even bootloader, main app at 0x438000, NV + flag.
+// Non-volatile: kept across every reset (WispRstGen).
+mram: Memory.MappedMemory @ sysbus 0x00400000
+    size: 0x00400000
+
+// DTCM (512 KiB) + SSRAM (3 MiB) and a little beyond, as in g2emu. Filled with 0xA5 on every reset.
+dtcm_ssram: Memory.MappedMemory @ sysbus 0x20000000
+    size: 0x00400000
+
+rstgen: Wisp.WispRstGen @ sysbus 0x40000000
+
+lo0: Wisp.WispTrace @ sysbus 0x40001000
+    size: 0x3000
+    trace: 0
+
+// CLKGEN (clock-ready status reads 1s) + running RTC. g2emu model.
+clkgen: G2emu.G2ClkgenRtc @ sysbus 0x40004000
+    size: 0x1000
+
+lo1: Wisp.WispTrace @ sysbus 0x40005000
+    size: 0x3000
+    trace: 0
+
+// CTIMER: Renode's Apollo4 model, as in g2emu.
+timer: Timers.AmbiqApollo4_Timer @ sysbus 0x40008000
+    0 -> nvic@67
+    1 -> nvic@68
+    2 -> nvic@69
+    3 -> nvic@70
+    4 -> nvic@71
+    5 -> nvic@72
+    6 -> nvic@73
+    7 -> nvic@74
+    8 -> nvic@75
+    9 -> nvic@76
+    10 -> nvic@77
+    11 -> nvic@78
+    12 -> nvic@79
+    13 -> nvic@80
+    14 -> nvic@81
+    15 -> nvic@82
+
+// STIMER: the RTOS tick of the stock bootloader and app; Zephyr's system clock. Renode's Apollo4 model.
+stimer: Timers.AmbiqApollo4_SystemTimer @ sysbus 0x40008800
+    IRQA -> nvic@32
+    IRQB -> nvic@33
+    IRQC -> nvic@34
+    IRQD -> nvic@35
+    IRQE -> nvic@36
+    IRQF -> nvic@37
+    IRQG -> nvic@38
+    IRQH -> nvic@39
+    IRQI -> nvic@40
+
+// GPIO/pinctrl (0x40010000), MCUCTRL (0x40020000), ...
+lo2: Wisp.WispTrace @ sysbus 0x40009000
+    size: 0x18000
+    trace: 0
+
+// PWRCTRL: each *STATUS mirrors its *EN. g2emu model.
+pwrctrl: G2emu.G2Pwrctrl @ sysbus 0x40021000
+    size: 0x1000
+    domainStatus: true
+
+lo3: Wisp.WispTrace @ sysbus 0x40022000
+    size: 0x2000
+    trace: 0
+
+wdt: Wisp.WispWdt @ sysbus 0x40024000
+    rstgen: rstgen
+
+lo4: Wisp.WispTrace @ sysbus 0x40025000
+    size: 0x13000
+    trace: 0
+
+adc: Wisp.WispAdc @ sysbus 0x40038000
+
+uart0: Wisp.WispUartIdle @ sysbus 0x40039000
+
+// UART1 = the debug/log UART of the stock bootloader, the stock app and Wisp.
+// g2emu model: TX completes at once, bytes go to $G2_CAPTURE_OUT/uart1.txt.
+uart1: G2emu.G2Uart1Shell @ sysbus 0x4003A000
+    size: 0x1000
+
+uart2: Wisp.WispUartIdle @ sysbus 0x4003B000
+
+uart3: Wisp.WispUartIdle @ sysbus 0x4003C000
+
+hi0: Wisp.WispTrace @ sysbus 0x4003D000
+    size: 0x13000
+    trace: 0
+
+// IOM0..7 as I2C masters with the G2's devices behind them (nPM1300 PMIC, ICM-45608, OPT3007,
+// others ACK + zeros). g2emu model. The stock app's PMIC driver dereferences a NULL ops pointer
+// when its first I2C transfer gets no answer, so this is needed for stock to boot at all.
+iom: G2emu.G2Iom @ sysbus 0x40050000
+    size: 0x8000
+
+hi1: Wisp.WispTrace @ sysbus 0x40058000
+    size: 0x8000
+    trace: 0
+
+mspi0: Wisp.WispTrace @ sysbus 0x40060000
+    size: 0x1000
+    trace: 0
+
+// MSPI1 + MX25U25643G (32 MiB): IRQ 21 as in the stock bootloader's vector table.
+// The image is loaded by boot.resc (`nor LoadImage`).
+nor: Wisp.WispMspiNor @ sysbus 0x40061000
+    IRQ -> nvic@21
+
+mspi23: Wisp.WispTrace @ sysbus 0x40062000
+    size: 0x2000
+    trace: 0
+
+periph_hi: Memory.MappedMemory @ sysbus 0x40064000
+    size: 0x0FF9C000
+
+// Boot-ROM helper bookkeeping (harness side, not a chip register block).
+bootrom: Wisp.WispBootRom @ sysbus 0x5F001000
+    rstgen: rstgen
+
+xip: Memory.MappedMemory @ sysbus 0x80000000
+    size: 0x02000000
+
+// Harness helper: milestones and power cuts (WispProbe.cs).
+probe: Wisp.WispProbe @ sysbus 0x5F002000
+    nor: nor
+    rstgen: rstgen
