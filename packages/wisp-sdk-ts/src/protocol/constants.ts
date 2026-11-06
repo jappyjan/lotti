@@ -1,4 +1,4 @@
-import { ByteReader } from './bytes.ts';
+import { PayloadError, struct } from './struct.ts';
 
 /** `HELLO` capability bits. */
 export const Cap = {
@@ -91,14 +91,15 @@ export interface SensorSample {
   temperature: { centiC: number };
 }
 
-const SAMPLE_SIZE: Record<SensorName, number> = {
-  accelerometer: 6,
-  gyroscope: 6,
-  magnetometer: 6,
-  ambientLight: 4,
-  wear: 1,
-  battery: 4,
-  temperature: 2,
+const vec3 = struct({ x: 'i16', y: 'i16', z: 'i16' });
+const SAMPLE = {
+  accelerometer: vec3,
+  gyroscope: vec3,
+  magnetometer: vec3,
+  ambientLight: struct({ lux: 'u32' }),
+  wear: struct({ worn: 'u8' }),
+  battery: struct({ soc: 'u8', mv: 'u16', charging: 'u8' }),
+  temperature: struct({ centiC: 'i16' }),
 };
 
 export function sensorName(id: number): SensorName | undefined {
@@ -107,34 +108,37 @@ export function sensorName(id: number): SensorName | undefined {
   );
 }
 
-/** Splits a `DATA` (or `READ`) sample block into typed samples. */
+/**
+ * Splits a `DATA` (or, with `count` 1, a `READ`) sample block into typed
+ * samples. `count` is authoritative: each sample is (length / count) bytes,
+ * so samples may carry fields this SDK doesn't know yet (skipped) or lack
+ * some (0). Throws `PayloadError` when the length doesn't divide.
+ */
 export function decodeSamples<S extends SensorName>(
   sensor: S,
   bytes: Uint8Array,
-  count = Math.floor(bytes.length / SAMPLE_SIZE[sensor]),
+  count = 1,
 ): SensorSample[S][] {
-  const r = new ByteReader(bytes);
+  if (count ? bytes.length % count : bytes.length)
+    throw new PayloadError(
+      `${bytes.length} bytes don't split into ${count} samples`,
+    );
+  const stride = count ? bytes.length / count : 0;
   const out: SensorSample[S][] = [];
-  for (let i = 0; i < count && r.remaining >= SAMPLE_SIZE[sensor]; i++) {
+  for (let i = 0; i < count; i++) {
+    const f = SAMPLE[sensor as SensorName].decode(
+      bytes.subarray(i * stride, (i + 1) * stride),
+    ) as Record<string, number>;
     let v: SensorSample[SensorName];
     switch (sensor as SensorName) {
-      case 'accelerometer':
-      case 'gyroscope':
-      case 'magnetometer':
-        v = { x: r.i16()!, y: r.i16()!, z: r.i16()! };
-        break;
-      case 'ambientLight':
-        v = { lux: r.u32()! };
-        break;
       case 'wear':
-        v = { worn: r.u8()! !== 0 };
+        v = { worn: f.worn !== 0 };
         break;
       case 'battery':
-        v = { soc: r.u8()!, mv: r.u16()!, charging: r.u8()! !== 0 };
+        v = { soc: f.soc!, mv: f.mv!, charging: f.charging !== 0 };
         break;
-      case 'temperature':
-        v = { centiC: r.i16()! };
-        break;
+      default:
+        v = f as unknown as SensorSample[SensorName];
     }
     out.push(v as SensorSample[S]);
   }

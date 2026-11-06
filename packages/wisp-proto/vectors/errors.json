@@ -37,5 +37,15 @@
       "message": "résumé ✗"
     },
     "hex": "0303ffff060072c3a973756dc3a920e29c97"
+  },
+  {
+    "name": "error/code-cut-in-half",
+    "kind": "message",
+    "svc": 2,
+    "op": 3,
+    "mflags": 3,
+    "req": 68,
+    "malformed": true,
+    "hex": "0303440007"
   }
 ]

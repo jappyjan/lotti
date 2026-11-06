@@ -2,9 +2,12 @@ import { ByteReader, ByteWriter, utf8Decode, utf8Encode } from './bytes.ts';
 
 /**
  * Field types of the spec. `bytes`, `utf8` and lists take the rest of the
- * payload, so they only appear last. A list (`{…}…` in the spec) repeats
- * fixed-size items to the end of the payload; its `count` names the field
- * that holds the item count, which `encode` fills in when it is missing.
+ * payload, so they only appear last. A list (`{…}…` in the spec) is counted:
+ * `count` names the earlier field with the item count, which is
+ * authoritative, and each item is (remaining bytes / count) long, so items
+ * can grow. Readers take the fields they know from each item and skip the
+ * rest; a remainder that isn't a multiple of the count is a bad payload.
+ * `encode` fills in a missing count.
  */
 export type Scalar =
   | 'u8'
@@ -23,12 +26,23 @@ export interface ListType {
   readonly count: string;
   readonly item: Fields;
 }
-export type FieldType = Scalar | ListType;
+/** A counted list whose item layout the message doesn't fix (sensor samples): raw bytes. */
+export interface CountedBytes {
+  readonly count: string;
+  readonly bytes: true;
+}
+export type FieldType = Scalar | ListType | CountedBytes;
+
+/** A payload that breaks its layout: a field cut in half, or a list that doesn't divide by its count (error 2). */
+export class PayloadError extends Error {
+  readonly code = 2;
+  override name = 'PayloadError';
+}
 export type Fields = { readonly [name: string]: FieldType };
 
 type ValueOf<T> = T extends 'str16' | 'utf8'
   ? string
-  : T extends 'hash16' | 'sha256' | 'bytes'
+  : T extends 'hash16' | 'sha256' | 'bytes' | CountedBytes
     ? Uint8Array
     : T extends ListType
       ? Values<T['item']>[]
@@ -42,7 +56,11 @@ export interface Struct<F extends Fields = Fields> {
   readonly fields: F;
   /** Missing fields are written as their default (zero unless stated). */
   encode(values?: Partial<Values<F>>): Uint8Array;
-  /** Ignores trailing bytes; missing trailing fields get their default. */
+  /**
+   * Ignores trailing bytes; missing trailing fields get their default.
+   * Throws `PayloadError` for a field cut in half or a list that doesn't
+   * divide by its count.
+   */
   decode(payload: Uint8Array): Values<F>;
 }
 
@@ -52,7 +70,26 @@ const FIXED: Partial<Record<Scalar, number>> = {
   sha256: 32,
 };
 
+const SIZE: Partial<Record<Scalar, number>> = {
+  u8: 1,
+  i8: 1,
+  u16: 2,
+  i16: 2,
+  u32: 4,
+  i32: 4,
+  u64: 8,
+  ...FIXED,
+};
+
+const isCountedBytes = (t: FieldType): t is CountedBytes =>
+  typeof t !== 'string' && 'bytes' in t;
+
+/** `count` items share `len` bytes evenly; no items means no bytes. */
+const listFits = (len: number, count: number) =>
+  count ? len % count === 0 : len === 0;
+
 function zero(t: FieldType): unknown {
+  if (isCountedBytes(t)) return new Uint8Array(0);
   if (typeof t !== 'string') return [];
   switch (t) {
     case 'str16':
@@ -69,6 +106,10 @@ function zero(t: FieldType): unknown {
 }
 
 function writeField(w: ByteWriter, t: FieldType, v: unknown) {
+  if (isCountedBytes(t)) {
+    w.bytes((v ?? new Uint8Array(0)) as Uint8Array);
+    return;
+  }
   if (typeof t !== 'string') {
     for (const item of (v ?? []) as Record<string, unknown>[])
       writeFields(w, t.item, item);
@@ -109,43 +150,29 @@ function writeFields(
   values: Record<string, unknown>,
 ) {
   const v = { ...values };
-  for (const [name, t] of Object.entries(fields))
-    if (typeof t !== 'string')
-      v[t.count] ??= ((values[name] ?? []) as unknown[]).length;
+  for (const [name, t] of Object.entries(fields)) {
+    if (isCountedBytes(t)) {
+      const len = ((values[name] ?? new Uint8Array(0)) as Uint8Array).length;
+      if (!listFits(len, (v[t.count] ?? 0) as number))
+        throw new RangeError(
+          `${name}: ${len} bytes don't split into ${t.count} items`,
+        );
+    } else if (typeof t !== 'string') {
+      const n = ((values[name] ?? []) as unknown[]).length;
+      v[t.count] ??= n;
+      if (v[t.count] !== n)
+        throw new RangeError(
+          `${name}: ${t.count} ${String(v[t.count])} but ${n} items`,
+        );
+    }
+  }
   for (const [name, t] of Object.entries(fields)) writeField(w, t, v[name]);
 }
 
-function itemSize(fields: Fields): number {
-  let n = 0;
-  for (const t of Object.values(fields)) {
-    if (typeof t !== 'string')
-      throw new Error('nested lists are not supported');
-    n +=
-      {
-        u8: 1,
-        i8: 1,
-        u16: 2,
-        i16: 2,
-        u32: 4,
-        i32: 4,
-        u64: 8,
-        str16: 16,
-        hash16: 16,
-        sha256: 32,
-      }[t as 'u8'] ?? 0;
-  }
-  return n;
-}
-
-function readField(r: ByteReader, t: FieldType): unknown {
-  if (typeof t !== 'string') {
-    const size = itemSize(t.item);
-    const items: unknown[] = [];
-    while (r.remaining >= size && size > 0)
-      items.push(readFields(r, t.item, {}));
-    r.rest();
-    return items;
-  }
+function readField(r: ByteReader, t: Scalar): unknown {
+  const size = SIZE[t];
+  if (size !== undefined && r.remaining > 0 && r.remaining < size)
+    throw new PayloadError(`${t} field cut in half`);
   switch (t) {
     case 'str16': {
       const b = r.bytes(16);
@@ -165,6 +192,31 @@ function readField(r: ByteReader, t: FieldType): unknown {
   }
 }
 
+/** A counted list: `count` items of (rest / count) bytes each. */
+function readList(
+  r: ByteReader,
+  t: ListType | CountedBytes,
+  count: number,
+): unknown {
+  const rest = r.rest();
+  if (!listFits(rest.length, count))
+    throw new PayloadError(
+      `${rest.length} bytes don't split into ${count} items`,
+    );
+  if (isCountedBytes(t)) return rest;
+  const stride = count ? rest.length / count : 0;
+  const items: unknown[] = [];
+  for (let i = 0; i < count; i++)
+    items.push(
+      readFields(
+        new ByteReader(rest.subarray(i * stride, (i + 1) * stride)),
+        t.item,
+        {},
+      ),
+    );
+  return items;
+}
+
 function readFields(
   r: ByteReader,
   fields: Fields,
@@ -172,7 +224,10 @@ function readFields(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [name, t] of Object.entries(fields))
-    out[name] = readField(r, t) ?? defaults[name] ?? zero(t);
+    out[name] =
+      typeof t === 'string'
+        ? (readField(r, t) ?? defaults[name] ?? zero(t))
+        : readList(r, t, (out[t.count] ?? 0) as number);
   return out;
 }
 

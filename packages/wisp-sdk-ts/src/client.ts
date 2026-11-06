@@ -42,8 +42,9 @@ import {
   System,
   type ResponseOf,
 } from './protocol/messages.ts';
+import { PayloadError } from './protocol/struct.ts';
 
-export const PROTOCOL_VERSION = { major: 0, minor: 1 } as const;
+export const PROTOCOL_VERSION = { major: 0, minor: 2 } as const;
 
 type Key<T> = keyof T;
 const keyOf = <T extends Record<string, number>>(map: T, v: number) =>
@@ -417,7 +418,6 @@ export class Resources {
   async put(item: Resourceable, opts: PutOptions = {}): Promise<ResourceRef> {
     const caps = this.g.capabilities;
     let type: number;
-    let codec: CodecId = Codec.raw4;
     let payload: Uint8Array;
     if ('width' in item) {
       const enc =
@@ -425,10 +425,9 @@ export class Resources {
           ? encodeSmallest(item, [opts.codec])
           : encodeSmallest(item, caps.codecs);
       type = ResourceType.image;
-      codec = enc.codec;
       payload = imageResource(item, enc);
     } else if (item.type === 'animation') {
-      codec = item.codec ?? caps.codecs[caps.codecs.length - 1]!;
+      const codec = item.codec ?? caps.codecs[caps.codecs.length - 1]!;
       type = ResourceType.animation;
       payload = animationResource(item.frames, {
         codec,
@@ -440,6 +439,7 @@ export class Resources {
     }
     const id = opts.id ?? this.nextId();
     this.used.add(id);
+    // size and hash cover the payload as uploaded; the codec lives in its header.
     const hash = await resourceHash(payload, this.sha256);
     const ref = { id, type, size: payload.length, hash };
 
@@ -447,7 +447,6 @@ export class Resources {
     const begin = await link.call(Resource.putBegin, {
       res: id,
       type,
-      codec,
       flags: opts.persist ? 1 : 0,
       size: payload.length,
       hash,
@@ -806,6 +805,14 @@ export class WispGlasses extends Emitter<{
   }
 
   private dispatch(m: Incoming) {
+    try {
+      this.route(m);
+    } catch (err) {
+      if (!(err instanceof PayloadError)) throw err; // a malformed event is dropped
+    }
+  }
+
+  private route(m: Incoming) {
     switch (m.svc) {
       case Service.input:
         return this.input.dispatch(m);

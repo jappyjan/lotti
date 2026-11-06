@@ -13,6 +13,7 @@ import {
 } from '../protocol/messages.ts';
 import { resourceHash } from '../image/hash.ts';
 import { bytesEqual, concatBytes } from '../protocol/bytes.ts';
+import { PayloadError } from '../protocol/struct.ts';
 
 export interface Received {
   svc: number;
@@ -23,7 +24,8 @@ export interface Received {
 
 /**
  * A scripted glasses side for tests: answers HELLO, keeps resources, records
- * every request it gets. Not a simulator.
+ * every request it gets, and answers every request with `req ≠ 0` exactly
+ * once (malformed payloads with error 2). Not a simulator.
  */
 export class FakeGlasses {
   readonly link: WispLink;
@@ -58,9 +60,13 @@ export class FakeGlasses {
 
   private async handle(m: Incoming) {
     const def = findMessage(m.svc, m.op);
-    const fields = def
-      ? (payloadStruct(def, m.mflags)?.decode(m.payload) ?? {})
-      : {};
+    let fields: Record<string, unknown> = {};
+    try {
+      if (def) fields = payloadStruct(def, m.mflags)?.decode(m.payload) ?? {};
+    } catch (err) {
+      if (!(err instanceof PayloadError)) throw err;
+      return this.link.respondError(m, ErrorCode.badPayload, err.message);
+    }
     this.received.push({
       svc: m.svc,
       op: m.op,
@@ -77,7 +83,7 @@ export class FakeGlasses {
         m,
         Session.hello.response!.encode({
           protoMajor: 0,
-          protoMinor: 1,
+          protoMinor: 2,
           maxFrame: this.maxFrame,
           rxWindow: l.rxWindow,
           fwName: 'fake',
@@ -132,7 +138,7 @@ export class FakeGlasses {
       if (m.op === Resource.putData.op) {
         const f = Resource.putData.request!.decode(m.payload);
         this.uploads.get(f.res)?.parts.push(f.data);
-        return;
+        return l.respond(m);
       }
       if (m.op === Resource.putEnd.op) {
         const f = Resource.putEnd.request!.decode(m.payload);

@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { rng } from '../testing/random.ts';
 import { concatBytes, toHex } from './bytes.ts';
+import { crc16 } from './crc.ts';
 import {
   FrameDecoder,
+  FrameFlag,
   encodeFrame,
   routeByte,
   seqDiff,
@@ -78,9 +80,19 @@ test('decoder: resyncs after garbage, bad CRC and bogus lengths', () => {
       maxFrame: 1024,
       onError: (k) => errors.push(k),
     });
+    // A magic lookalike in the dropped bytes may carry a plausible len and
+    // wait for that many bytes; on a link the ack timeout supplies them. Here
+    // later traffic does.
+    const later = Array.from({ length: 12 }, (_, i) =>
+      frame(6 + i, new Uint8Array(100)),
+    );
     const got = split(stream, r, 40).flatMap((c) => d.push(c));
+    for (const f of later) {
+      if (got.length >= 5) break;
+      got.push(...d.push(encodeFrame(f)));
+    }
     assert.deepEqual(
-      got,
+      got.slice(0, 5),
       frames.filter((_, i) => i !== victim),
       `round ${round} kind ${kind}`,
     );
@@ -88,19 +100,67 @@ test('decoder: resyncs after garbage, bad CRC and bogus lengths', () => {
   }
 });
 
-test('decoder: a corrupt len pointing far ahead does not hide the frames behind it', () => {
+test('decoder: a corrupt len holds frames back until the resend brings enough bytes', () => {
   const frames = [
     frame(0, new Uint8Array(20)),
     frame(1, Uint8Array.from([1, 2, 3])),
     frame(2, new Uint8Array(0)),
   ];
   const bad = encodeFrame(frames[0]!);
-  bad[5] = 0x03; // len 0x314: plausible, but far longer than what follows
-  const d = new FrameDecoder();
-  const got = d.push(
-    concatBytes([bad, encodeFrame(frames[1]!), encodeFrame(frames[2]!)]),
+  bad[5] = 0x01; // len 0x114: plausible, but longer than what follows
+  const errors: FrameError[] = [];
+  const d = new FrameDecoder({ onError: (k) => errors.push(k) });
+  const good = frames.map((f) => encodeFrame(f));
+  assert.deepEqual(d.push(concatBytes([bad, good[1]!, good[2]!])), []);
+  // The sender's ack timeout resends all three; once the bogus length is
+  // covered its CRC fails and everything behind it is rescanned.
+  const got = [];
+  for (let i = 0; i < 12 && got.length < 4; i++)
+    got.push(...d.push(concatBytes(good)));
+  assert.deepEqual(got.slice(0, 2), frames.slice(1));
+  assert.deepEqual(errors, ['crc']);
+});
+
+test('decoder: a frame whose body holds a whole valid frame is delivered intact', () => {
+  // e.g. a PUT_DATA of a captured Wisp stream, arriving in small chunks
+  const inner = encodeFrame(frame(9, Uint8Array.from([4, 0, 0, 0, 1, 2]), 0));
+  const outer = frame(
+    3,
+    concatBytes([Uint8Array.from([2, 0, 0, 0]), inner, inner]),
+    3,
   );
-  assert.deepEqual(got, frames.slice(1));
+  const r = rng(5);
+  for (let round = 0; round < 50; round++) {
+    const d = new FrameDecoder();
+    const got = split(encodeFrame(outer), r, 12).flatMap((c) => d.push(c));
+    assert.deepEqual(got, [outer]);
+  }
+});
+
+test('decoder: reserved route or fflags bits make a frame bad', () => {
+  const good = [frame(0, Uint8Array.of(1)), frame(1, Uint8Array.of(2))];
+  for (const [at, v] of [
+    [2, 0x10],
+    [2, 0x80],
+    [3, 0x02],
+    [3, 0x81],
+  ] as const) {
+    const bad = encodeFrame(good[0]!);
+    bad[at] = v;
+    const crc = crc16(bad, 0, bad.length - 2);
+    bad[bad.length - 2] = crc & 255;
+    bad[bad.length - 1] = crc >> 8;
+    const errors: FrameError[] = [];
+    const d = new FrameDecoder({ onError: (k) => errors.push(k) });
+    assert.deepEqual(d.push(concatBytes([bad, encodeFrame(good[1]!)])), [
+      good[1],
+    ]);
+    assert.deepEqual(errors, ['reserved']);
+  }
+  assert.throws(() => encodeFrame({ ...good[0]!, route: 0x10 }), RangeError);
+  assert.throws(() => encodeFrame({ ...good[0]!, fflags: 2 }), RangeError);
+  const ctrl = { ...good[0]!, fflags: FrameFlag.ctrl };
+  assert.deepEqual(new FrameDecoder().push(encodeFrame(ctrl)), [ctrl]);
 });
 
 test('seqDiff wraps', () => {
