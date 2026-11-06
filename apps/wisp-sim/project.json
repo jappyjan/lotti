@@ -1,0 +1,104 @@
+{
+  "name": "wisp-sim",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/wisp-sim/src",
+  "tags": ["lang:ts", "lang:c", "platform:server", "scope:wisp"],
+  "implicitDependencies": ["wisp-core"],
+  "targets": {
+    "build-wasm": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "../../packages/wisp-core/tools/with-tools.sh clang:llvmPackages.clang-unwrapped wasm-ld:lld -- tools/build-wasm.sh",
+        "cwd": "apps/wisp-sim"
+      },
+      "inputs": [
+        "{projectRoot}/src/c/**/*",
+        "{projectRoot}/tools/build-wasm.sh",
+        "{workspaceRoot}/packages/wisp-core/include/**/*",
+        "{workspaceRoot}/packages/wisp-core/src/**/*"
+      ],
+      "outputs": ["{projectRoot}/dist/wisp-sim.wasm"],
+      "cache": true
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build-wasm", "^build"],
+      "options": {
+        "command": "tsc -p tsconfig.build.json",
+        "cwd": "apps/wisp-sim"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*.ts",
+        "{projectRoot}/examples/**/*.ts",
+        "{projectRoot}/test/**/*.ts",
+        "{projectRoot}/tsconfig*.json",
+        "{projectRoot}/package.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": ["typescript", "@types/node", "@types/ws"]
+        }
+      ],
+      "outputs": [
+        "{projectRoot}/dist/src",
+        "{projectRoot}/dist/examples",
+        "{projectRoot}/dist/test"
+      ],
+      "cache": true
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["^build"],
+      "options": {
+        "command": "tsc -p tsconfig.json --noEmit",
+        "cwd": "apps/wisp-sim"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*.ts",
+        "{projectRoot}/examples/**/*.ts",
+        "{projectRoot}/test/**/*.ts",
+        "{projectRoot}/tsconfig*.json",
+        "{workspaceRoot}/tsconfig.base.json",
+        {
+          "externalDependencies": ["typescript", "@types/node", "@types/ws"]
+        }
+      ],
+      "cache": true
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "options": {
+        "command": "node --test --test-force-exit --test-timeout=60000 \"dist/test/**/*.test.js\"",
+        "cwd": "apps/wisp-sim"
+      },
+      "inputs": [
+        "{projectRoot}/src/**/*",
+        "{projectRoot}/examples/**/*",
+        "{projectRoot}/test/**/*",
+        "{projectRoot}/viewer/**/*",
+        "{projectRoot}/tsconfig*.json",
+        "{workspaceRoot}/packages/wisp-core/include/**/*",
+        "{workspaceRoot}/packages/wisp-core/src/**/*",
+        {
+          "externalDependencies": [
+            "typescript",
+            "@types/node",
+            "@types/ws",
+            "ws"
+          ]
+        }
+      ],
+      "cache": true
+    },
+    "serve": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "continuous": true,
+      "options": {
+        "command": "node dist/src/main.js",
+        "cwd": "apps/wisp-sim"
+      }
+    }
+  }
+}

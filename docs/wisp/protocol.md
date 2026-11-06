@@ -148,7 +148,7 @@ Resource types:
 
 - **`1` image:** `w u16, h u16, bpp u8, codec u8, data…`
 - **`2` animation:** `w u16, h u16, frames u16, codec u8, {duration_ms u16, kind u8 (0 key, 1 delta: XOR with the previous frame), size u32, data…}…`
-- **`3` font:** Wisp bitmap font: `line_h u8, baseline u8, glyphs u16, {codepoint u32, w u8, h u8, x_off i8, y_off i8, advance u8, offset u32}…` sorted by codepoint, then 4 bpp glyph bitmaps (RAW4). Any script, any size: fonts are the app's choice.
+- **`3` font:** Wisp bitmap font: `line_h u8, baseline u8, glyphs u16, {codepoint u32, w u8, h u8, x_off i8, y_off i8, advance u8, offset u32}…` sorted by codepoint, then 4 bpp glyph bitmaps (RAW4). Any script, any size: fonts are the app's choice. A glyph's `offset` counts from the start of the bitmaps; its bitmap (stride `ceil(w/2)`, pixel = coverage 0–15) goes at `(pen_x + x_off, line_top + baseline + y_off)` (so `y_off` is usually negative), then the pen moves by `advance`. `TEXT` draws coverage × `value` / 15 where coverage is nonzero, wraps at spaces (words wider than `max_w` break between characters), breaks at `\n`, and stops at the first line that would start below the layer's content; `chars_drawn` counts the code points laid out, for paging.
 - **`4` blob:** opaque bytes for extensions.
 
 **Codecs** (pixel data, all 4 bpp, rows top to bottom, high nibble = left pixel):

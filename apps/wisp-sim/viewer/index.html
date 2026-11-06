@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wisp Simulator</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Wisp simulator</h1>
+      <span id="conn" class="pill">connecting…</span>
+      <span id="links" class="muted"></span>
+    </header>
+    <main>
+      <section class="lens" data-lens="1">
+        <div class="lens-head">
+          <h2>Left lens</h2>
+          <span class="tag"></span>
+        </div>
+        <div class="panel">
+          <canvas width="640" height="480"></canvas>
+          <div class="overlay"></div>
+        </div>
+        <dl class="stats"></dl>
+      </section>
+      <section class="lens" data-lens="2">
+        <div class="lens-head">
+          <h2>Right lens</h2>
+          <span class="tag"></span>
+        </div>
+        <div class="panel">
+          <canvas width="640" height="480"></canvas>
+          <div class="overlay"></div>
+        </div>
+        <dl class="stats"></dl>
+      </section>
+    </main>
+    <footer>
+      <div class="controls">
+        <label
+          >Input on
+          <select id="target">
+            <option value="2">right temple</option>
+            <option value="1">left temple</option>
+          </select>
+        </label>
+        <button data-gesture="1" title="Space">Tap</button>
+        <button data-gesture="2" title="D">Double tap</button>
+        <button data-gesture="long" title="L (hold)">Long press</button>
+        <button data-gesture="6" title="←">Swipe back</button>
+        <button data-gesture="5" title="→">Swipe forward</button>
+        <button id="wear" title="W">Worn</button>
+      </div>
+      <p class="muted">
+        Drag on a lens to touch its temple (press = tap, hold = long press, drag
+        ≥ 64 px = swipe). Keys: Space tap · D double · L long · ← → swipe · W
+        wear · 1 / 2 pick the temple.
+      </p>
+    </footer>
+    <script src="viewer.js"></script>
+  </body>
+</html>
