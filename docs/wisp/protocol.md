@@ -2,7 +2,7 @@
 
 The contract between a phone (any app, through `wisp-sdk`) and glasses running Wisp, in host mode or native mode. Firmware, simulator and SDKs are built against this file. **Change it first, then the code**, and add golden vectors for every change (`packages/wisp-proto/vectors/`).
 
-Status: draft 0.1 (2026-11-05). Nothing is frozen until protocol 1.0; before that, minor versions may break.
+Status: draft 0.2 (2026-11-06; 0.2 settles the M0 review questions, see [Changes in 0.2](#changes-in-02)). Nothing is frozen until protocol 1.0; before that, minor versions may break.
 
 ## Principles
 
@@ -42,7 +42,7 @@ Each temple is its own peripheral. An SDK may connect to both temples (two strea
 | 0      | 1     | `magic`  | `0x57` (`W`)                                                                                                                                                                       |
 | 1      | 1     | `svc`    | service id (below)                                                                                                                                                                 |
 | 2      | 1     | `route`  | bits 0–1 destination lens (`0` = the lens you're connected to, `1` left, `2` right, `3` both); bits 2–3 source lens on glasses → phone (`1` left, `2` right); bits 4–7 reserved, 0 |
-| 3      | 1     | `fflags` | reserved, 0 (later: frame compression)                                                                                                                                             |
+| 3      | 1     | `fflags` | bit 0 `CTRL`: an unsequenced control frame (below); bits 1–7 reserved, must be 0                                                                                                   |
 | 4      | 2     | `len`    | body length, ≤ `max_frame`                                                                                                                                                         |
 | 6      | 2     | `seq`    | per direction and connection, starts at 0, +1 per frame, wraps                                                                                                                     |
 | 8      | `len` | body     | one message                                                                                                                                                                        |
@@ -52,12 +52,14 @@ Overhead: 10 bytes per frame. `max_frame` defaults to 4096 and is negotiated in 
 
 ### Flow control and recovery
 
-- Credits in bytes. Each side announces `rx_window` in `HELLO`. A sender keeps the sum of frame sizes sent but not yet acknowledged ≤ the peer's window.
+- Credits in bytes. Each side announces `rx_window` in `HELLO`. A sender keeps the sum of frame sizes sent but not yet acknowledged ≤ the peer's window. Until the `HELLO` response arrives, the peer's window is one default frame (4106 bytes).
+- **Control frames** carry `CREDIT` and `RESYNC` (session service) with `fflags.CTRL` set. They are outside the sequence: their `seq` is 0 and ignored, they don't count against any window, they are never acknowledged or retransmitted, and a receiver applies them even while it is discarding or recovering. Both are cumulative, so losing one is harmless: the next one, or the ack timeout below, repairs it. A reserved bit set in `fflags` or `route` makes the frame bad.
 - The receiver acknowledges with `CREDIT {ack_seq}` (session service) when it has consumed frames; it coalesces (at most every 25 % of its window or 20 ms, whichever comes first).
 - A frame with a bad magic, a `len` above `max_frame` or a bad CRC: the receiver drops bytes until the next `magic` that starts a frame with a valid CRC, and sends `RESYNC {last_good_seq}`. The sender resends every frame after `last_good_seq` (it still holds them: they're inside the window). BLE already retransmits on the air; this covers buffer overruns and firmware bugs.
 - The receiver accepts only `seq = last_good_seq + 1` (before the first frame, `last_good_seq` is `0xFFFF`). A frame behind that is a duplicate and is dropped silently. A frame ahead of it means one went missing: it's dropped and, unless a `RESYNC` is already outstanding, answered with `RESYNC`. So messages are always handled in order.
 - One `RESYNC` per run of discarded bytes; frames that arrive in the meantime (sent before the sender saw the `RESYNC`) are dropped without another one. The next in-order frame ends the recovery.
-- A sender that holds unacknowledged frames and hears no `CREDIT` for a while (SDK default 1 s) resends all of them. That recovers a lost or corrupted last frame, which no later frame would expose.
+- A sender that holds unacknowledged frames and hears no `CREDIT` for a while (SDK default 1 s, glasses default 1 s) resends all of them. That recovers a lost or corrupted last frame, which no later frame would expose.
+- A receiver answers every duplicate with a `CREDIT`. So when a `CREDIT` was lost while the sender's window was full, the timeout resend brings back a fresh one; nothing stalls.
 
 ## Messages
 
@@ -134,13 +136,13 @@ With `route` both lenses get the same operations; send different operations per 
 
 Resources are referenced by `res u16`, scoped to the session's `app_id`. **Persisted** resources survive reboots (NOR littlefs, LRU-evicted when `persist_bytes` is exhausted, never evicted while in use); others live in RAM until the session ends or memory is needed.
 
-| op  | name        | payload                                                                       | response                                                                                        |
-| --- | ----------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| 1   | `PUT_BEGIN` | `res u16, type u8, codec u8, flags u8 (bit 0 persist), size u32, hash hash16` | `status u8` — `0` send data, `1` **already present with this hash** (skip the upload), or error |
-| 2   | `PUT_DATA`  | `res u16, offset u32, data…`                                                  | none (flow control covers it)                                                                   |
-| 3   | `PUT_END`   | `res u16`                                                                     | ok, or error `6` hash mismatch                                                                  |
-| 4   | `DELETE`    | `res u16` (`0xFFFF` = all of this app)                                        | ok                                                                                              |
-| 5   | `LIST`      | —                                                                             | `count u16, entries {res u16, type u8, flags u8, size u32, hash hash16}…`                       |
+| op  | name        | payload                                                                                                                                                                             | response                                                                                        |
+| --- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| 1   | `PUT_BEGIN` | `res u16, type u8, flags u8 (bit 0 persist), size u32, hash hash16` — `size` and `hash` (first 16 bytes of SHA-256) cover the resource payload exactly as uploaded, header included | `status u8` — `0` send data, `1` **already present with this hash** (skip the upload), or error |
+| 2   | `PUT_DATA`  | `res u16, offset u32, data…`                                                                                                                                                        | none (flow control covers it)                                                                   |
+| 3   | `PUT_END`   | `res u16`                                                                                                                                                                           | ok, or error `6` hash mismatch                                                                  |
+| 4   | `DELETE`    | `res u16` (`0xFFFF` = all of this app)                                                                                                                                              | ok                                                                                              |
+| 5   | `LIST`      | —                                                                                                                                                                                   | `count u16, entries {res u16, type u8, flags u8, size u32, hash hash16}…`                       |
 
 Resource types:
 
@@ -229,3 +231,16 @@ Host mode updates go through the stock OTA service (`wisp-ota` builds the bundle
 - Whether forwarding over the inter-temple UART is fast enough for full-frame content (baud unknown).
 - LC3 frame parameters supported by the GX8002 path.
 - Dirty-rectangle granularity of the panel (whole-frame push measured at 1.2–6.6 ms).
+
+## Changes in 0.2
+
+Answers to the questions raised while building wisp-core and the TypeScript SDK (PRs #44, #46):
+
+1. `CREDIT` and `RESYNC` travel in unsequenced **control frames** (`fflags` bit 0). That removes the window deadlock, the "credits ack credits" loop, and the hang when both sides see a gap at once.
+2. A receiver answers duplicates with `CREDIT`, so a lost credit with a full window recovers through the ack-timeout resend.
+3. No header CRC: BLE and UART already check bytes on the wire, so a flipped `len` is not a realistic failure. Reserved bits must be 0, `len` must be ≤ `max_frame`, and the ack timeout covers the rest.
+4. **Lists:** `count` is authoritative; each item's size is `remaining payload / count`, so list items can grow under the append-only rule (readers take the fields they know and skip the rest of each item). A payload whose remainder isn't a multiple of `count` is error 2.
+5. **Responses:** every request with `req ≠ 0` gets exactly one response; an empty payload means ok. Requests with `req = 0` get none, errors included.
+6. Start state: `seq` starts at 0, `last_good_seq` starts at `0xFFFF`, and the peer window is one default frame until `HELLO` is answered.
+7. `PUT_BEGIN` loses its `codec` field (the image and animation headers carry the codec); `size` and `hash` cover the payload as uploaded.
+8. RLE4 runs cover exactly `w × h` pixels, row-major, and never encode RAW4's padding nibble on odd widths.

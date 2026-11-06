@@ -11,40 +11,40 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 
 ## Parts (per temple unless noted)
 
-| Function       | Part                                                                                     | Bus / address              | Source                               |
-| -------------- | ---------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------ |
-| Main MCU       | Ambiq Apollo510B, Cortex-M55 + MVE (Helium), NemaGFX GPU                                 | —                          | [C] openCFW `g2-glasses.md`          |
-| Memory         | 4 MiB MRAM, 512 KiB DTCM (`0x20000000–0x20080000`) + 3 MiB SSRAM (`0x20080000–0x20380000`); stock initial SP `0x2007FB00` | — | [C] §8.1, openCFW `reference/memory-map.md` |
-| External flash | MX25U25643G, 32 MiB NOR (littlefs at `0x1400000`, FlashDB at `0x1FC0000`)                | MSPI                       | [C] `memory-map.md`                  |
-| BLE controller | EM9305 (own firmware, own NVM), HCI                                                      | IOM6 SPI                   | [C]; separate die vs. in-package [?] |
-| Display        | microLED 640×480, 4-bit grey (green); JBD JBD4010 or Hongshi A6N-G                       | MSPI0 quad SPI, 320 B/line | [C] §2, §5                           |
-| Voice codec    | GX8002 (C-SKY), 2 DMICs, I2S 16 kHz 16-bit 2 ch out                                      | I2S                        | [C]                                  |
-| Extra mic path | PDM0 on the Apollo                                                                       | PDM                        | [C]                                  |
-| IMU            | TDK ICM-45608 (accel + gyro)                                                             | I2C4 `0x69`                | [C]                                  |
-| Magnetometer   | likely ICT1531x                                                                          | IMU aux I2C `0x1E`         | [I]                                  |
-| Touch + wear   | PSoC 4000T (CY8C4046FNI): touchpad and proximity (wear)                                  | I2C5 `0x0C`                | [C]                                  |
-| Ambient light  | TI OPT3007 (some sources: OPT3001), right temple only                                    | `0x45`                     | [C]                                  |
-| Power          | Board A: nPM1300 `0x6B`. Board B: BQ25180 `0x6A` + BQ27427 gauge `0x55`                  | I2C7                       | [C]                                  |
-| Battery        | 96 mAh per temple                                                                        | —                          | [C]                                  |
-| Sound out      | **No speaker.** PWM piezo buzzer (GPIO145)                                               | PWM                        | [C]                                  |
-| Debug UART     | stock log + CLI shell; UART2 = case link                                                 | UART1 `0x4003A000`         | [C] g2emu (stock in Renode)          |
-| Case           | STM32G0B1 (dual-bank, ROM bootloader) + CH340 USB-UART, pogo UART 1 Mbaud to each temple | —                          | [C]                                  |
-| Ring (R1)      | nRF52840, **signed** Nordic Secure DFU — out of scope                                    | BLE                        | [C]                                  |
-| Camera         | none                                                                                     | —                          | [C]                                  |
+| Function       | Part                                                                                                                      | Bus / address              | Source                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------- |
+| Main MCU       | Ambiq Apollo510B, Cortex-M55 + MVE (Helium), NemaGFX GPU                                                                  | —                          | [C] openCFW `g2-glasses.md`                 |
+| Memory         | 4 MiB MRAM, 512 KiB DTCM (`0x20000000–0x20080000`) + 3 MiB SSRAM (`0x20080000–0x20380000`); stock initial SP `0x2007FB00` | —                          | [C] §8.1, openCFW `reference/memory-map.md` |
+| External flash | MX25U25643G, 32 MiB NOR (littlefs at `0x1400000`, FlashDB at `0x1FC0000`)                                                 | MSPI                       | [C] `memory-map.md`                         |
+| BLE controller | EM9305 (own firmware, own NVM), HCI                                                                                       | IOM6 SPI                   | [C]; separate die vs. in-package [?]        |
+| Display        | microLED 640×480, 4-bit grey (green); JBD JBD4010 or Hongshi A6N-G                                                        | MSPI0 quad SPI, 320 B/line | [C] §2, §5                                  |
+| Voice codec    | GX8002 (C-SKY), 2 DMICs, I2S 16 kHz 16-bit 2 ch out                                                                       | I2S                        | [C]                                         |
+| Extra mic path | PDM0 on the Apollo                                                                                                        | PDM                        | [C]                                         |
+| IMU            | TDK ICM-45608 (accel + gyro)                                                                                              | I2C4 `0x69`                | [C]                                         |
+| Magnetometer   | likely ICT1531x                                                                                                           | IMU aux I2C `0x1E`         | [I]                                         |
+| Touch + wear   | PSoC 4000T (CY8C4046FNI): touchpad and proximity (wear)                                                                   | I2C5 `0x0C`                | [C]                                         |
+| Ambient light  | TI OPT3007 (some sources: OPT3001), right temple only                                                                     | `0x45`                     | [C]                                         |
+| Power          | Board A: nPM1300 `0x6B`. Board B: BQ25180 `0x6A` + BQ27427 gauge `0x55`                                                   | I2C7                       | [C]                                         |
+| Battery        | 96 mAh per temple                                                                                                         | —                          | [C]                                         |
+| Sound out      | **No speaker.** PWM piezo buzzer (GPIO145)                                                                                | PWM                        | [C]                                         |
+| Debug UART     | stock log + CLI shell; UART2 = case link                                                                                  | UART1 `0x4003A000`         | [C] g2emu (stock in Renode)                 |
+| Case           | STM32G0B1 (dual-bank, ROM bootloader) + CH340 USB-UART, pogo UART 1 Mbaud to each temple                                  | —                          | [C]                                         |
+| Ring (R1)      | nRF52840, **signed** Nordic Secure DFU — out of scope                                                                     | BLE                        | [C]                                         |
+| Camera         | none                                                                                                                      | —                          | [C]                                         |
 
 Memory detail (hal_ambiq `am_apollo510.h`, g2emu): DTCM is `0x20000000–0x20080000` and SSRAM `0x20080000–0x20380000`. Ambiq's Zephyr DTS maps only the first `0x7C000` of DTCM; stock puts its initial SP at `0x2007FB00`, in the last 16 KiB. Ambiq's Zephyr `flash0` starts at `0x410000` (the SBL is outside it), so devicetree partition offsets are relative to `0x410000`.
 
 ## MRAM map (Apollo510, per temple)
 
-| Range               | What                                                     | Wisp may write?                                         |
-| ------------------- | -------------------------------------------------------- | ------------------------------------------------------- |
-| `0x400000–0x410000` | Ambiq SBL (secure ROM bootloader)                        | **never**                                               |
-| `0x410000–0x438000` | Even bootloader (stock `ota/s200_bootloader.bin`; image ends `0x434477` on 2.2.6.10, `0x434900` on 2.3.2.14) | **never** |
-| `0x437FE0`          | 32-byte main-app preamble                                | via stock install only                                  |
-| `0x438000–…`        | main application (stock ends `0x794324` on 2.2.6.10, `0x7F5AAC` on 2.3.2.14: only 9.3 KiB below the ceiling) [C, `wisp-ota inspect`] | via stock install only |
-| ceiling `0x7F8000`  | hard limit for the app's end (g2flash guard)             | —                                                       |
-| `0x7FE000` (16 B)   | update-flag record, bootloader-owned                     | only the documented flag value, only from verified code |
-| `…–0x800000`        | NV / bond area; writing past `0x800000` = SWD-only brick | **never**                                               |
+| Range               | What                                                                                                                                 | Wisp may write?                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `0x400000–0x410000` | Ambiq SBL (secure ROM bootloader)                                                                                                    | **never**                                               |
+| `0x410000–0x438000` | Even bootloader (stock `ota/s200_bootloader.bin`; image ends `0x434477` on 2.2.6.10, `0x434900` on 2.3.2.14)                         | **never**                                               |
+| `0x437FE0`          | 32-byte main-app preamble                                                                                                            | via stock install only                                  |
+| `0x438000–…`        | main application (stock ends `0x794324` on 2.2.6.10, `0x7F5AAC` on 2.3.2.14: only 9.3 KiB below the ceiling) [C, `wisp-ota inspect`] | via stock install only                                  |
+| ceiling `0x7F8000`  | hard limit for the app's end (g2flash guard)                                                                                         | —                                                       |
+| `0x7FE000` (16 B)   | update-flag record, bootloader-owned                                                                                                 | only the documented flag value, only from verified code |
+| `…–0x800000`        | NV / bond area; writing past `0x800000` = SWD-only brick                                                                             | **never**                                               |
 
 ## Boot and update chain (stock)
 
