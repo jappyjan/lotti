@@ -7,7 +7,7 @@ Status: M0 foundation landed (2026-11-06): `wisp-core` (C, 131 golden vectors), 
 - [Protocol v0](protocol.md) — the wire contract (firmware ⇄ SDK)
 - [Safety policy](safety.md) — brick rules and the flashing ladder
 - [Hardware reference](hardware.md) — what's in the glasses, with sources
-- [Recovery](recovery.md) — how a bricked temple comes back: SWD, the case UART, Wisp Boot, the proposed W18
+- [Recovery](recovery.md) — how a bricked temple comes back: SWD, the case UART, Wisp Boot, and the W18 procedure (patched bootloader, prepared and emulated, not yet installed)
 - [Host mode](host-mode.md) — running the core inside stock 2.2.6.10 (rung 2): where to hook, the lease, the hook ladder
 
 ## Why

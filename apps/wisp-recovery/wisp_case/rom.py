@@ -40,12 +40,21 @@ def _xor(data: bytes) -> int:
     return value
 
 
+def sram_regions(bridge: bytes) -> tuple[tuple[int, int], ...]:
+    """The SRAM ranges this tool may write: the program region (its exact length: the 1,720-byte
+    step-0 bridge, or the 5,508-byte W18 case relay that embeds it) and the bridge's record."""
+    regions = ((pins.BRIDGE_ADDRESS, len(bridge)),) + pins.SRAM_WRITE_REGIONS[1:]
+    if pins.BRIDGE_ADDRESS + len(bridge) > pins.RESULT_ADDRESS:
+        raise RefusedError("program image would overlap the bridge record")
+    return regions
+
+
 def check_sram_write(address: int, data: bytes, bridge: bytes) -> None:
     """Raise RefusedError unless this write is inside one pinned SRAM region and carries
     either the pinned bridge bytes for that offset or zeros."""
     if not data or len(data) > 256 or len(data) % 4 or address % 4:
         raise RefusedError("SRAM write must be 4..256 bytes, word aligned")
-    for base, length in pins.SRAM_WRITE_REGIONS:
+    for base, length in sram_regions(bridge):
         if base <= address and address + len(data) <= base + length:
             if data == bytes(len(data)):
                 return
@@ -160,7 +169,7 @@ class RomLoader:
 
     def clear_sram(self) -> None:
         """Zero every region this tool ever wrote, and read it back."""
-        for base, length in pins.SRAM_WRITE_REGIONS:
+        for base, length in sram_regions(self.bridge):
             self.write_verified(base, bytes(length))
         self.bridge_verified = False
 

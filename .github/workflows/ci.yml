@@ -52,6 +52,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
+      # wisp-recovery's tests run under uv (pinned unicorn).
+      - uses: astral-sh/setup-uv@v6
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:

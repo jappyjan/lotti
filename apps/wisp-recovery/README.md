@@ -1,4 +1,6 @@
-# wisp-recovery: recovery step 0 through the charging case
+# wisp-recovery: recovery through the charging case (step 0 and W18)
+
+Two tools. `step0.py` (below) is the read-only case link test, passed on 2026-11-06. `w18.py` prepares and runs decision W18: the one install of drdaeman's patched bootloader per temple, then its UART2 loader through the case ([W18 tools](#w18-patched-bootloader-and-case-loader); the runbook is [recovery.md, W18 procedure](../../docs/wisp/recovery.md#w18-procedure)).
 
 Step 0 of [docs/wisp/recovery.md](../../docs/wisp/recovery.md#recommendation): prove the link **USB → case RAM bridge → pogo UART2 → temple** on Jan's case with one read-only version query to the running left temple. **Nothing writes flash, option bytes or MRAM**, on the case or on the temple.
 
@@ -76,3 +78,31 @@ The bridge only selects a pogo route if the 10 YHM2510 registers it reads first 
 The "observed-33" variant is the reviewed bridge with the bytes at 1670, 1680, 1690 and 1700 changed from `0x22` to `0x33` (rows 2–5; row 1 unchanged), exactly as the webflasher's `getVerifiedPogoBridgePayload()` derives it. `pins.bridge_image()` derives it from the vendored file and requires SHA-256 `3ca8ed1d8d37b2edef62dcb6915b5ec4b1d439160da0a89e93aa74901d760ef6`, the webflasher's `POGO_BRIDGE_OBSERVED_33_SHA256`.
 
 Step 0 always starts with the reviewed bridge. It switches to observed-33 once, and only when the reviewed bridge's retained record proves a zero-write, zero-transmission stop (status 3) and the baseline it read is exactly a row of the observed-33 table. Any other baseline (another register-8 value, any other byte different, the webflasher's separate row-1 `0x8d/0x33` variant) stops. Everything else, including the SRAM write allowlist, applies to the variant unchanged: writes must carry the bytes of the variant actually being loaded.
+
+## W18: patched bootloader and case loader
+
+```sh
+python3 -I apps/wisp-recovery/w18.py bootloader-plan --side left            # touches nothing
+uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py bootloader-install --side left \
+    --address <BLE id> --battery <N> --go W18-LEFT-87e2d4e0a7a6                # the one bootloader write
+uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py loader-hello --side left   # read-only
+uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py info-dump --side left      # read-only
+uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py recover --side left \
+    --image .wisp-cache/stock/g2-2.4.0.24.bin                                  # stock main app via the loader
+pnpm nx run wisp-recovery:test     # fakes, no hardware
+pnpm nx run wisp-fw:w18-test       # the real patched bootloader in Renode
+```
+
+Needs `.wisp-cache/stock/g2-2.3.2.14.bin` and `g2-2.4.0.24.bin` (`wisp-ota fetch`, SHA-256 checked). Every image is rebuilt from those and must match `wisp_w18/pins.py`: patched bootloader `87e2d4e0…` (155,648 B), stock 2.4.0.24 main `df8cfddf…`, case relay `6beb9a5e…` (observed-33) or `7749131e…` (reviewed-22).
+
+| Module                | What it does                                                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wisp_w18/pins.py`    | every hash, the writable regions, the `--go` token                                                                                                                                                        |
+| `wisp_w18/image.py`   | EVENOTA parsing; the patched bootloader (drdaeman's `patch.py`, in Python); the OTA component header; the case relay rebuilt from the template plus Even's reset waveform out of the cached case firmware |
+| `wisp_w18/ble.py`     | the stock BLE OTA install (drdaeman's `ble_ota.py`): only type 1, only the pinned image, no replay, END must be 8                                                                                         |
+| `wisp_w18/loader.py`  | HELO/HOLD/OKAY/CONT/RLSD and LOAD/DATA/RUN (drdaeman's `handshake.py`, `protocol.py`)                                                                                                                     |
+| `wisp_w18/links.py`   | `CaseRelayLink` (case ROM → relay in case SRAM → temple; step 0's ROM allowlist, widened to the relay's own bytes) and `SocketLink` (Renode)                                                              |
+| `wisp_w18/session.py` | claim/release, CRC, dump, `info_dump`, and `write_app`, the only write path (stock main image, app region, body → CRC → vectors → CRC)                                                                    |
+| `wisp_w18/data/`      | drdaeman's compiled MIT programs, pinned: `patch.bin`, `checksum.bin`, `dump.bin`, `recover.bin`, and `case_relay_template.bin` (his `case.bin` with Even's 372 waveform bytes zeroed)                    |
+
+What the case receives is step 0's sequence with drdaeman's 5,508-byte relay in place of the 1,720-byte bridge (the relay embeds that bridge). The relay resets the selected temple with Even's waveform, forwards its `HELO`, then relays one temple frame per `G2TX`. `G2EX` ends it: the bridge restores the YHM route and resets the case. The tool reads the retained record back through the ROM, zeroes the SRAM and resets the case into 1.2.57. Case flash is never written.

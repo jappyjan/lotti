@@ -3,7 +3,11 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "sourceRoot": "apps/wisp-fw/src",
-  "tags": ["lang:c", "platform:apollo510", "wisp"],
+  "tags": [
+    "lang:c",
+    "platform:apollo510",
+    "wisp"
+  ],
   "targets": {
     "setup": {
       "executor": "nx:run-commands",
@@ -14,7 +18,9 @@
     },
     "build": {
       "executor": "nx:run-commands",
-      "dependsOn": ["setup"],
+      "dependsOn": [
+        "setup"
+      ],
       "options": {
         "command": "apps/wisp-fw/scripts/build.sh"
       },
@@ -22,7 +28,9 @@
     },
     "sim": {
       "executor": "nx:run-commands",
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "options": {
         "command": "apps/wisp-fw/scripts/sim.sh"
       },
@@ -33,7 +41,9 @@
       "dependsOn": [
         "build",
         {
-          "projects": ["wisp-sdk-ts"],
+          "projects": [
+            "wisp-sdk-ts"
+          ],
           "target": "build"
         }
       ],
@@ -52,7 +62,9 @@
     },
     "build-boot": {
       "executor": "nx:run-commands",
-      "dependsOn": ["setup"],
+      "dependsOn": [
+        "setup"
+      ],
       "options": {
         "command": "apps/wisp-fw/scripts/build_boot.sh"
       },
@@ -63,7 +75,9 @@
       "dependsOn": [
         "setup",
         {
-          "projects": ["wisp-ota"],
+          "projects": [
+            "wisp-ota"
+          ],
           "target": "build"
         }
       ],
@@ -71,7 +85,16 @@
         "command": "apps/wisp-fw/scripts/boot_test.sh"
       },
       "cache": false
+    },
+    "w18-test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "apps/wisp-fw/scripts/w18_test.sh"
+      },
+      "cache": false
     }
   },
-  "implicitDependencies": ["wisp-core"]
+  "implicitDependencies": [
+    "wisp-core"
+  ]
 }

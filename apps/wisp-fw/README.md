@@ -8,15 +8,16 @@ Read [safety.md](../../docs/wisp/safety.md) before changing anything that ends u
 
 Everything runs on t3-worker (NixOS) as a normal user. The flake in this directory pins the toolchain; the scripts enter it themselves (`nix develop`), so plain `pnpm nx` is enough.
 
-| Target                             | What it does                                                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm nx run wisp-fw:setup`        | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after)                 |
-| `pnpm nx run wisp-fw:build`        | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                                  |
-| `pnpm nx run wisp-fw:sim`          | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                                           |
-| `pnpm nx run wisp-fw:test`         | Wisp Boot, flush and BLE adapter host tests, gate unit tests, Renode boot test, BLE end to end on native_sim, rule 8 and patch negative builds |
-| `pnpm nx run wisp-fw:drivers-test` | the drivers in Renode against panel and I2C models, both panels + one negative case ([below](#drivers); about 5 min)                           |
-| `pnpm nx run wisp-fw:build-boot`   | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                                 |
-| `pnpm nx run wisp-fw:boot-test`    | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)                   |
+| Target                             | What it does                                                                                                                                                                                  |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm nx run wisp-fw:setup`        | west workspace in `.wisp-cache/west/` from [west.yml](west.yml) (every repo pinned by SHA; about 30 s first time, no-op after)                                                                |
+| `pnpm nx run wisp-fw:build`        | `west build -b wisp_g2` into `.wisp-cache/build/wisp-fw/`, then the post-build gates; fails if any gate fails                                                                                 |
+| `pnpm nx run wisp-fw:sim`          | boots `zephyr.bin` in Renode for 10 s of virtual time and streams UART1 (`scripts/sim.sh [seconds]`)                                                                                          |
+| `pnpm nx run wisp-fw:test`         | Wisp Boot, flush and BLE adapter host tests, gate unit tests, Renode boot test, BLE end to end on native_sim, rule 8 and patch negative builds                                                |
+| `pnpm nx run wisp-fw:drivers-test` | the drivers in Renode against panel and I2C models, both panels + one negative case ([below](#drivers); about 5 min)                                                                          |
+| `pnpm nx run wisp-fw:build-boot`   | Wisp Boot (bare metal, `src/boot/`) into `.wisp-cache/build/wisp-boot/`, then the image and rule 8 gates on it                                                                                |
+| `pnpm nx run wisp-fw:boot-test`    | **rung 3**: the real Even bootloader + Wisp Boot + fault apps in Renode, every fault case and power cut (see below; ~45 min)                                                                  |
+| `pnpm nx run wisp-fw:w18-test`     | **W18**: drdaeman's patched bootloader in Renode, driven by the real `apps/wisp-recovery/w18.py` code over an emulated UART2 ([below](#w18-the-patched-bootloader-in-renode-wisp-fww18-test)) |
 
 Toolchain (from `flake.lock`, nixos-26.05 at `7dcdd87`): gcc-arm-embedded 15.2.rel1 (Zephyr variant `gnuarmemb`), CMake 4.1, Ninja, dtc, west 1.5, Renode 1.16.1, Bumble 0.0.228 (the virtual BLE controller of the end-to-end test). Setup applies Wisp's EM9305 patches to the workspace ([third_party/ambiq](third_party/ambiq/README.md)). Workspace: `AmbiqMicro/ambiqzephyr` `ambiq-stable` @ `89c8a36` (Zephyr 4.3.0) plus only `ambiqhal_ambiq` @ `d3278ec`, `cmsis`, `cmsis_6`, `mbedtls` (only for the BT negative build) and `littlefs` @ `8f5ca34` (Zephyr's fork of littlefs 2.11, BSD-3-Clause, on-disk format 2.1 like stock; Wisp Boot and the rung-3 tools build it directly, not through Zephyr's FS layer). To move the pin, edit `west.yml`, rerun setup, build, test. A from-scratch setup in an empty cache (`WISP_CACHE_DIR=…`) rebuilt a byte-identical `zephyr.bin` (the git revision string is embedded, so compare at the same commit).
 
@@ -335,6 +336,10 @@ Resets count every reset (watchdog, SWPOR, cut); a power cut is processed when R
 - Wisp Boot itself crashing before it writes the record would loop forever (bootloader → Wisp Boot → fault → reset). Nothing in the rung-3 cases does; it is why Wisp Boot stays tiny and has this test suite.
 
 **Run time.** About 1–2 min wall per case (the 3.5 MB copy through the PIO FIFO model and the bootloader's install dominate); `boot-test` runs the reference plus all cases. `--list`, `--only NAME…` narrow it; every run keeps `uart1.txt`, `monitor.log`, `renode.log`, NOR before/after and an MRAM dump in `.wisp-cache/rung3/runs/<case>/`.
+
+## W18: the patched bootloader in Renode (`wisp-fw:w18-test`)
+
+`tests/boot/w18.py` loads the rung-3 platform with UART2 replaced by `renode/models/WispCaseLink.cs`, a lockstep TCP bridge: every temple frame (`5A A5 FF …`) goes to the host and the CPU waits for the host's one answer, like the case relay's G2TX/G2RX. The host is `apps/wisp-recovery/wisp_w18` itself (`SocketLink` instead of `CaseRelayLink`). Cases: both stock bootloaders boot stock 2.4.0.24 (control); the patched one with nobody answering; `loader-hello`; `info-dump`; a full `recover` of the stock app into an erased app region; the same with a power cut at 40 % of the write and a second session; and the MRAM states a cut during the stock app's bootloader copy can leave (k of 38 pages new). Results and limits: [recovery.md, Emulation proof](../../docs/wisp/recovery.md#emulation-proof-renode-pnpm-nx-run-wisp-fww18-test). Two emulation-only shims live in the model: `MveVprShim` (Renode's M55 has no MVE; the loader's trampoline saves and restores VPR) and `PacingShim` (the loader's short FreeRTOS delays drift in Renode, so they return at once). Neither touches what the loader does, only how long it takes in virtual time.
 
 ## What Renode lacks (for this and the next rungs)
 
