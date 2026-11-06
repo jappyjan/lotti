@@ -1,0 +1,44 @@
+diff --git a/drivers/i2c/i2c_ambiq.c b/drivers/i2c/i2c_ambiq.c
+index e4b2fdc3..036a090b 100644
+--- a/drivers/i2c/i2c_ambiq.c
++++ b/drivers/i2c/i2c_ambiq.c
+@@ -29,6 +29,17 @@ LOG_MODULE_REGISTER(ambiq_i2c, CONFIG_I2C_LOG_LEVEL);
+ 
+ #include "i2c-priv.h"
+ 
++/* Wisp patch (apps/wisp-fw/third_party/ambiq/patches/zephyr-0002): wire order = buffer order. */
++static inline uint64_t i2c_ambiq_hdr_to_offset(const uint8_t *buf, uint32_t len)
++{
++	uint64_t v = 0;
++
++	for (uint32_t i = 0; i < len; i++) {
++		v = (v << 8) | buf[i];
++	}
++	return v;
++}
++
+ #include <soc.h>
+ 
+ enum i2c_ambiq_pm_policy_flag {
+@@ -180,7 +191,9 @@ static int i2c_ambiq_read(const struct device *dev, struct i2c_msg *hdr_msg,
+ #if defined(CONFIG_SOC_SERIES_APOLLO3X)
+ 		memcpy(&trans.ui32Instr, hdr_msg->buf, hdr_msg->len);
+ #else
+-		memcpy(&trans.ui64Instr, hdr_msg->buf, hdr_msg->len);
++		/* Wisp: the IOM sends offset bytes highest first, so pack the header that way
++		 * (a little-endian memcpy() reverses every multi-byte header). */
++		trans.ui64Instr = i2c_ambiq_hdr_to_offset(hdr_msg->buf, hdr_msg->len);
+ #endif
+ 		trans.ui32InstrLen = hdr_msg->len;
+ 	}
+@@ -240,7 +253,9 @@ static int i2c_ambiq_write(const struct device *dev, struct i2c_msg *hdr_msg,
+ #if defined(CONFIG_SOC_SERIES_APOLLO3X)
+ 		memcpy(&trans.ui32Instr, hdr_msg->buf, hdr_msg->len);
+ #else
+-		memcpy(&trans.ui64Instr, hdr_msg->buf, hdr_msg->len);
++		/* Wisp: the IOM sends offset bytes highest first, so pack the header that way
++		 * (a little-endian memcpy() reverses every multi-byte header). */
++		trans.ui64Instr = i2c_ambiq_hdr_to_offset(hdr_msg->buf, hdr_msg->len);
+ #endif
+ 		trans.ui32InstrLen = hdr_msg->len;
+ 	}

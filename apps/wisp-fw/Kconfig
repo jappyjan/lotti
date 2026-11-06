@@ -107,6 +107,63 @@ config WISP_ADV_SLOW_INTERVAL
 
 endif # WISP_BLE
 
+config WISP_DRIVERS_INIT_PRIORITY
+	int "Init priority of Wisp's own device drivers"
+	default 80
+	help
+	  After I2C (CONFIG_I2C_INIT_PRIORITY) and GPIO.
+
+config WISP_G2_TOUCH
+	bool "G2 touch + wear controller (PSoC 4000T, read-only driver)"
+	default y
+	depends on DT_HAS_EVEN_G2_TOUCH_ENABLED
+	select I2C
+	select GPIO
+
+config WISP_ICM45608
+	bool "TDK ICM-45608 IMU"
+	default y
+	depends on DT_HAS_INVENSENSE_ICM45608_ENABLED
+	depends on SENSOR
+	select I2C
+	select GPIO
+
+config WISP_OPT3007
+	bool "TI OPT3007 ambient light sensor"
+	default y
+	depends on DT_HAS_TI_OPT3007_ENABLED
+	depends on SENSOR
+	select I2C
+
+config WISP_ULED
+	bool "G2 microLED panel (JBD4010 / Hongshi A6N-G on MSPI0)"
+	default y
+	depends on DT_HAS_EVEN_G2_ULED_ENABLED
+	select MSPI
+	select GPIO
+
+config WISP_ULED_INIT_PRIORITY
+	int "Init priority of the panel driver"
+	default 90
+	depends on WISP_ULED
+	help
+	  After MSPI, the nPM1300 regulators (BUCK1, LDSW2) and GPIO.
+
+config WISP_NATIVE_HAL
+	bool "Native HAL on the G2 drivers (src/hal/native/)"
+	default y
+	depends on BOARD_WISP_G2
+	depends on WISP_ULED && WISP_G2_TOUCH && WISP_ICM45608 && WISP_OPT3007
+	help
+	  Off on other boards (native_sim for the BLE end-to-end test has no G2 devices).
+
+config WISP_DRIVER_SELFTEST
+	bool "TEST ONLY: exercise the drivers at boot (Renode driver test)"
+	depends on WISP_NATIVE_HAL
+	help
+	  Built only by scripts/drivers_test.sh. Powers the panel, sends a test frame and a
+	  partial update through the flush path, and reads every sensor once.
+
 endmenu
 
 source "Kconfig.zephyr"

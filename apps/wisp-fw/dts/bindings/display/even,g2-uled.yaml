@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: MIT
+description: |
+  G2 microLED panel, 640x480 4 bpp green, on MSPI0 CE0: JBD4010 (stock "variant 0", hw_version
+  5 / DVT2) or Hongshi A6N-G ("variant 1", hw_version 6 / DVT3). Commands go out serial, pixels
+  quad 1-1-4. Facts: docs/wisp/hardware.md "Display" (stock 2.4.0.24, static analysis).
+  Driver: src/drivers/uled.c. The panel is off unless a PM runtime user holds it.
+
+compatible: "even,g2-uled"
+
+include: ["mspi-device.yaml"]
+
+properties:
+  panel:
+    type: string
+    required: true
+    enum: ["jbd4010", "a6n-g"]
+    description: |
+      Which panel is fitted. Stock decides from the board's hw_version (ADC strap on GPIO16):
+      6 = A6N-G, anything else = JBD4010. Not probed at run time: the two panels have different
+      power sequences and protocols.
+  vdd-supply:
+    type: phandle
+    required: true
+    description: Panel core rail (nPM1300 BUCK1; stock 1.1 V on JBD boards, 1.8 V on hw 6).
+  vio-supply:
+    type: phandle
+    description: JBD only, hw_version >= 4 - second rail (nPM1300 LDSW2 as a load switch).
+  en-a-gpios:
+    type: phandle-array
+    required: true
+    description: GPIO142 - JBD - high after the rails; A6N-G - high after init + clear (50 ms).
+  en-b-gpios:
+    type: phandle-array
+    description: GPIO128 - A6N-G - high 1 ms after the bus is up, then 110 ms settle.
+  en-c-gpios:
+    type: phandle-array
+    description: GPIO68 - JBD - released last at power-up, dropped last at power-down.
+  quad-frequency:
+    type: int
+    default: 31250000
+    description: Clock for pixel writes (stock - JBD 31.25 MHz, A6N-G 32 MHz).
+  offset-x:
+    type: int
+    default: 12
+    description: Panel window offset X (JBD 0xC0 / A6N-G EF). Stock - JBD 12, A6N-G 8.
+  offset-y:
+    type: int
+    default: 10
+    description: Panel window offset Y (JBD 0xC0 / A6N-G F0). Stock - JBD 10, A6N-G 8.
+  max-luminance:
+    type: int
+    default: 7100
+    description: |
+      JBD only - luminance word at full brightness. Stock - 7100 x a per-unit factory factor
+      (0.56..1.0) minus a mode reduction; 7100 is the factor-1.0 value.

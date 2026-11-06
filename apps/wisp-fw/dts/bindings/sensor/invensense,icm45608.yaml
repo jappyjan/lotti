@@ -1,0 +1,25 @@
+# SPDX-License-Identifier: MIT
+description: |
+  TDK ICM-45608 6-axis IMU on I2C (src/drivers/icm45608.c). Same register map as the
+  ICM-45686, WHO_AM_I 0x81, no ±32 g / ±4000 dps range. The driver owns the IMU's power
+  rail: suspend drops it (no current at all), resume restores it and the configuration.
+
+compatible: "invensense,icm45608"
+
+include: [sensor-device.yaml, i2c-device.yaml]
+
+properties:
+  int-gpios:
+    type: phandle-array
+    description: INT1 (GPIO38, rising edge; INT1 configured push-pull, pulsed, active high).
+  supply-gpios:
+    type: phandle-array
+    description: IMU rail enable (GPIO129, active high, low at reset).
+  accel-fs-g:
+    type: int
+    default: 4
+    enum: [2, 4, 8, 16]
+  gyro-fs-dps:
+    type: int
+    default: 2000
+    enum: [250, 500, 1000, 2000]

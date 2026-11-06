@@ -17,6 +17,9 @@ project(wisp_fw C)
 # The post-build gate (scripts/check_rule8.py) inspects what actually got linked; this one
 # fails early on the Kconfig switches that pull the EM9305 driver in.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/rule8.cmake)
+# Wisp's other patches to the fork (I2C header byte order), checked after rule 8 so a rule 8
+# failure is reported first.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/patches.cmake)
 
 # --- App ----------------------------------------------------------------------------------
 execute_process(
@@ -28,8 +31,10 @@ if(WISP_FW_GIT_REV)
   target_compile_definitions(app PRIVATE WISP_FW_GIT_REV="${WISP_FW_GIT_REV}")
 endif()
 
-target_sources(app PRIVATE src/main.c)
-target_include_directories(app PRIVATE src src/hal src/link)
+target_sources(app PRIVATE src/main.c src/display/wisp_flush.c)
+target_sources_ifdef(CONFIG_WISP_NATIVE_HAL app PRIVATE src/hal/native/power.c
+  src/hal/native/display.c src/hal/native/input.c src/hal/native/sensors.c)
+target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers src/link)
 if(CONFIG_WISP_BLE)
   # The Wisp GATT service (Zephyr, transport only) and the transport adapter (portable C,
   # host-tested in tests/link/). Both need wisp-core.
@@ -37,6 +42,12 @@ if(CONFIG_WISP_BLE)
   target_sources(app PRIVATE src/ble/wisp_ble.c src/link/wisp_link.c)
   target_include_directories(app PRIVATE src/ble)
 endif()
+
+# --- Drivers (docs/wisp/hardware.md "Native drivers") -------------------------------------
+target_sources_ifdef(CONFIG_WISP_G2_TOUCH app PRIVATE src/drivers/g2_touch.c)
+target_sources_ifdef(CONFIG_WISP_ICM45608 app PRIVATE src/drivers/icm45608.c)
+target_sources_ifdef(CONFIG_WISP_OPT3007 app PRIVATE src/drivers/opt3007.c)
+target_sources_ifdef(CONFIG_WISP_ULED app PRIVATE src/drivers/uled.c)
 if(CONFIG_NEWLIB_LIBC AND CONFIG_MBEDTLS)
   target_sources(app PRIVATE src/compat/newlib_fini.c)
 endif()

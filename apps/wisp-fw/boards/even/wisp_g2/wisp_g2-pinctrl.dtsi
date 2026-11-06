@@ -1,12 +1,10 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * wisp_g2 pin control: the debug UART and the EM9305's SPI (IOM6).
- *
- * TODO(G2 pins): UART1 TX/RX pads are NOT verified on the G2 board. These are the
- * apollo510b_evb pads (P12/P14, from the fork's apollo510b_evb-pinctrl.dtsi, Apache-2.0,
- * Ambiq Micro). The stock firmware logs on UART1 (g2emu notes), but the pads still have to be
- * read out of the stock image's pin table before this runs on glasses.
+ * wisp_g2 pin control: the debug UART, the EM9305's SPI (IOM6), the I2C buses and the panel's
+ * MSPI0. Pads from the stock 2.4.0.24 pin table and UART/I2C pin rows (docs/wisp/hardware.md
+ * "Native drivers"): UART1 = GPIO12 TX / GPIO14 RX (the apollo510b_evb uses the same pads; the
+ * pinmux names come from the fork's evb pinctrl, Apache-2.0).
  */
 
 #include <apollo510/ambiq-apollo510-pinmux.h>
@@ -33,6 +31,89 @@
 	spi6_default: spi6_default {
 		group1 {
 			pinmux = <M6SCK_P61>, <M6MISO_P63>, <M6MOSI_P62>;
+		};
+	};
+};
+
+/* I2C pads from the stock 2.4.0.24 pin rows (hardware.md). Stock pad config 0x4200; the G2's
+ * external pull-ups are not confirmed, so the internal ones are on [I]. */
+&pinctrl {
+	i2c2_sleep: i2c2_sleep {
+		group1 {
+			pinmux = <GPIO_P25>, <GPIO_P26>;
+		};
+	};
+
+	i2c2_default: i2c2_default {
+		group1 {
+			pinmux = <M2SCL_P25>, <M2SDAWIR3_P26>;
+			drive-open-drain;
+			drive-strength = "0.5";
+			bias-pull-up;
+		};
+	};
+
+	i2c4_sleep: i2c4_sleep {
+		group1 {
+			pinmux = <GPIO_P34>, <GPIO_P35>;
+		};
+	};
+
+	i2c4_default: i2c4_default {
+		group1 {
+			pinmux = <M4SCL_P34>, <M4SDAWIR3_P35>;
+			drive-open-drain;
+			drive-strength = "0.5";
+			bias-pull-up;
+		};
+	};
+
+	i2c5_sleep: i2c5_sleep {
+		group1 {
+			pinmux = <GPIO_P47>, <GPIO_P48>;
+		};
+	};
+
+	i2c5_default: i2c5_default {
+		group1 {
+			pinmux = <M5SCL_P47>, <M5SDAWIR3_P48>;
+			drive-open-drain;
+			drive-strength = "0.5";
+			bias-pull-up;
+		};
+	};
+
+	i2c7_sleep: i2c7_sleep {
+		group1 {
+			pinmux = <GPIO_P22>, <GPIO_P23>;
+		};
+	};
+
+	i2c7_default: i2c7_default {
+		group1 {
+			pinmux = <M7SCL_P22>, <M7SDAWIR3_P23>;
+			drive-open-drain;
+			drive-strength = "0.5";
+			bias-pull-up;
+		};
+	};
+};
+
+/* MSPI0 = the panel (stock am_bsp_mspi_pins_enable, hardware.md "Display"): D0-D3 GPIO64-67,
+ * SCK GPIO72, CE0 GPIO199 (MNCE0_0). Drive strength 1.0x as stock. */
+&pinctrl {
+	mspi0_default: mspi0_default {
+		group0 {
+			pinmux = <MSPI0_0_P64>, <MSPI0_1_P65>, <MSPI0_2_P66>, <MSPI0_3_P67>,
+				 <MSPI0_8_P72>, <MNCE0_0_P199>;
+			drive-strength = "1.0";
+		};
+	};
+
+	mspi0_sleep: mspi0_sleep {
+		group0 {
+			pinmux = <GPIO_P64>, <GPIO_P65>, <GPIO_P66>, <GPIO_P67>, <GPIO_P72>,
+				 <GPIO_P199>;
 		};
 	};
 };

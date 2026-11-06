@@ -23,7 +23,9 @@ def check(text: str, min_beats: int) -> list[str]:
                    "wisp: board wisp_g2, Zephyr ", "image @ 0x438000",
                    "EM9305 update path compiled out (safety rule 8)",
                    "E: EM9305 active state timeout",
-                   "wisp: bluetooth unavailable, running without a link"):
+                   "wisp: bluetooth unavailable, running without a link",
+                   "wisp: hal power ok", "wisp: hal display ok", "wisp: hal input ok",
+                   "wisp: hal sensors ok"):
         if needle not in text:
             errors.append(f"missing {needle!r}")
     for bad in FORBIDDEN:
@@ -41,7 +43,7 @@ def check(text: str, min_beats: int) -> list[str]:
             errors.append(f"heartbeat #{i + 1} numbered {n}")
             break
         # k_msleep(1000) then print: about 1000 ms apart in virtual time (the first comes after
-        # bt_enable() gave up on the controller)
+        # bt_enable() gave up on the controller and the drivers' bring-up)
         if i and not (1000 <= t - beats[i - 1][1] <= 1050):
             errors.append(f"heartbeat {n} {t - beats[i - 1][1]} ms after the previous one")
             break

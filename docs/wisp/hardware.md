@@ -11,26 +11,26 @@ Main sources: [openCFW](https://github.com/kalanihelekunihi/evenRealities-openCF
 
 ## Parts (per temple unless noted)
 
-| Function       | Part                                                                                                                      | Bus / address              | Source                                           |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------- | ------------------------------------------------ |
-| Main MCU       | Ambiq Apollo510B, Cortex-M55 + MVE (Helium), NemaGFX GPU                                                                  | —                          | [C] openCFW `g2-glasses.md`                      |
-| Memory         | 4 MiB MRAM, 512 KiB DTCM (`0x20000000–0x20080000`) + 3 MiB SSRAM (`0x20080000–0x20380000`); stock initial SP `0x2007FB00` | —                          | [C] §8.1, openCFW `reference/memory-map.md`      |
-| External flash | MX25U25643G or (stock ≥ 2.2.9.22) GD25LE256H, 32 MiB NOR (littlefs at `0x1400000`, FlashDB at `0x1FC0000`); ours: [?]     | MSPI1 CE0                  | [C] `memory-map.md`, rung 3, 2.4.0.24 bootloader |
-| BLE controller | EM9305 (own firmware, own NVM), HCI                                                                                       | IOM6 SPI                   | [C]; separate die vs. in-package [?]             |
-| Display        | microLED 640×480, 4-bit grey (green); JBD JBD4010 or Hongshi A6N-G                                                        | MSPI0 quad SPI, 320 B/line | [C] §2, §5                                       |
-| Voice codec    | GX8002 (C-SKY), 2 DMICs, I2S 16 kHz 16-bit 2 ch out                                                                       | I2S                        | [C]                                              |
-| Extra mic path | PDM0 on the Apollo                                                                                                        | PDM                        | [C]                                              |
-| IMU            | TDK ICM-45608 (accel + gyro)                                                                                              | I2C4 `0x69`                | [C]                                              |
-| Magnetometer   | likely ICT1531x                                                                                                           | IMU aux I2C `0x1E`         | [I]                                              |
-| Touch + wear   | PSoC 4000T (CY8C4046FNI): touchpad and proximity (wear)                                                                   | I2C5 `0x0C`                | [C]                                              |
-| Ambient light  | TI OPT3007 (some sources: OPT3001), right temple only                                                                     | `0x45`                     | [C]                                              |
-| Power          | Board A: nPM1300 `0x6B`. Board B: BQ25180 `0x6A` + BQ27427 gauge `0x55`                                                   | I2C7                       | [C]                                              |
-| Battery        | 96 mAh per temple                                                                                                         | —                          | [C]                                              |
-| Sound out      | **No speaker.** PWM piezo buzzer (GPIO145)                                                                                | PWM                        | [C]                                              |
-| Debug UART     | stock log + CLI shell; UART2 = case link                                                                                  | UART1 `0x4003A000`         | [C] g2emu (stock in Renode)                      |
-| Case           | STM32G0B1 (dual-bank, ROM bootloader) + CH340 USB-UART, pogo UART 1 Mbaud to each temple                                  | —                          | [C]                                              |
-| Ring (R1)      | nRF52840, **signed** Nordic Secure DFU — out of scope                                                                     | BLE                        | [C]                                              |
-| Camera         | none                                                                                                                      | —                          | [C]                                              |
+| Function       | Part                                                                                                                      | Bus / address                              | Source                                                      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ----------------------------------------------------------- |
+| Main MCU       | Ambiq Apollo510B, Cortex-M55 + MVE (Helium), NemaGFX GPU                                                                  | —                                          | [C] openCFW `g2-glasses.md`                                 |
+| Memory         | 4 MiB MRAM, 512 KiB DTCM (`0x20000000–0x20080000`) + 3 MiB SSRAM (`0x20080000–0x20380000`); stock initial SP `0x2007FB00` | —                                          | [C] §8.1, openCFW `reference/memory-map.md`                 |
+| External flash | MX25U25643G or (stock ≥ 2.2.9.22) GD25LE256H, 32 MiB NOR (littlefs at `0x1400000`, FlashDB at `0x1FC0000`); ours: [?]     | MSPI1 CE0                                  | [C] `memory-map.md`, rung 3, 2.4.0.24 bootloader            |
+| BLE controller | EM9305 (own firmware, own NVM), HCI                                                                                       | IOM6 SPI                                   | [C]; separate die vs. in-package [?]                        |
+| Display        | microLED 640×480, 4-bit grey (green); JBD JBD4010 (hw_version 5) or Hongshi A6N-G (hw_version 6)                          | MSPI0 CE0, serial + quad 1-1-4, 320 B/line | [C] 2.4.0.24, [native drivers](#native-drivers-stock-24024) |
+| Voice codec    | GX8002 (C-SKY), 2 DMICs, I2S 16 kHz 16-bit 2 ch out                                                                       | I2S                                        | [C]                                                         |
+| Extra mic path | PDM0 on the Apollo                                                                                                        | PDM                                        | [C]                                                         |
+| IMU            | TDK ICM-45608 (accel + gyro)                                                                                              | I2C4 `0x69`, INT1 GPIO38                   | [C] 2.4.0.24                                                |
+| Magnetometer   | TDK ICT1531x (ID `0x45`)                                                                                                  | IMU aux I2C `0x1E`                         | [C] 2.4.0.24 ID check                                       |
+| Touch + wear   | PSoC 4000T (CY8C4046FNI): touchpad and proximity (wear)                                                                   | I2C5 `0x0C`, attn GPIO27                   | [C] 2.4.0.24                                                |
+| Ambient light  | TI OPT3007 (OPT3001 register set, no INT pin); stock starts it on the right temple only                                   | I2C2 `0x45`                                | [C] 2.4.0.24                                                |
+| Power          | nPM1300 `0x6B` (stock 2.4.0.24 always selects it; its BQ25180 `0x6A` + BQ27427 `0x55` path is dead code)                  | I2C7, IRQ GPIO4                            | [C] 2.4.0.24                                                |
+| Battery        | 96 mAh per temple                                                                                                         | —                                          | [C]                                                         |
+| Sound out      | **No speaker.** PWM piezo buzzer (GPIO145)                                                                                | PWM                                        | [C]                                                         |
+| Debug UART     | stock log + CLI shell, GPIO12 TX / GPIO14 RX, 921600 baud; UART0 = L/R link, UART2 = case, UART3 = GX8002                 | UART1 `0x4003A000`                         | [C] 2.4.0.24 UART table                                     |
+| Case           | STM32G0B1 (dual-bank, ROM bootloader) + CH340 USB-UART, pogo UART 1 Mbaud to each temple                                  | —                                          | [C]                                                         |
+| Ring (R1)      | nRF52840, **signed** Nordic Secure DFU — out of scope                                                                     | BLE                                        | [C]                                                         |
+| Camera         | none                                                                                                                      | —                                          | [C]                                                         |
 
 Memory detail (hal_ambiq `am_apollo510.h`, g2emu): DTCM is `0x20000000–0x20080000` and SSRAM `0x20080000–0x20380000`. Ambiq's Zephyr DTS maps only the first `0x7C000` of DTCM; stock puts its initial SP at `0x2007FB00`, in the last 16 KiB. Ambiq's Zephyr `flash0` starts at `0x410000` (the SBL is outside it), so devicetree partition offsets are relative to `0x410000`.
 
@@ -127,6 +127,122 @@ Rung 3 ran this bootloader unmodified in Renode (the NOR model answers MX): see 
 
 All addresses in [host-mode.md](host-mode.md), and the openCFW citations (openCFW reconstructs 2.2.6.10), are 2.2.6.10 run addresses. None carry over to 2.4.0.24: the 2.4 main app is a new build, and even-g2-thai's rebase shows its functions moved independently (for example, the font chain builder `0x471238` → `0x4758F0`). The protocol facts above were re-checked; the hook addresses were not.
 
+## Native drivers (stock 2.4.0.24)
+
+What the native drivers in `apps/wisp-fw` need from the hardware, and what stock 2.4.0.24 does with it. Method: static analysis of the 2.4.0.24 main image in `.wisp-cache/` (objdump, the IAR `.data` initialiser run in an emulator to recover RAM tables; never committed), openCFW's reconstruction of 2.2.6.10 for orientation, public datasheets. Only facts are recorded (addresses, registers, values, order, delays). Addresses are 2.4.0.24 run addresses (file offset + `0x437FE0`). Tags: **[C]** confirmed in 2.4.0.24, **[C-2.2]** openCFW / 2.2.6.10 only, **[D]** datasheet, **[I]** inferred, **[?]** open. Researched 2026-11-06.
+
+### Summary
+
+| Part               | Bus, address                             | IRQ                                 | Power / enable                                 | Confidence                                | Wisp driver                                          |
+| ------------------ | ---------------------------------------- | ----------------------------------- | ---------------------------------------------- | ----------------------------------------- | ---------------------------------------------------- |
+| microLED panel     | MSPI0 CE0 (GPIO199), serial + quad 1-1-4 | none (MSPI0 IRQ 20)                 | nPM1300 BUCK1, LDSW2 (JBD), GPIO142 / 128 / 68 | [C] sequences and values; [?] which panel | `even,g2-uled` (`src/drivers/uled.c`)                |
+| PSoC 4000T touch   | I2C5 (IOM5, GPIO47/48, 400 kHz), `0x0C`  | GPIO27, falling (attention)         | always on; reset GPIO10                        | [C]                                       | `even,g2-touch` (`src/drivers/g2_touch.c`)           |
+| ICM-45608 IMU      | I2C4 (IOM4, GPIO34/35, 1 MHz), `0x69`    | GPIO38, rising (INT1)               | rail GPIO129                                   | [C]; currents [?]                         | `invensense,icm45608` (`src/drivers/icm45608.c`)     |
+| OPT3007 light      | I2C2 (IOM2, GPIO25/26, 400 kHz), `0x45`  | none (no INT pin)                   | shared rail GPIO134                            | [C]                                       | `ti,opt3007` (`src/drivers/opt3007.c`)               |
+| nPM1300 PMIC       | I2C7 (IOM7, GPIO22/23, 400 kHz), `0x6B`  | PMIC GPIO1 (GPOIRQ) → GPIO4, rising | —                                              | [C] (BQ path dead)                        | Zephyr `nordic,npm1300` MFD, regulator, charger, wdt |
+| GX8002 codec (mic) | UART3 (TX GPIO73, RX GPIO69) + I2S0 RX   | GPIO29, falling (event)             | GPIO134 → 5 ms → GPIO143 → 20 ms → GPIO146     | [C] pads and sequence                     | not yet (facts only)                                 |
+
+### microLED panel (JBD4010 / Hongshi A6N-G)
+
+**Which panel** [C]: stock keeps two drivers (option records ROM `0x71097C` JBD, type 0; `0x71086C` A6N-G, type 1) and picks one in `uled_mspi_init` (`0x4EE1AE`) from the board's **hw_version** byte: 6 → A6N-G, anything else → JBD4010. hw_version comes from a resistor strap on GPIO16 (ADC slot 3, 3 samples, mV = raw × 1190 >> 12; bins 950–1050 mV → 6, 550–650 → 3, 300–400 → 4, 100–250 → 5). New in 2.4: an out-of-range ADC falls back by the board serial (BSN[6..7] = "SS" → 6, "fallback to DVT3/Hongshi"; else 5, "fallback to DVT2/JBD"). So hw 5 = DVT2/JBD, hw 6 = DVT3/Hongshi; retail units are probably A6N-G [I]. The board DTS defaults to `panel = "a6n-g"`; `tests/drivers/jbd4010.overlay` selects the JBD. One stock log line from a temple (`[BSP]hw_version: %d`) settles it.
+
+**Bus** [C] (`.data` device configs at RAM `0x2000252C/44` JBD, `0x200024FC/14` A6N-G; init `0x5C118A`): MSPI0, SPI mode 0, IRQ 20 priority 4, interrupt mask `0x1A80`. Pads: CE0 GPIO199 (MNCE0_0), D0 GPIO64, D1 GPIO65, SCK GPIO72, plus D2 GPIO66 / D3 GPIO67 for quad. Commands and reads are blocking PIO, serial; pixels are quad 1-1-4 (instruction and address on one line, data on four). Full frames go by DMA, and stock waits for completion.
+
+|               | JBD4010                                                                                       | A6N-G                                                                       |
+| ------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| serial        | 31.25 MHz, instr 1 B, addr 3 B (unused), turnaround 1                                         | 24 MHz, no instr, addr 2 B (reads only)                                     |
+| quad 1-1-4    | 31.25 MHz, WriteInstr `0x62`, ReadInstr `0x63`, addr 4 B                                      | 32 MHz (Wisp: 31.25, the fork has no 32 MHz setting), no instr, addr 4 B    |
+| frame write   | `0x62`, addr `0x00000000`, **153 602 B** (frame + 2), then `0x97`                             | addr `0x32002C00`, 153 602 B, no commit [I: `0x32` quad write + DCS `0x2C`] |
+| partial write | per row: `0x62`, addr `((y << 10) & 0x7FC00 \| x) << 8 \| 0xFF`, span + 2 B, then `0x97` once | none (the stock "sync" slot is a stub)                                      |
+
+Pixel format [C]: 640×480, 4 bpp, 320 B per row, **even x = high nibble** (the core's format), 0 = off.
+
+**Power sequencing** [C] (JBD up `0x5BC170`, down `0x5BC208`; A6N-G up `0x5E0B44`, down `0x5E0B90`):
+
+- JBD, hw ≥ 4: LDSW2 on (load-switch mode) → 3 ms → BUCK1 on (npmx code 1, read as 1.1 V [I]; code 8 = 1.8 V on hw 6) → 3 ms → GPIO142 high → 10 ms → bus up → GPIO68 high. Down: GPIO142 low → 3 ms → BUCK1 off → 3 ms → LDSW2 off → 10 ms → GPIO68 low. hw < 4 boards switch GPIO128/GPIO143 instead.
+- A6N-G: BUCK1 on (1.8 V) → 7 ms → bus up → 1 ms → GPIO128 high → 110 ms → init → … → 50 ms → GPIO142 high. Down: GPIO142 low → 1 ms → GPIO128 low → 1 ms → BUCK1 off → 10 ms.
+- Neither panel has a sleep command: "off" is unpowered. At boot stock powers the panel up, configures it, reads the chip ID, sends a blank frame, waits 5 ms and **powers it down** again. The roles of GPIO142 / 128 / 68 (reset vs enable) are not named anywhere [?].
+
+**JBD4010 configure** [C] (`0x5BB6EA`; 2.2.6.10 waited 50 ms after `0x99`): `0x66`, 1 ms, `0x99`, 70 ms, `0x06`, `0x01 {10}`, blank frame + `0x97`, then window offset `0xC0 {x, y}` + `0x97` + 1 ms at (0,0), (0,20), (24,0), (24,20), (12,10), then twice `0x73`, 100 µs, `0x97`, 1 ms, then `0x36 {lum}`, `0x46 {current}`, `0x31 {04}`, `0xA3`, `0x97`, 1 ms, then the offset: `0xA9`, `0xC0 {x, y}` (x 2..22, y 2..18; stock 12, 10), `0xA3`, `0x97`, 1 ms. Chip ID `0x9F` (4 B, id = r[1] << 8 | r[2]). Health [C]: status `0x05` = `0x90` **is a fault**, status `0x35` = 0 is a fault; recovery = power-down, 1 ms, power-up, configure, frame, brightness. Brightness [C] (`0x5BBDD4`, level map `0x471030`): `0x06`, `0xA9`, `0x36 {lum >> 8, lum >> 16}`, `0x46 {current & 0x3F}`, `0x31 {04}`, `0xA3`, `0x97`; level 2..100: level < 31 → current 0, lum = ((M − 333)(level − 2) + 14) / 28 + 333; else current = (36·level − 1045) / 70, lum = M. M = 7100 × a per-unit factory factor (0.5608…1.0 by factory byte, table at ROM `0x76292C`) − 2100·R/10 (R = mode reduction 0..10) [C]. The payload byte order of `0x36` is exactly as stock sends it [C], its meaning [?]. Meanings of `0x66/0x99/0x06/0x01/0x31/0x71–0x74/0xA9/0xA3` [?].
+
+**A6N-G init** [C] (`0x5DFD82`, stream ROM `0x741F24`, identical in 2.2.6.10): register frames are raw 3-byte serial writes `{0x78 bank 0 | 0x7A bank 1, reg, value}`; reads send a 2-byte address `{0x79 | 0x7B, reg}` and read 1 byte (3 tries, 2 ms apart). Sequence: bank1 `0x55 = 0`; then `BE=84, b1 7E=02, b1 A5=40` (6 µs each), `F1=3F, E2=FF, F7=FC, 78=0A, 7C=12, B7=80, B0=80` (100 µs each); 100 µs; `F0=28`; read-backs (reg `0x00` must read `0x36`); chip ID (bank 0 reg `0x06` = 1); blank frame; brightness; offset. Offset [C]: per axis read EF (x) / F0 (y), write `v + (old & 0xE0)` (v ≤ 16; stock 8, 8), then `D9 = BF`, `D9 = FF`, 100 µs between steps. Brightness (rewritten in 2.4, `0x5E04D8`) [C]: coarse `E7` (read once, ≤ 15), then fine `E2`; level ≥ 40 → E2 interpolated over 36, 50, 67, 91, 116, 152, 255; below that from a decile curve (−5, 1, 10, 13, 28, 41, 53, 69, 80, 94, 100), lowering E7 when very dim; then a per-unit factory factor (Wisp: 100 %). Health [C]: `BE` = `0x84`, reg `0x62` ∈ {`0x77`, `0x57`}, plus a mirror check of `D8` bit 5 (not done by Wisp).
+
+**Current** [D]: no datasheet for either part. JBD's 0.13" QSPI series: about 60 mW typical, VDDI 1.8 V / DVDD 1.2 V ([JBD](https://www.jb-display.com/product_des/3.html)). Off = rails off = leakage only [I]. Needs measuring.
+
+### PSoC 4000T touch and wear
+
+[C] unless marked. I2C5 `0x0C`; a command is one write `[cmd, body…]`, its reply a **separate** read (stock's HAL never uses a repeated start). Attention GPIO27, falling edge (the PSoC pulls it low when a report is ready). Reset GPIO10 (written as a pad, held high by the pin table): low 10 ms, high, **100 ms** settle (2.2.6.10: 50 ms).
+
+| cmd | Meaning                               | Reply           | Wisp                                                                |
+| --- | ------------------------------------- | --------------- | ------------------------------------------------------------------- |
+| 1   | firmware version                      | 4 B, big-endian | read once at init (log only)                                        |
+| 2   | **enter DFU**                         | —               | **never sent**: refused before the bus (safety rule 8)              |
+| 3   | last report                           | 16 B            | read on every attention edge                                        |
+| 4   | sensor diffs                          | 10 B            | allowed, unused                                                     |
+| 5   | save proximity baseline (PSoC EEPROM) | —               | API only, for "in the case"; stock sends it on every case insertion |
+| 6   | read saved baseline                   | 2 B LE          | allowed, unused                                                     |
+| 7   | write long-press threshold (EEPROM)   | `07 00 17`      | **never sent**                                                      |
+| 8   | read long-press threshold             | 2 B LE (ms)     | read once at init                                                   |
+
+Report: byte 0 proximity (1 = not worn, 2 = worn, 0 = no change); byte 1 flags (0x01 press, 0x02 release, 0x04 tap with count in byte 2, 0x08 double, 0x10 long, 0x20 slide back, 0x40 slide forward, **0x80 error → reset the PSoC**); byte 2 tap count or slide distance; byte 3 speed [C-2.2]. There is no position. **Wear** is decided inside the PSoC (CAPSENSE proximity widget; thresholds 160/170/150, baseline overrides, [C-2.2]); the host only forwards byte 0. **At every boot stock resets the PSoC, reads its version, compares it with `/firmware/touch.bin` and reprograms the PSoC on a mismatch or a failed read** (`0x583DE8`). Wisp has no such path at all. PSoC currents: not needed (it runs its own low-power scan) [?].
+
+### ICM-45608 IMU
+
+[C]: I2C4 `0x69`, 1-byte register address, WHO_AM_I `0x72` = `0x81`. INT1 → GPIO38 rising; stock writes INT1_CONFIG2 = `0x01` (push-pull, pulsed, active-high). Rail: GPIO129 (low at reset); stock power-cycles it (off 100 ms, on, 5 ms) before init and powers the IMU off by dropping the rail with no register write first. Stock init (`0x4C3210`): soft reset + ID, both sensors off, flush, ODR codes 6..11 = 800..25 Hz, accel ±4 g (FS code 3) in low-power mode, gyro ±2000 dps (code 1) in low-noise or low-power, then TDK eDMP features (tap, tilt, head-up, compass). Register map, ODR and FS codes are the ICM-45686's, except that FS code 0 (±32 g / ±4000 dps) does not exist on the 45608 [D: TDK `inv_imu_regmap_le.h`, `INV_IMU_HIGH_FSR_SUPPORTED 0`]; the in-tree Zephyr `icm45686` driver hard-checks WHO_AM_I `0xE9`, so Wisp has its own small driver. Data registers are little-endian [D]. Magnetometer: ICT1531x (`0x01` = `0x45`) at `0x1E` behind the IMU's I2C master (not driven yet). Current [D]: no public 45608 datasheet; sibling ICM-45605: 6-axis 0.42 mA low-noise, 0.22 mA low-power ([TDK](https://invensense.tdk.com/products/motion-tracking/6-axis/icm-45605/)); rail off = 0.
+
+### OPT3007 ambient light
+
+[C]: I2C2 `0x45` (not I2C7), IDs `0x7E` = `0x5449`, `0x7F` = `0x3001`; **no INT pin** (DSBGA, [D] SBOS864). Rail GPIO134, shared with the GX8002 (high from boot). Stock waits 5 ms after the rail, writes M = 3 (continuous) and CT = 0 (100 ms), so config ≈ `0xC610` [I], and starts the ALS only on one role (right temple, [C-2.2] + community). Stock "off" just drops the rail. Wisp keeps it in shutdown (M = 0) and runs one single-shot conversion per sample. Current [D]: 1.8 µA active (3.7 µA at full-scale light), 0.3 µA shutdown; conversion 100 ms (CT = 0) or 800 ms.
+
+### nPM1300 PMIC, battery, case
+
+**The G2 runs the nPM1300** [C]: in 2.4.0.24 every HW-ID bin, and now also an invalid ADC reading, writes charger family 1 (board info RAM `0x20076D9C`); nothing writes 2, so the BQ25180 + BQ27427 code is linked but dead. I2C7 `0x6B`, 16-bit register addresses sent high byte first. IRQ: PMIC GPIO1 in GPOIRQ mode → Apollo GPIO4, rising. Stock init (`0x5009F8`, `0x4FF3A0`) [C]:
+
+| Setting                          | Stock value                                                                     | Wisp DTS                        |
+| -------------------------------- | ------------------------------------------------------------------------------- | ------------------------------- |
+| charge current / discharge limit | 96 mA / 1000 mA                                                                 | same                            |
+| termination normal / warm        | 4.45 V / 4.10 V (openCFW's 4.00 V is 2.2.6.10 or a misread)                     | same                            |
+| VBUS current limit               | 500 mA                                                                          | same                            |
+| NTC                              | 100 kΩ, β 4250, 0 / 10 / 45 / 60 °C                                             | same                            |
+| events                           | watchdog warning, VBUS detected / removed, charge error, NTC cold/hot, die temp | MFD driver defaults             |
+| BUCK1                            | off at boot; **the panel's rail** (see above)                                   | panel driver switches it        |
+| BUCK2                            | 3.1 V, on                                                                       | always-on                       |
+| LDSW1                            | LDO, 1.8 V, on                                                                  | always-on                       |
+| LDSW2                            | load switch (hw ≥ 4), switched with the JBD panel; off on hw 6                  | panel driver (JBD only)         |
+| **timer**                        | **watchdog, reset mode, 30.72 s, kicked every 1 s** by stock's device manager   | kicked once and stopped at boot |
+
+The case is detected by VBUS only (no case GPIO in the pin table); the case UART is UART2 (GPIO42/44, 1 Mbaud). Battery: 96 mAh, 3.87 V per temple (FCC report); stock's percent comes from Nordic's closed `nrf_fuel_gauge` (not used by Wisp; Wisp estimates from voltage). Currents [D] ([nPM1300 PS](https://docs.nordicsemi.com/r/bundle/ps_npm1300/page/product_overview.html-sys-el-spec)): ship 370 nA, hibernate 500 nA, active with bucks off 600 nA, one/both bucks in auto 0.8 / 1.1 µA, a buck in forced PWM 4 mA (keep auto).
+
+**Zephyr I2C byte order** (found while wiring the PMIC, not a G2 fact): the fork's `i2c_ambiq.c` copies a write-read header into the IOM offset field little-endian, but the IOM sends offset bytes highest first, so every 16-bit PMIC register read would go to the wrong register. Wisp patches it ([`zephyr-0002`](../../apps/wisp-fw/third_party/ambiq/README.md), applied by setup and checked at configure time); the Renode driver test fails with the unfixed driver.
+
+### GX8002 microphone path (facts only, no driver yet)
+
+[C]: power GPIO134 → 5 ms → GPIO143 → 20 ms → GPIO146 (off: all low, no delays). Control UART3, TX GPIO73 / RX GPIO69, 115200 at run time, `BUXX` frames (14-byte header, CRC-32): mic gain `0x0B`, I2S output `0x0F`, DMIC open/close `0x0C/0x0D` [C-2.2]. Event line GPIO29, falling. PCM: I2S0 **RX slave** (the codec is clock master), CLK GPIO100, WS GPIO102, DATA GPIO101, IRQ 44; 2 × 32-bit slots, 16-bit samples, data delay 1 [C-2.2]. Never load or update its firmware (safety rule 8). PDM0 (GPIO50/51, IRQ 48) is a second mic path; which mic it carries is open [?]. Current [D]: ≈ 70 µW VAD standby, ≈ 0.6 mW running ([NationalChip](https://www.nationalchip.com/en/index.php/news/info/229)).
+
+### Board pins (stock pin table ROM `0x689158`, 97 rows, identical to 2.2.6.10)
+
+[C]: outputs high at boot 9, 10, 134; outputs low 7, 11, 46, 68, 128, 129, 142, 143, 144, 146, 147; inputs with IRQ 4 (rising, PMIC), 27 (falling, touch), 29 (falling, codec), 38 (rising, IMU); inputs 13, 37, 156; peripherals UART0 0/2 (L/R link, 921600), UART1 12/14 (console, 921600), HW-ID ADC 16, **SWD 20/21**, I2C7 22/23, I2C2 25/26, I2C4 34/35, UART2 42/44, I2C5 47/48, MSPI1 49, 95–98, 103, PDM0 50/51, MSPI0 64–67, 72 (+ CE 199), UART3 69/73, I2S0 100–102, buzzer 145 (TIMER7 output 0, PWM).
+
+### Expected current per state (datasheet figures; nothing measured)
+
+| State            | Panel                         | IMU                                    | ALS                                       | PMIC                  | Notes                                                       |
+| ---------------- | ----------------------------- | -------------------------------------- | ----------------------------------------- | --------------------- | ----------------------------------------------------------- |
+| not worn, idle   | rails off (≈ 0)               | rail off (0)                           | shutdown 0.3 µA                           | ≈ 1.1 µA (bucks auto) | plus the Apollo510 in sleep [?] and the PSoC's own scan [?] |
+| worn, display on | ≈ 60 mW class [D, JBD family] | off unless used                        | 0.3 µA, 1.8 µA during a 100 ms conversion | ≈ 1.1 µA + load       | the panel dominates                                         |
+| IMU streaming    | —                             | 0.22 mA LP … 0.42 mA LN [D, ICM-45605] | —                                         | —                     |                                                             |
+
+Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, above).
+
+### Uncertain without hardware
+
+- Which panel is fitted (hw_version 5 or 6), what GPIO142 / 128 / 68 do, the exact BUCK1 voltages (npmx codes 1 and 8), the meaning of most JBD opcodes and of the two trailing bytes of every pixel write.
+- Whether the panels tolerate Wisp's 31.25 MHz quad clock on the A6N-G (stock: 32 MHz).
+- The per-unit factory brightness factors (JBD M, A6N-G calibration byte); Wisp uses the neutral value.
+- Whether the nPM1300 watchdog is still armed after an Apollo reset into a new image.
+- I2C pull-ups (the stock pad config `0x4200` is not decoded; Wisp enables the internal pull-ups).
+- The ICM-45608's per-mode currents; whether the OPT3007 is fitted on the left temple; which mic PDM0 carries.
+- Everything timing-related: Renode completes every bus transfer at once.
+
 ## Image formats
 
 - **EVENOTA:** `EVENOTA\0`, count `+0x08`, `+0x0C` = 0, date/time/version strings `+0x10/0x20/0x30` (16 B each, NUL-padded; version `s200_v<x.y.z.w>`), TOC at `0x40` (16-B entries `{id, off, size, crc32c}`, `size` = 128 + payload), trailer `evenota\0` + 8 zero bytes. Components follow contiguously (unaligned) and close exactly at EOF. Each component = 128-B header (`+0/+4/+0x10/+0x20` = 0, size `+8`, CRC32C `+0xC`, magic `EVEN` `+0x14`, `+0x18/+0x1C/+0x2C` = `0xFFFFFFFF`, type `+0x24`, storage type `+0x28`, path `+0x30`, 80 B) + payload [C, `firmware-formats.md`; all 19 official bundles 2.0.1.14–2.4.0.24 checked with `wisp-ota`].
@@ -158,8 +274,8 @@ All addresses in [host-mode.md](host-mode.md), and the openCFW citations (openCF
 - How long 2.4.0.24's RESULT_CHECK readback of the staged 3.6 MB file takes (its log line `fs readback verify … cost %d ms`).
 - SWD pad location and a working attach: unlabelled, unmapped, behind a glued pod; see [recovery.md](recovery.md#1-swd-on-the-temples).
 - INFO0/INFOC provisioning (does SBL UART recovery exist on retail units?).
-- Which power board our units have (nPM1300 or BQ25180 + BQ27427).
-- Which panel variant our units have (JBD4010 or A6N-G); panel init sequences.
+- Which panel variant our units have (JBD4010 = hw_version 5, A6N-G = hw_version 6). Answered by one stock log line (`[BSP]hw_version: %d`); the init sequences are in [Native drivers](#native-drivers-stock-24024). The power board is answered: stock 2.4.0.24 only drives the nPM1300.
+- Whether the nPM1300 watchdog that stock arms (30.72 s, reset mode) is still running when a new image boots after an Apollo reset. Wisp kicks and stops it at boot either way.
 - EM9305: firmware patch load at boot needed? Wire format of its DFU.
 - Inter-temple UART: baud rate, real throughput.
 - Whether SRAM survives a software POR / watchdog reset on the real chip (Wisp does not rely on it; rung 3 fills SRAM with `0xA5` on every reset).

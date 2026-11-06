@@ -4,13 +4,17 @@
  * wisp_g2 — one temple of the Even Realities G2, running Wisp natively.
  *
  * Template: the fork's apollo510b_evb (AmbiqMicro/ambiqzephyr, Apache-2.0). Facts and
- * sources: docs/wisp/hardware.md. Enabled: the debug UART (UART1) and the EM9305 BLE
- * controller (IOM6); every other G2 part is listed below as a disabled bus node with a TODO.
+ * sources: docs/wisp/hardware.md ("Native drivers": every bus, address, pad and sequence below
+ * comes from the stock 2.4.0.24 image, with a confidence level there). Enabled: the debug UART,
+ * the EM9305 BLE controller (IOM6), the I2C devices and the microLED panel. Nothing here has run
+ * on glasses.
  */
 
 /dts-v1/;
 #include <ambiq/ambiq_apollo510b.dtsi>
 #include "wisp_g2-pinctrl.dtsi"
+#include <zephyr/dt-bindings/gpio/gpio.h>
+#include <dt-bindings/regulator/npm13xx.h>
 
 / {
 	model = "Even Realities G2 temple (Wisp)";
@@ -35,10 +39,11 @@
 		reg = <SSRAM_BASE_ADDR 0x180000>;
 	};
 
-	/* ... and 1.5 MiB uncached for DMA (MSPI display/NOR command queues, later). */
+	/* ... and 1.4375 MiB uncached for DMA (panel frame, MSPI command queues). It ends at
+	 * 0x20370000: the top 64 KiB of SSRAM belong to Wisp Boot (apps/wisp-fw/README.md). */
 	sram_no_cache: memory@20200000 {
 		compatible = "zephyr,memory-region", "mmio-sram";
-		reg = <0x20200000 0x180000>;
+		reg = <0x20200000 0x170000>;
 		zephyr,memory-region = "SRAM_NO_CACHE";
 		zephyr,memory-attr = <DT_MEM_ARM(ATTR_MPU_RAM_NOCACHE)>;
 	};
@@ -78,9 +83,9 @@
 	};
 };
 
-/* Debug/log UART. The stock firmware logs on UART1 too (g2emu). Pads: see pinctrl TODO. */
+/* Debug/log UART: GPIO12/14 at 921600, as stock 2.4.0.24 (UART table, hardware.md). */
 &uart1 {
-	current-speed = <115200>;
+	current-speed = <921600>;
 	pinctrl-0 = <&uart1_default>;
 	pinctrl-1 = <&uart1_sleep>;
 	pinctrl-names = "default", "sleep";
@@ -100,27 +105,95 @@
 	status = "disabled";
 };
 
+/* GPIO banks used by the drivers and the EM9305 below (pad numbers in hardware.md). */
+&gpio0_31 {
+	status = "okay";
+};
+
+&gpio32_63 {
+	status = "okay";
+};
+
+&gpio64_95 {
+	status = "okay";
+};
+
+&gpio96_127 {
+	status = "okay";
+};
+
+&gpio128_159 {
+	status = "okay";
+};
+
+&gpio192_223 {
+	status = "okay";
+};
+
 /* ---------------------------------------------------------------------------------------- */
-/* G2 peripherals, all disabled in M0. Source of every fact: docs/wisp/hardware.md.          */
+/* G2 peripherals. Facts: docs/wisp/hardware.md "Native drivers" (stock 2.4.0.24, static).     */
+/* Every device starts suspended (zephyr,pm-device-runtime-auto): the HAL powers what it uses. */
 /* ---------------------------------------------------------------------------------------- */
 
-/*
- * TODO(IMU): I2C4 — TDK ICM-45608 accel + gyro at 0x69; likely ICT1531x magnetometer behind
- * the IMU's aux I2C at 0x1E. The fork has no ICM-45608 driver (small addition needed).
- */
-&iom4 {
-	i2c4: i2c {
-		status = "disabled";
+/* I2C2 (IOM2, GPIO25/26, 400 kHz): TI OPT3007 ambient light at 0x45, no INT pin. Stock starts
+ * it on the right temple only; the left temple may not populate it (the driver then fails its
+ * ID check and the HAL reports no light sensor). */
+&iom2 {
+	i2c2: i2c {
+		pinctrl-0 = <&i2c2_default>;
+		pinctrl-1 = <&i2c2_sleep>;
+		pinctrl-names = "default", "sleep";
+		clock-frequency = <I2C_BITRATE_FAST>;
+		status = "okay";
+
+		als: light@45 {
+			compatible = "ti,opt3007";
+			reg = <0x45>;
+			conversion-time-ms = <100>;
+			zephyr,pm-device-runtime-auto;
+		};
 	};
 };
 
-/*
- * TODO(touch, wear): I2C5 — Infineon PSoC 4000T (CY8C4046FNI) at 0x0C, touchpad + proximity.
- * Its firmware stays stock; Wisp never contains a PSoC image (safety rule 8).
- */
+/* I2C4 (IOM4, GPIO34/35, 1 MHz): TDK ICM-45608 at 0x69, INT1 = GPIO38 (rising), rail GPIO129.
+ * Magnetometer ICT1531x at 0x1E sits behind the IMU's own I2C master (not described here). */
+&iom4 {
+	i2c4: i2c {
+		pinctrl-0 = <&i2c4_default>;
+		pinctrl-1 = <&i2c4_sleep>;
+		pinctrl-names = "default", "sleep";
+		clock-frequency = <I2C_BITRATE_FAST_PLUS>;
+		status = "okay";
+
+		imu: imu@69 {
+			compatible = "invensense,icm45608";
+			reg = <0x69>;
+			int-gpios = <&gpio32_63 6 GPIO_ACTIVE_HIGH>;      /* GPIO38 */
+			supply-gpios = <&gpio128_159 1 GPIO_ACTIVE_HIGH>; /* GPIO129 */
+			accel-fs-g = <4>;
+			gyro-fs-dps = <2000>;
+			zephyr,pm-device-runtime-auto;
+		};
+	};
+};
+
+/* I2C5 (IOM5, GPIO47/48, 400 kHz): PSoC 4000T touch + wear at 0x0C, Even's firmware. The
+ * driver can never send its DFU command (safety rule 8). */
 &iom5 {
 	i2c5: i2c {
-		status = "disabled";
+		pinctrl-0 = <&i2c5_default>;
+		pinctrl-1 = <&i2c5_sleep>;
+		pinctrl-names = "default", "sleep";
+		clock-frequency = <I2C_BITRATE_FAST>;
+		status = "okay";
+
+		touch: touch@c {
+			compatible = "even,g2-touch";
+			reg = <0x0c>;
+			attn-gpios = <&gpio0_31 27 GPIO_ACTIVE_LOW>;  /* GPIO27, falling edge */
+			reset-gpios = <&gpio0_31 10 GPIO_ACTIVE_LOW>; /* GPIO10 */
+			reset-settle-ms = <100>;
+		};
 	};
 };
 
@@ -157,66 +230,149 @@
 	};
 };
 
-&gpio0_31 {
-	status = "okay";
-};
-
-&gpio64_95 {
-	status = "okay";
-};
-
-&gpio96_127 {
-	status = "okay";
-};
-
-&gpio128_159 {
-	status = "okay";
-};
-
 /*
- * TODO(power): I2C7 — board A: nPM1300 PMIC at 0x6B; board B: BQ25180 charger at 0x6A +
- * BQ27427 gauge at 0x55. Which board our units have is open. Ambient light: TI OPT3007
- * (OPT3001-compatible) at 0x45, right temple only — bus unconfirmed, presumably this one.
+ * I2C7 (IOM7, GPIO22/23, 400 kHz): Nordic nPM1300 PMIC at 0x6B. Stock 2.4.0.24 always selects
+ * it (the BQ25180 + BQ27427 path is dead code). IRQ: PMIC GPIO1 (GPOIRQ) -> Apollo GPIO4, rising.
+ * Rails and charger values are exactly stock's; BUCK2 and LDO1 are always-on so no Wisp code
+ * path can switch them off. The PMIC's timer is a 30.72 s watchdog that stock arms and kicks
+ * every second; it survives an Apollo reset, so Wisp kicks it too (src/hal/native/power.c).
  */
 &iom7 {
 	i2c7: i2c {
-		status = "disabled";
+		pinctrl-0 = <&i2c7_default>;
+		pinctrl-1 = <&i2c7_sleep>;
+		pinctrl-names = "default", "sleep";
+		clock-frequency = <I2C_BITRATE_FAST>;
+		status = "okay";
+
+		pmic: pmic@6b {
+			compatible = "nordic,npm1300";
+			reg = <0x6b>;
+			host-int-gpios = <&gpio0_31 4 GPIO_ACTIVE_HIGH>;
+			pmic-int-pin = <1>;
+
+			pmic_gpio: gpio-controller {
+				compatible = "nordic,npm1300-gpio";
+				gpio-controller;
+				#gpio-cells = <2>;
+				ngpios = <5>;
+			};
+
+			regulators {
+				compatible = "nordic,npm1300-regulator";
+
+				/* Panel core rail: off except while the panel runs (stock). 1.8 V on hw 6
+				 * (A6N-G), 1.1 V on JBD boards (npmx codes 8 / 1, read as 1.0 V + 0.1 V
+				 * steps [I]). The panel driver switches it. */
+				pmic_buck1: BUCK1 {
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+				};
+
+				pmic_buck2: BUCK2 {
+					regulator-min-microvolt = <3100000>;
+					regulator-max-microvolt = <3100000>;
+					regulator-always-on;
+				};
+
+				pmic_ldo1: LDO1 {
+					regulator-initial-mode = <NPM13XX_LDSW_MODE_LDO>;
+					regulator-min-microvolt = <1800000>;
+					regulator-max-microvolt = <1800000>;
+					regulator-always-on;
+				};
+
+				/* Load switch, on for hw_version >= 4, off on hw 6 (Hongshi panel). Its load
+				 * is not identified (JBD panel supply [I]); Wisp leaves it as it finds it. */
+				pmic_ldsw2: LDO2 {
+					regulator-initial-mode = <NPM13XX_LDSW_MODE_LDSW>;
+				};
+			};
+
+			charger: charger {
+				compatible = "nordic,npm1300-charger";
+				term-microvolt = <4450000>;
+				term-warm-microvolt = <4100000>;
+				current-microamp = <96000>;
+				dischg-limit-microamp = <1000000>;
+				vbus-limit-microamp = <500000>;
+				thermistor-ohms = <100000>;
+				thermistor-beta = <4250>;
+				thermistor-cold-millidegrees = <0>;
+				thermistor-cool-millidegrees = <10000>;
+				thermistor-warm-millidegrees = <45000>;
+				thermistor-hot-millidegrees = <60000>;
+				vbatlow-charge-enable;
+				charging-enable;
+			};
+
+			pmic_wdt: watchdog {
+				compatible = "nordic,npm1300-wdt";
+			};
+		};
 	};
 };
 
 /*
- * TODO(display): MSPI0, quad SPI, 320 B/line — microLED 640×480 4-bit (JBD4010 or
- * Hongshi A6N-G; variant and init sequence open).
+ * MSPI0: the microLED panel on CE0 (GPIO199, MNCE0_0). Serial: D0 GPIO64, D1 GPIO65, SCK GPIO72;
+ * quad 1-1-4 adds D2 GPIO66, D3 GPIO67. Stock: IRQ 20, SPI mode 0. Which panel is fitted follows
+ * the board's hw_version strap (6 = A6N-G, DVT3; 5 = JBD4010, DVT2): A6N-G is the default here
+ * because DVT3 is the later build [I]; tests/drivers/jbd4010.overlay switches to the JBD panel.
  */
 &mspi0 {
-	status = "disabled";
+	/* State 2 is the per-device state the Ambiq MSPI driver applies on a device config. */
+	pinctrl-0 = <&mspi0_default>;
+	pinctrl-1 = <&mspi0_sleep>;
+	pinctrl-2 = <&mspi0_default>;
+	pinctrl-names = "default", "sleep", "panel";
+	ce-gpios = <&gpio192_223 7 GPIO_ACTIVE_LOW>;
+	cmdq-buffer-location = "SRAM_NO_CACHE";
+	cmdq-buffer-size = <256>;
+	zephyr,pm-device-runtime-auto;
+	status = "okay";
+
+	uled: panel@0 {
+		compatible = "even,g2-uled";
+		reg = <0>;
+		panel = "a6n-g";
+		mspi-max-frequency = <31250000>;
+		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
+		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
+		mspi-hardware-ce-num = <0>;
+		vdd-supply = <&pmic_buck1>;
+		en-a-gpios = <&gpio128_159 14 GPIO_ACTIVE_HIGH>; /* GPIO142 */
+		en-b-gpios = <&gpio128_159 0 GPIO_ACTIVE_HIGH>;  /* GPIO128 */
+		offset-x = <8>;
+		offset-y = <8>;
+		zephyr,pm-device-runtime-auto;
+	};
 };
 
 /*
- * TODO(NOR): MX25U25643G 32 MiB on MSPI (instance unconfirmed): littlefs at 0x1400000
- * (ota/s200_firmware_ota.bin staging, wisp/rescue.bin), FlashDB at 0x1FC0000.
+ * MSPI1: the NOR (MX25U25643G or GD25LE256H), pads 49, 95-98, 103. Owned by Wisp Boot today;
+ * the app's littlefs driver comes with the storage HAL.
  */
 &mspi1 {
 	status = "disabled";
 };
 
-/* TODO(audio): PDM0 — extra mic path on the Apollo. */
+/* PDM0 (GPIO50/51): a second mic path; which mic it carries is open. */
 &pdm0 {
 	status = "disabled";
 };
 
-/* TODO(audio): I2S — GX8002 voice codec, 16 kHz 16-bit 2 ch out. Codec firmware stays stock. */
+/* I2S0 RX slave (CLK GPIO100, WS GPIO102, DATA GPIO101): GX8002 PCM. Codec firmware stays stock;
+ * its control UART is UART3 (TX GPIO73, RX GPIO69, 115200), power GPIO134 -> 143 -> 146. */
 &i2s0 {
 	status = "disabled";
 };
 
-/* TODO(display): NemaGFX GPU. */
+/* NemaGFX GPU: not used by the flush path. */
 &gpu {
 	status = "disabled";
 };
 
 /*
- * TODO(buzzer): PWM piezo on GPIO145 (no speaker). TODO(inter-temple link): UART over the
- * frame flex (TinyFrame), instance and baud open. TODO(case): pogo UART 1 Mbaud (UART2 in
- * stock, per g2emu).
+ * Not described yet: buzzer (GPIO145 = TIMER7 output 0, PWM), inter-temple link (UART0, GPIO0/2,
+ * 921600), case link (UART2, GPIO42/44, 1 Mbaud; the case itself is seen as VBUS on the PMIC).
  */

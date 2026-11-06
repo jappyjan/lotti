@@ -2,18 +2,20 @@
 # SPDX-License-Identifier: MIT
 # wisp-fw:test. Emulation and host only — nothing here talks to hardware.
 #
-#   1. Wisp Boot decision logic, host unit tests (gcc + ASan/UBSan); Wisp Boot build + the
-#      image and rule 8 gates on it (the rung-3 fault tests are wisp-fw:boot-test)
+#   1. Wisp Boot decision logic and the display flush path, host unit tests (gcc + ASan/UBSan);
+#      Wisp Boot build + the image and rule 8 gates on it (the rung-3 fault tests are
+#      wisp-fw:boot-test; the driver tests in Renode are wisp-fw:drivers-test)
 #   2. the BLE transport adapter (src/link/), host unit tests with a fake GATT target
 #   3. post-build gate unit tests (synthetic images, configs, maps, symbols, units, code)
-#   4. Renode boot of the built image: banner, Bluetooth gives up on the absent EM9305
-#      without any update / recovery attempt, heartbeats on UART1
+#   4. Renode boot of the built image: banner, drivers up against the bus models, Bluetooth
+#      gives up on the absent EM9305 without any update / recovery attempt, heartbeats on UART1
 #   5. end to end over BLE: the same app on native_sim/native/64 behind a virtual controller
 #      (Bumble), the TypeScript SDK completes HELLO through a GATT central (tests/ble/)
 #   6. safety rule 8 negative builds: each must FAIL, with the rule 8 message
 #        a. Bluetooth on without CONFIG_WISP_BT_ALLOWED  -> configure-time gate
 #        b. hal_ambiq without Wisp's patch                -> configure-time gate
 #        c. Zephyr without Wisp's patch                   -> configure-time gate
+#           (and, Bluetooth off, without the I2C byte-order patch -> configure-time check)
 #        d. hal_ambiq without the patch, gate skipped     -> post-build gate (TEST ONLY switch)
 #        e. EM9305 image linked (canary)                  -> post-build gate
 #        f. the canary ELF with symbols stripped          -> byte check alone still rejects it
@@ -29,10 +31,13 @@ step() { printf '\n=== wisp-fw test: %s\n' "$*"; }
 san=(-std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-recover=all)
 core="$REPO_ROOT/packages/wisp-core"
 
-step "1/6 Wisp Boot host unit tests"
+step "1/6 host unit tests (Wisp Boot, display flush)"
 cc "${san[@]}" -I"$APP_DIR/src/boot" "$APP_DIR/src/boot/wisp_boot.c" "$APP_DIR/tests/boot/test_wisp_boot.c" \
 	-o "$out/test_wisp_boot"
 "$out/test_wisp_boot"
+cc "${san[@]}" -I"$APP_DIR/src/display" "$APP_DIR/src/display/wisp_flush.c" \
+	"$APP_DIR/tests/display/test_flush.c" -o "$out/test_flush"
+"$out/test_flush"
 "$APP_DIR/scripts/build_boot.sh" >/dev/null
 echo "ok: Wisp Boot built, check_image + check_rule8 passed"
 
@@ -95,7 +100,7 @@ expect_fail() {
 		exit 1
 	fi
 	echo "ok: '$name' rejected:"
-	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL" "$log" | sed 's/^/    /' | head -n 8
+	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing" "$log" | sed 's/^/    /' | head -n 8
 }
 west_build() { # <name> <cmake args...>
 	local name="$1"
@@ -139,6 +144,9 @@ expect_fail hal-unpatched "hal_ambiq-0001-em9305-never-write-nvm.patch is not ap
 	cmake_build hal-unpatched "$ZEPHYR_BASE" "$pristine_hal" 1
 expect_fail zephyr-unpatched "zephyr-0001-em9305-never-write-nvm.patch is not applied" \
 	cmake_build zephyr-unpatched "$pristine_zephyr" "$hal" 1
+expect_fail zephyr-i2c-unpatched "WISP: patch missing: zephyr-0002-i2c-ambiq-offset-byte-order.patch" \
+	cmake_build zephyr-i2c-unpatched "$pristine_zephyr" "$hal" 1 \
+	"-DEXTRA_CONF_FILE=$APP_DIR/tests/drivers/bt_off.conf"
 expect_fail hal-unpatched-built "check_rule8: FAIL" \
 	cmake_build hal-unpatched-built "$ZEPHYR_BASE" "$pristine_hal" 0 -DWISP_RULE8_TEST_UNPATCHED=ON
 expect_fail canary "check_rule8: FAIL: forbidden symbol linked: ble_fw_image_bin_" \

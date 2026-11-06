@@ -42,6 +42,14 @@
       },
       "cache": false
     },
+    "drivers-test": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["setup"],
+      "options": {
+        "command": "apps/wisp-fw/scripts/drivers_test.sh"
+      },
+      "cache": false
+    },
     "build-boot": {
       "executor": "nx:run-commands",
       "dependsOn": ["setup"],

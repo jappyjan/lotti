@@ -51,7 +51,7 @@ if(CONFIG_BT OR CONFIG_AMBIQ_COMPONENT_USE_BT)
   option(WISP_RULE8_TEST_UNPATCHED
     "TEST ONLY: skip the patch check so wisp-fw:test can show the post-build gate rejects an unpatched BT image"
     OFF)
-  file(GLOB _wisp_patches ${CMAKE_CURRENT_LIST_DIR}/../third_party/ambiq/patches/*.patch)
+  file(GLOB _wisp_patches ${CMAKE_CURRENT_LIST_DIR}/../third_party/ambiq/patches/*em9305*.patch)
   if(NOT _wisp_patches)
     message(FATAL_ERROR "${_wisp_rule8}: no EM9305 patches found in third_party/ambiq/patches/.")
   endif()

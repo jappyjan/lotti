@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Vendor prefixes used by Wisp's out-of-tree bindings (merged with Zephyr's list).
+even	Even Realities
+jbd	Jade Bird Display
+hongshi	Hongshi Intelligence Technology

@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+description: |
+  G2 touchpad + wear controller: Infineon PSoC 4000T (CY8C4046FNI) running Even's firmware,
+  read over I2C (src/drivers/g2_touch.c, docs/wisp/hardware.md "Touch and wear"). Wisp only
+  reads it: the driver can never send command 2 (enter DFU), safety rule 8.
+
+compatible: "even,g2-touch"
+
+include: i2c-device.yaml
+
+properties:
+  attn-gpios:
+    type: phandle-array
+    required: true
+    description: Attention line (GPIO27). The PSoC pulls it low when a report is ready.
+  reset-gpios:
+    type: phandle-array
+    required: true
+    description: Reset (GPIO10, active low).
+  reset-settle-ms:
+    type: int
+    default: 100
+    description: Wait after releasing reset (stock 2.4.0.24 waits 100 ms; 2.2.6.10 waited 50).
