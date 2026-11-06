@@ -2,7 +2,7 @@
 
 Wisp is a replacement firmware for the Even Realities G2 glasses plus an SDK for phone apps. It is **generic**: Lotti is one app on top of it, not the reason for its shape. Anyone should be able to build a glasses app on Wisp without hacks.
 
-Status: M0 foundation landed (2026-11-06): `wisp-core` (C, 131 golden vectors), `wisp-sdk-ts`, `wisp-ota` (all 18 stock releases verified and repacked offline), `wisp-fw` (Zephyr skeleton booting in Renode). M1 in review: the display engine in `wisp-core` (layers, compositor, resources, text, animation, input) and `apps/wisp-sim` (the core in WebAssembly, a WebSocket link, a browser viewer, an SDK example with an end-to-end test). Protocol at draft 0.2. Nothing has been flashed. See [safety.md](safety.md) before touching hardware.
+Status: M0 foundation landed (2026-11-06): `wisp-core` (C, 131 golden vectors), `wisp-sdk-ts`, `wisp-ota` (all 18 stock releases verified and repacked offline), `wisp-fw` (Zephyr skeleton booting in Renode). M1 in review: the display engine in `wisp-core` (layers, compositor, resources, text, animation, input) and `apps/wisp-sim` (the core in WebAssembly, a WebSocket link, a browser viewer, an SDK example with an end-to-end test). Protocol at draft 0.2. M2 (rung 1) passed on the left temple on 2026-11-06: stock 2.4.0.24 repacked by `wisp-ota`, flashed over BLE from the Lotti app and back to pure stock (hardware log in safety.md). See [safety.md](safety.md) before touching hardware.
 
 - [Protocol v0](protocol.md) — the wire contract (firmware ⇄ SDK)
 - [Safety policy](safety.md) — brick rules and the flashing ladder
