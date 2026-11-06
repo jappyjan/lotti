@@ -26,6 +26,10 @@ public final class G2Link: NSObject, GlassesLink {
     static let controlNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E5402")
     /// Microphone: raw LC3 packets, no frame header (see `G2Microphone`).
     static let micNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E6402")
+    /// Stock OTA import (wisp-ota `protocol.ts`): write `…0001`, notify `…0002`, service `…1001`.
+    /// Only used by an exclusive arm session (the Wisp update screen).
+    static let otaWrite = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E0001")
+    static let otaNotify = CBUUID(string: "00002760-08C2-11E1-9073-0E8AC72E0002")
     /// Services to look for among peripherals that are already connected to the phone, e.g. by the
     /// Even app (they don't advertise). Any match is then filtered by name.
     static let connectedServices = [
@@ -49,6 +53,8 @@ public final class G2Link: NSObject, GlassesLink {
     @ObservationIgnored private var replyWaiters: [ReplyKey: Waiter<G2Message>] = [:]
     @ObservationIgnored private var armWaiter: (pairID: String, side: G2Side, waiter: Waiter<UUID>)?
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
+    /// The one arm opened for the Wisp update screen; while set, no Lotti session can start.
+    @ObservationIgnored private var exclusive: G2ExclusiveArm?
     @ObservationIgnored private var seq: UInt8 = 0
     @ObservationIgnored private var magic: UInt64 = 100
     @ObservationIgnored private var page = G2PagePlanner()
@@ -418,17 +424,19 @@ public final class G2Link: NSObject, GlassesLink {
     // MARK: - Connection steps
 
     private var isBusy: Bool {
+        if exclusive != nil { return true }
         if case .connecting = status { return true }
         return status.isConnected
     }
 
-    private func connectArm(_ id: UUID, side: G2Side) async throws -> Arm {
+    private func connectArm(_ id: UUID, side: G2Side, wantsOta: Bool = false) async throws -> Arm {
         guard let peripheral = peripherals[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
             throw GlassesLinkError.incompleteGlasses
         }
         peripherals[id] = peripheral
         peripheral.delegate = self
         let arm = Arm(side: side, peripheral: peripheral)
+        arm.wantsOta = wantsOta
         arms[side] = arm
 
         if peripheral.state != .connected {
@@ -490,6 +498,10 @@ public final class G2Link: NSObject, GlassesLink {
     }
 
     private func tearDown() {
+        // An open update session hears about it (Bluetooth off, `disconnect()`, a drop).
+        let session = exclusive
+        exclusive = nil
+        defer { session?.linkDropped("link closed") }
         heartbeat?.cancel()
         heartbeat = nil
         page.reset()
@@ -678,6 +690,12 @@ extension G2Link: @MainActor CBCentralManagerDelegate {
         log("disconnected \(peripheral.name ?? "?"): \(String(describing: error))")
         fail(peripheral.identifier, error ?? GlassesLinkError.notConnected)
         guard arms.values.contains(where: { $0.peripheral === peripheral }) else { return }
+        if let session = exclusive {
+            session.linkDropped(error?.localizedDescription ?? "disconnected")
+            tearDown()
+            status = .disconnected
+            return
+        }
         let wasConnected = status.isConnected
         tearDown()
         if wasConnected { status = .disconnected }
@@ -702,15 +720,23 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         for characteristic in service.characteristics ?? [] {
             if characteristic.uuid == Self.controlWrite { arm.write = characteristic }
             if characteristic.uuid == Self.controlNotify { arm.notify = characteristic }
-            if characteristic.uuid == Self.micNotify {
+            if characteristic.uuid == Self.micNotify, !arm.wantsOta {
                 arm.mic = characteristic
                 peripheral.setNotifyValue(true, for: characteristic)
             }
+            if arm.wantsOta, characteristic.uuid == Self.otaWrite { arm.otaWrite = characteristic }
+            if arm.wantsOta, characteristic.uuid == Self.otaNotify { arm.otaNotify = characteristic }
         }
         arm.pendingServices -= 1
         guard arm.pendingServices == 0 else { return }
         guard arm.write != nil, let notify = arm.notify else {
             return fail(peripheral.identifier, GlassesLinkError.missingCharacteristics)
+        }
+        if arm.wantsOta {
+            guard arm.otaWrite != nil, let otaNotify = arm.otaNotify else {
+                return fail(peripheral.identifier, GlassesLinkError.missingCharacteristics)
+            }
+            peripheral.setNotifyValue(true, for: otaNotify)
         }
         peripheral.setNotifyValue(true, for: notify)
     }
@@ -722,10 +748,16 @@ extension G2Link: @MainActor CBPeripheralDelegate {
             log("[Mic] \(arm(for: peripheral)?.side.rawValue ?? "?") notify \(characteristic.isNotifying ? "on" : "off")\(error.map { ", error: \($0.localizedDescription)" } ?? "")")
             return
         }
-        guard characteristic.uuid == Self.controlNotify else { return }
+        guard characteristic.uuid == Self.controlNotify || characteristic.uuid == Self.otaNotify,
+              let arm = arm(for: peripheral) else { return }
         if let error {
             fail(peripheral.identifier, error)
-        } else {
+            return
+        }
+        if characteristic.uuid == Self.controlNotify { arm.controlNotifying = characteristic.isNotifying }
+        if characteristic.uuid == Self.otaNotify { arm.otaNotifying = characteristic.isNotifying }
+        // A Lotti session needs `…5402`; an exclusive (OTA) arm needs `…0002` too.
+        if arm.controlNotifying, !arm.wantsOta || arm.otaNotifying {
             setupWaiters.removeValue(forKey: peripheral.identifier)?.resume(.success(()))
         }
     }
@@ -736,6 +768,10 @@ extension G2Link: @MainActor CBPeripheralDelegate {
         if characteristic.uuid == Self.micNotify, let data = characteristic.value {
             guard let arm = arm(for: peripheral) else { return }
             return receiveMicPacket([UInt8](data), from: arm.side)
+        }
+        if let session = exclusive, let arm = arm(for: peripheral), arm.side == session.temple,
+           let data = characteristic.value {
+            return receiveExclusive([UInt8](data), on: characteristic.uuid, arm: arm, session: session)
         }
         guard characteristic.uuid == Self.controlNotify, let arm = arm(for: peripheral),
               let data = characteristic.value else { return }
@@ -816,6 +852,12 @@ private final class Arm {
     var write: CBCharacteristic?
     var notify: CBCharacteristic?
     var mic: CBCharacteristic?
+    /// Exclusive (Wisp update) arm: also discover and subscribe the stock OTA characteristics.
+    var wantsOta = false
+    var otaWrite: CBCharacteristic?
+    var otaNotify: CBCharacteristic?
+    var controlNotifying = false
+    var otaNotifying = false
     var assembler = G2FrameAssembler()
     var pendingServices = 0
     var writeTail: Task<Void, Never>?
@@ -878,4 +920,170 @@ private final class Waiter<T: Sendable> {
 
 func hex(_ bytes: [UInt8]) -> String {
     bytes.map { String(format: "%02x", $0) }.joined()
+}
+
+// MARK: - Exclusive arm (Wisp update screen)
+
+/// Why `G2Link.openExclusiveArm` refused.
+public enum G2ExclusiveArmError: LocalizedError, Equatable {
+    case sessionActive(String)
+    case alreadyOpen
+    case unknownArm(G2Side)
+    case connectedElsewhere(G2Side)
+
+    public var errorDescription: String? {
+        switch self {
+        case .sessionActive(let state):
+            "A Lotti glasses session is active (\(state)). End it first: no other traffic may share the arm during an update."
+        case .alreadyOpen: "A temple is already open for the update screen."
+        case .unknownArm(let side):
+            "The \(side) arm isn't known yet. Connect the glasses in Lotti once so the app learns both arms, then end that session."
+        case .connectedElsewhere(let side):
+            "The \(side) arm is already connected to this phone by another app (the Even app?). Force-quit it, wait a few seconds and try again."
+        }
+    }
+}
+
+extension G2Link {
+    /// Opens one arm for the Wisp update screen, with nothing else on it: no auth handshake with
+    /// the other arm, no heartbeat, no page, no mic. Refuses while a Lotti session is connecting
+    /// or connected, and while the arm is connected to the phone by another app. While open,
+    /// `connect` and scanning are no-ops (`isBusy`).
+    public func openExclusiveArm(_ side: G2Side) async throws -> G2ExclusiveArm {
+        guard exclusive == nil else { throw G2ExclusiveArmError.alreadyOpen }
+        switch status {
+        case .disconnected, .failed, .bluetoothUnavailable: break
+        case .scanning: stopScan()
+        case .connecting(let step): throw G2ExclusiveArmError.sessionActive(step)
+        case .connected(let glasses): throw G2ExclusiveArmError.sessionActive("connected to \(glasses.name)")
+        }
+        guard let id = lastGlasses?.armID(side) else { throw G2ExclusiveArmError.unknownArm(side) }
+        await poweredOn()
+        let systemConnected = central.retrieveConnectedPeripherals(withServices: Self.connectedServices)
+        if systemConnected.contains(where: { $0.identifier == id }) {
+            throw G2ExclusiveArmError.connectedElsewhere(side)
+        }
+        let session = G2ExclusiveArm(link: self, temple: side)
+        exclusive = session  // blocks `connect` from here on
+        do {
+            _ = try await connectArm(id, side: side, wantsOta: true)
+        } catch {
+            if exclusive === session { tearDown() }
+            throw error
+        }
+        guard exclusive === session else { throw GlassesLinkError.notConnected }
+        log("exclusive \(side) arm open (OTA characteristics subscribed)")
+        return session
+    }
+
+    /// Whether an arm is open for the update screen.
+    public var exclusiveArmSide: G2Side? { exclusive?.temple }
+
+    fileprivate func closeExclusive(_ session: G2ExclusiveArm) {
+        guard exclusive === session else { return }
+        log("exclusive \(session.temple) arm closed")
+        tearDown()
+        status = .disconnected
+    }
+
+    fileprivate func writeExclusive(_ session: G2ExclusiveArm, _ channel: WispChannel, _ packet: [UInt8]) async throws {
+        guard exclusive === session, let arm = arms[session.temple] else { throw GlassesLinkError.notConnected }
+        await arm.waitUntilWritable()
+        let characteristic = channel == .ota ? arm.otaWrite : arm.write
+        guard exclusive === session, let characteristic, arm.peripheral.state == .connected else {
+            throw GlassesLinkError.notConnected
+        }
+        arm.peripheral.writeValue(Data(packet), for: characteristic, type: .withoutResponse)
+    }
+
+    /// sid 0x80 auth (what the Even app and a Lotti session send first), then sid 0x09 READ_BASIC,
+    /// both to this arm only. The reply must come from this arm (reply key includes the side).
+    fileprivate func readExclusiveStatus(_ session: G2ExclusiveArm) async throws -> G2Settings.Readback {
+        guard exclusive === session, let arm = arms[session.temple] else { throw GlassesLinkError.notConnected }
+        let authMagic = nextMagic()
+        let auth = try? await request(G2Payload.auth(magic: authMagic), sid: G2Service.deviceConfig,
+                                      flag: G2Flag.deviceConfig, magic: authMagic, to: arm,
+                                      step: "authenticating the \(session.temple) arm", seconds: 3)
+        log("exclusive \(session.temple) auth reply: \(auth.map { hex($0.payload) } ?? "none")")
+        let magic = nextMagic()
+        let reply = try await request(G2Settings.readBasic(magic: magic), sid: G2Service.settings, flag: G2Flag.request,
+                                      magic: magic, to: arm, step: "reading the \(session.temple) arm's status",
+                                      seconds: 4)
+        log("exclusive \(session.temple) settings reply: \(hex(reply.payload))")
+        guard let readback = G2Settings.decodeReadback(reply.payload) else {
+            throw GlassesLinkError.timeout("reading the \(session.temple) arm's status (unreadable reply)")
+        }
+        return readback
+    }
+
+    /// Raw notifications for the exclusive arm: everything goes to the OTA sender; control
+    /// replies also resolve `request` waiters (auth, settings read). No input, wear or IMU events.
+    private func receiveExclusive(_ bytes: [UInt8], on uuid: CBUUID, arm: Arm, session: G2ExclusiveArm) {
+        if uuid == Self.otaNotify {
+            session.onPacket?(.ota, bytes)
+        } else if uuid == Self.controlNotify {
+            session.onPacket?(.control, bytes)
+            if let message = arm.assembler.feed(bytes), let magic = message.magic {
+                let key = ReplyKey(side: arm.side, sid: message.sid, magic: magic)
+                replyWaiters.removeValue(forKey: key)?.resume(.success(message))
+            }
+        }
+    }
+}
+
+/// One arm opened exclusively for the Wisp update screen (`G2Link.openExclusiveArm`).
+@MainActor
+public final class G2ExclusiveArm: WispTempleSession {
+    public let temple: G2Side
+    public var onPacket: ((WispChannel, [UInt8]) -> Void)?
+    public var onDisconnect: ((String) -> Void)?
+    private weak var link: G2Link?
+    private var dropped = false
+
+    fileprivate init(link: G2Link, temple: G2Side) {
+        self.link = link
+        self.temple = temple
+    }
+
+    public func write(_ channel: WispChannel, _ packet: [UInt8]) async throws {
+        guard !dropped, let link else { throw GlassesLinkError.notConnected }
+        try await link.writeExclusive(self, channel, packet)
+    }
+
+    public func readStatus() async throws -> G2Settings.Readback {
+        guard !dropped, let link else { throw GlassesLinkError.notConnected }
+        return try await link.readExclusiveStatus(self)
+    }
+
+    public func close() {
+        dropped = true
+        link?.closeExclusive(self)
+    }
+
+    fileprivate func linkDropped(_ reason: String) {
+        guard !dropped else { return }
+        dropped = true
+        onDisconnect?(reason)
+    }
+}
+
+/// The real temple access for the update screen.
+@MainActor
+public final class G2TempleAccess: WispTempleAccess {
+    private let link: G2Link
+
+    public init(link: G2Link) { self.link = link }
+
+    public var blocker: String? {
+        if link.exclusiveArmSide != nil { return nil }
+        switch link.status {
+        case .connecting(let step): return "A Lotti glasses session is starting (\(step))."
+        case .connected: return "A Lotti glasses session is active."
+        default: return nil
+        }
+    }
+
+    public func open(_ side: G2Side) async throws -> any WispTempleSession {
+        try await link.openExclusiveArm(side)
+    }
 }

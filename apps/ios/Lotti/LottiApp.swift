@@ -148,6 +148,14 @@ enum Settings {
         set { UserDefaults.standard.set(newValue, forKey: wakeThresholdKey) }
     }
 
+    static let wispUpdateKey = "developer.wispUpdate"
+
+    /// Settings → Developer → "Wisp update screen". Off by default; shows the rung-1 firmware
+    /// update screen (`WispUpdateView`) when on.
+    static var wispUpdateEnabled: Bool {
+        UserDefaults.standard.object(forKey: wispUpdateKey) as? Bool ?? false
+    }
+
     static let speechLanguageKey = "speechLanguage"
     static let languages = [("de-DE", "Deutsch"), ("en-US", "English")]
 

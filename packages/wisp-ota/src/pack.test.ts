@@ -11,6 +11,7 @@ import {
   packMain,
   PackError,
   repackMain,
+  stockMainOnly,
   wrapMainImage,
   type PackMainOptions,
 } from './pack.ts';
@@ -353,5 +354,58 @@ describe('diffRepack', () => {
       { version: 's200_v2.2.6.99' },
     );
     assert.equal(diffRepack(stock, extra).ok, false);
+  });
+});
+
+describe('stockMainOnly (round trip back to stock)', () => {
+  const stock = syntheticStock('2.2.6.10');
+
+  it('keeps the main component byte-identical and drops everything else', () => {
+    const result = stockMainOnly(stock);
+    assert.equal(result.version, '2.2.6.10');
+    assert.equal(result.report.sendable, true);
+    assert.equal(result.diff.ok, true, result.diff.problems.join('; '));
+    assert.equal(result.diff.payloadBytesChanged, 0);
+    assert.deepEqual(result.diff.componentHeaderChanges, []);
+    assert.equal(result.diff.droppedComponents.length, 5);
+    const s = parseBundle(stock);
+    const out = parseBundle(result.bytes);
+    assert.equal(out.componentCount, 1);
+    assert.equal(out.version.text, 's200_v2.2.6.10');
+    const main = s.components.find((c) => c.header.type === 0)!;
+    assert.deepEqual(out.components[0]!.payload, main.payload);
+    assert.equal(out.components[0]!.toc.crc32c, main.toc.crc32c);
+    assert.equal(out.components[0]!.toc.entryId, main.toc.entryId);
+    assert.equal(out.buildDate.text, s.buildDate.text);
+  });
+
+  it('undoes a repack: stock → repack → stockMainOnly(stock) equals the stock main', () => {
+    const repacked = repackMain(stock, '2.2.6.19');
+    const back = stockMainOnly(stock);
+    assert.notDeepEqual(repacked.bytes, back.bytes);
+    assert.equal(diffRepack(stock, back.bytes).payloadBytesChanged, 0);
+  });
+
+  it('keeps the entry id of five-component stock bundles', () => {
+    const five = syntheticStock('2.2.4.34', undefined, false);
+    assert.equal(
+      parseBundle(stockMainOnly(five).bytes).components[0]!.toc.entryId,
+      5,
+    );
+  });
+
+  it('refuses a stock bundle with a bad CRC', () => {
+    const broken = stock.slice();
+    broken[broken.length - 100]! ^= 1;
+    assert.throws(() => stockMainOnly(broken), GuardError);
+  });
+
+  it('refuses a stock bundle whose main image breaks a guard', () => {
+    const app = syntheticApp({ size: 0x2000 });
+    writeU32(app, 0, 0x10000000); // SP outside SRAM
+    const bad = rawBundle([mainComponent(syntheticMainPayload(app))], {
+      version: 's200_v2.2.6.10',
+    });
+    assert.throws(() => stockMainOnly(bad), GuardError);
   });
 });

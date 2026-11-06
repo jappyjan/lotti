@@ -36,11 +36,13 @@ export {
   packMain,
   PackError,
   repackMain,
+  stockMainOnly,
   stockVersionFromHeader,
   wrapMainImage,
   type PackMainOptions,
   type PackResult,
   type RepackResult,
+  type StockMainResult,
 } from './pack.ts';
 export {
   diffRepack,
