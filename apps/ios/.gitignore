@@ -1,1 +1,4 @@
 Config/Local.xcconfig
+
+# wisp-ota JS bundles, copied in by scripts/xcode.sh from packages/wisp-ota-jsc/dist
+Lotti/Wisp/Generated/

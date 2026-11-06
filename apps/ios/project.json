@@ -3,25 +3,57 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "sourceRoot": "apps/ios/Lotti",
-  "implicitDependencies": ["lotti-kit"],
+  "implicitDependencies": ["lotti-kit", "wisp-ota-jsc"],
   "tags": ["platform:ios"],
   "targets": {
     "build": {
       "executor": "nx:run-commands",
-      "options": { "command": "apps/ios/scripts/xcode.sh build" },
-      "inputs": ["default", "^default"],
-      "cache": true
+      "options": {
+        "command": "apps/ios/scripts/xcode.sh build"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/packages/wisp-ota-jsc/dist/*.js"
+      ],
+      "cache": true,
+      "dependsOn": [
+        {
+          "projects": ["wisp-ota-jsc"],
+          "target": "bundle"
+        }
+      ]
     },
     "test": {
       "executor": "nx:run-commands",
-      "options": { "command": "apps/ios/scripts/xcode.sh test" },
-      "inputs": ["default", "^default"],
-      "cache": true
+      "options": {
+        "command": "apps/ios/scripts/xcode.sh test"
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/packages/wisp-ota-jsc/dist/*.js"
+      ],
+      "cache": true,
+      "dependsOn": [
+        {
+          "projects": ["wisp-ota-jsc"],
+          "target": "bundle"
+        }
+      ]
     },
     "run-device": {
       "executor": "nx:run-commands",
-      "options": { "command": "apps/ios/scripts/xcode.sh run-device" },
-      "continuous": true
+      "options": {
+        "command": "apps/ios/scripts/xcode.sh run-device"
+      },
+      "continuous": true,
+      "dependsOn": [
+        {
+          "projects": ["wisp-ota-jsc"],
+          "target": "bundle"
+        }
+      ]
     }
   }
 }

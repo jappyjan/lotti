@@ -1,0 +1,11 @@
+{
+  "name": "@wisp/ota-jsc",
+  "version": "0.1.0",
+  "description": "@wisp/ota bundled for JavaScriptCore (the Lotti iOS app's Wisp update screen). Glue only; every guard stays in @wisp/ota.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  }
+}

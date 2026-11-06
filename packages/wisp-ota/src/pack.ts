@@ -308,3 +308,61 @@ export function repackMain(
     diff,
   };
 }
+
+export interface StockMainResult extends PackResult {
+  version: string;
+  /** Structural diff against the stock bundle: proves nothing in the main component changed. */
+  diff: RepackDiff;
+}
+
+/**
+ * The round trip back from rung 1: the stock main component **unchanged**
+ * (component header and payload byte-identical, same version, same CRCs), as
+ * a main-only bundle, so the stock OTA sender (which only sends main-only
+ * bundles) can put pure stock back. The other stock components are dropped
+ * (rule 2). Refuses unless the structural diff shows zero changed bytes.
+ */
+export function stockMainOnly(stock: Uint8Array): StockMainResult {
+  const stockReport = verifyBundle(stock);
+  if (!stockReport.ok) {
+    throw new GuardError(
+      'stock bundle fails verification',
+      stockReport.guards.filter((g) => !g.ok && g.scope === 'integrity'),
+    );
+  }
+  const parsed = parseBundle(stock);
+  const version = stockVersionFromHeader(parsed.version.text);
+  const main = mainComponents(parsed)[0]!;
+  const payload = main.payload.slice();
+  checkPayloadOrThrow(payload, 'stock main image');
+  const bytes = assembleMainOnly(payload, {
+    version: headerVersion(version),
+    buildDate: parsed.buildDate.text,
+    buildTime: parsed.buildTime.text,
+    entryId: main.toc.entryId,
+  });
+  const report = finalCheck(bytes, payload.length);
+  const diff = diffRepack(stock, bytes);
+  if (
+    !diff.ok ||
+    diff.payloadBytesChanged !== 0 ||
+    diff.componentHeaderChanges.length !== 0
+  ) {
+    throw new PackError(
+      `stock main-only bundle differs from stock: ${diff.problems.join('; ') || 'changed bytes'}`,
+    );
+  }
+  const out = parseBundle(bytes);
+  if (
+    !equalBytes(
+      bytes.subarray(
+        out.components[0]!.toc.offset,
+        out.components[0]!.toc.offset + COMPONENT_HEADER_SIZE,
+      ),
+      stock.subarray(main.toc.offset, main.toc.offset + COMPONENT_HEADER_SIZE),
+    )
+  ) {
+    throw new PackError('component header differs from stock');
+  }
+  return { bytes, report, version, diff };
+}

@@ -6,6 +6,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppServices.self) private var services
     @AppStorage(Settings.speechLanguageKey) private var speechLanguage = Settings.speechLanguage
+    @AppStorage(Settings.wispUpdateKey) private var wispUpdate = false
 
     var body: some View {
         List {
@@ -39,6 +40,16 @@ struct SettingsView: View {
                 NavigationLink { PushView() } label: { row("Push notifications", "bell.badge", nil) }
                 NavigationLink { AdvancedSettingsView() } label: { row("Advanced", "slider.horizontal.3", nil) }
                 NavigationLink { DebugView(model: model, brain: services.brain, navigation: services.navigation) } label: { row("Debug", "ladybug", nil) }
+            }
+            Section {
+                Toggle(isOn: $wispUpdate) { Label("Wisp update screen", systemImage: "hammer") }
+                if wispUpdate {
+                    NavigationLink { WispUpdateView() } label: { row("Wisp update (rung 1)", "cpu.fill", nil) }
+                }
+            } header: {
+                Text("Developer")
+            } footer: {
+                Text("Off by default. Shows the rung-1 firmware screen for Wisp development (docs/wisp/safety.md). Don't turn it on unless you are flashing with Jan's go.")
             }
         }
         .navigationTitle("Settings")

@@ -45,6 +45,8 @@ if (!report.sendable) throw new Error(report.failed.join(', '));
 
 `packMain` and `repackMain` throw (`GuardError`, `PackError`) instead of returning anything unsafe. Both re-parse their own output from scratch and run every guard on it before returning.
 
+`stockMainOnly(stock)` is the round trip back from rung 1: the stock main component unchanged (component header and payload byte-identical, same version and CRCs) as a main-only bundle, because the sender only sends main-only bundles. It refuses unless `diffRepack` shows zero changed bytes. The iOS app uses it through `packages/wisp-ota-jsc`.
+
 ## Guards
 
 All guards are always evaluated, on everything `verify` sees and on everything the packer produces. Rules refer to the hard rules in [safety.md](../../docs/wisp/safety.md).
