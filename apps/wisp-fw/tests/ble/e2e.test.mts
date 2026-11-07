@@ -120,6 +120,14 @@ let bridge: Bridge;
 let firmware: ChildProcess;
 const firmwareLog = () =>
   readFileSync(logPath === '/dev/null' ? '/dev/null' : logPath, 'utf8');
+// Zephyr logs from a deferred thread: a line can land just after the event it precedes.
+async function logMatches(pattern: RegExp, timeoutMs = 2000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pattern.test(firmwareLog()) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return firmwareLog();
+}
 
 before(async () => {
   bridge = new Bridge(
@@ -226,7 +234,7 @@ test('BYE ends the session; advertising resumes', async () => {
     firmwareLog(),
     /session up: app 'com\.example\.e2e' \(native-e2e\)/,
   );
-  assert.match(firmwareLog(), /session ended/);
+  assert.match(await logMatches(/session ended/), /session ended/);
 });
 
 test('a connection without a session is dropped after 10 s', async () => {
@@ -238,5 +246,6 @@ test('a connection without a session is dropped after 10 s', async () => {
   const waited = Date.now() - t0;
   assert.ok(waited > 8000 && waited < 13_000, `dropped after ${waited} ms`);
   assert.equal(d.reason, 0x13, 'remote user terminated');
-  assert.match(firmwareLog(), /dropping a connection without a session/);
+  const without = /dropping a connection without a session/;
+  assert.match(await logMatches(without), without);
 });
