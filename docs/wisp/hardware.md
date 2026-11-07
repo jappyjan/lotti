@@ -242,7 +242,7 @@ Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, 
 - Which panel is fitted (hw_version 5 or 6), what GPIO142 / 128 / 68 do, the exact BUCK1 voltages (npmx codes 1 and 8), the meaning of most JBD opcodes and of the two trailing bytes of every pixel write.
 - Whether the panels tolerate Wisp's 31.25 MHz quad clock on the A6N-G (stock: 32 MHz).
 - The per-unit factory brightness factors (JBD M, A6N-G calibration byte); Wisp uses the neutral value.
-- Whether the nPM1300 watchdog is still armed after an Apollo reset into a new image.
+- ~~Whether the nPM1300 watchdog is still armed after an Apollo reset into a new image.~~ Yes [I, strong]: after the case relay's reset, a temple held in the patched bootloader was power-cycled 30.3–31.4 s later (2026-11-07), which fits the app's 30.72 s period and 1 s kicks ([recovery.md](recovery.md#the-temples-watchdog-the-npm1300)).
 - I2C pull-ups (the stock pad config `0x4200` is not decoded; Wisp enables the internal pull-ups).
 - The ICM-45608's per-mode currents; whether the OPT3007 is fitted on the left temple; which mic PDM0 carries.
 - Everything timing-related: Renode completes every bus transfer at once.
@@ -279,7 +279,7 @@ Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, 
 - SWD pad location and a working attach: unlabelled, unmapped, behind a glued pod; see [recovery.md](recovery.md#1-swd-on-the-temples).
 - INFO0/INFOC provisioning (does SBL UART recovery exist on retail units?).
 - Which panel variant our units have (JBD4010 = hw_version 5, A6N-G = hw_version 6). Answered by one stock log line (`[BSP]hw_version: %d`); the init sequences are in [Native drivers](#native-drivers-stock-24024). The power board is answered: stock 2.4.0.24 only drives the nPM1300.
-- Whether the nPM1300 watchdog that stock arms (30.72 s, reset mode) is still running when a new image boots after an Apollo reset. Wisp kicks and stops it at boot either way.
+- ~~Whether the nPM1300 watchdog that stock arms (30.72 s, reset mode) is still running when a new image boots after an Apollo reset.~~ It is [I, strong; recovery.md, "The temple's watchdog"]: an Apollo510 reset does not stop it, so any code that runs longer than ~30 s after stock (the patched loader, Wisp Boot, a new image) must kick or stop it. Wisp kicks and stops it at boot; the W18 RAM programs kick it.
 - EM9305: firmware patch load at boot needed? Wire format of its DFU.
 - Inter-temple UART: baud rate, real throughput.
 - Whether SRAM survives a software POR / watchdog reset on the real chip (Wisp does not rely on it; rung 3 fills SRAM with `0xA5` on every reset).

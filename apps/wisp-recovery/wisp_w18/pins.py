@@ -46,7 +46,27 @@ PROGRAMS = {
     "checksum": "4bbd4bfbd4f403b9da4967da4a88b23d61f99f00e523cd527262ce10347fc4ac",
     "dump": "93caf00914220b16a2d1c1995215e42e9a253be5cf451d9bbe92fac9f6d205bb",
     "recover": "f046754b6ecba4dd4e3c8e7aa568a713e0961e7f286e98a6f96f955882408732",
+    # Ours (MIT, wisp_w18/programs/, built by programs/build.sh with drdaeman's toolchain, which
+    # rebuilds the three above byte for byte): they feed the temple's nPM1300 watchdog
+    # (pmic_kick.h; recovery.md, "The temple's watchdog"). feed kicks once and returns the status;
+    # dump_fed and recover_fed are dump.c and recover.c kicking at most once a second; they stop
+    # with result 2 (dump_fed) or 6 (recover_fed) when a kick cannot power IOM7 any more.
+    "feed": "bd72c6b14fee4fbeee890d14a9a8e9ccd33a5b8cb071b0f9b1aa00ea7a7409d9",
+    "dump_fed": "7ac581fd2028ff167ca0461ea9c844dc3dfd2842cabdfcc1637a332a28aafbc5",
+    "recover_fed": "8f5cefb93786f676b8d5c8131b3c6999775dc36bd59b9a4990f2b40678d6f610",
 }
+# What the feeding programs use of the patched 2.3.2.14 bootloader [S: disassembly, and the IOM7
+# state read through the loader in Renode], valid only while it is the one in MRAM (every session
+# checks its CRC before it runs any program that calls into it):
+IOM7_HAL_HANDLE = 0x2001_81F8  # am_hal_iom state of IOM7, saved by HAL_I2CInit (0x430852)
+I2C_TABLE_ENTRY_7 = 0x2000_03E8  # the bootloader's I2C table, entry 7: {7, IOM7_HAL_HANDLE, ...}
+IOM_POWER_CTRL = 0x0042_CCD1  # am_hal_iom_power_ctrl (Thumb); WAKE/DEEPSLEEP with retain
+TICK_COUNT = 0x0041_60E9  # xTaskGetTickCount (Thumb) [D platform.h]; 1024 ticks a second
+# The temple's watchdog [S, hardware.md]: the stock app arms the nPM1300 timer (I2C7 = IOM7,
+# address 0x6B) in reset mode, 30.72 s, and kicks it every second (TIMER TASKWDOGKICK, 0x0704 = 1).
+# An Apollo510 reset does not stop it, and the bootloader and the loader never kick it.
+PMIC_WATCHDOG_S = 30.72
+PMIC_KICK_WIRE = bytes((0x07, 0x04, 0x01))
 # recover.bin calls the stock 2.3.2.14 MRAM wrapper at this Thumb address [D recover.c]; it is
 # only valid while the patched (2.3.2.14-based) bootloader is the one in MRAM, which every
 # loader session proves first (preflight hash of [BOOT_BASE, +PATCHED_BOOTLOADER_BYTES)).

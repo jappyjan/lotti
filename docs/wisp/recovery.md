@@ -214,7 +214,7 @@ What can actually interrupt one second of a running, battery-powered temple: its
 
 `apps/wisp-fw/tests/boot/w18.py` runs the **patched bootloader** (rebuilt by `w18.py` from the cache) on the rung-3 platform with the stock 2.4.0.24 main app, and replaces UART2 by `WispCaseLink` (`renode/models/WispCaseLink.cs`): a lockstep TCP bridge, so the **real `w18.py` host code** (`Session`, the loader protocol, the pinned RAM programs) drives the **real loader** byte for byte, as it would through the case relay. Virtual time stops while the host thinks, the deterministic equivalent of the relay's G2TX/G2RX exchange.
 
-Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs end in their expected state** (7 session and boot cases, 27 install end states). `recover-relay` was added the same evening and passes; the other session and boot cases passed again with it. In that rerun, two install states over the 2.4.0.24 bootloader, k = 35 and 36, stopped Renode answering its monitor. The base branch's harness hangs the same way on k = 35. These cases run no host code, so the hang is unrelated to the relay changes; it is still open. On 2026-11-07, after the session-time guard: `hello`, `recover-relay`, `recover-cut-40pct` and the new `recover-split` pass again (the k = 35/36 install hang is unchanged and was not rerun); rung 3 (`wisp-fw:boot-test`) passes 26/26 on 2.4.0.24.
+Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs end in their expected state** (7 session and boot cases, 27 install end states). `recover-relay` was added the same evening and passes; the other session and boot cases passed again with it. In that rerun, two install states over the 2.4.0.24 bootloader, k = 35 and 36, stopped Renode answering its monitor. The base branch's harness hangs the same way on k = 35. These cases run no host code, so the hang is unrelated to the relay changes; it is still open. On 2026-11-07, after the session-time guard: `hello`, `recover-relay`, `recover-cut-40pct` and the new `recover-split` pass again (the k = 35/36 install hang is unchanged and was not rerun); rung 3 (`wisp-fw:boot-test`) passes 26/26 on 2.4.0.24. Later on 2026-11-07, with IOM7 behind the nPM1300 watchdog model: `temple-wdt-unfed`, `temple-wdt-fed` and `recover-fed` pass, and `hello` passes again (the other cases were not rerun; the model is transparent until a case arms it).
 
 | Case                                                                           | What runs                                                                                                                                                                                     | Result                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -226,6 +226,8 @@ Results on 2026-11-06 (t3-worker, Renode 1.16.1, [C, emulation]): **all 34 runs 
 | `recover-relay`                                                                | the same, every frame through the case relay's framing                                                                                                                                        | `RelayPortLink` (the G2RQ, G2TX/G2RX and G2EX/G2RS code `CaseRelayLink` runs) over `relay_model.RelayModel` (drdaeman's `case_exchange.c` in Python): 245,795 exchanges, the same MRAM end state, relay exit status 6; stock 2.4.0.24 boots                                                          |
 | `recover-cut-40pct`                                                            | the same, **power cut after ROM write 5,781** (about 40 %)                                                                                                                                    | session 1 sees a `HELO` instead of a reply and stops (`TempleReset`, no release). The temple reboots into the loader again because the app is still dead. A fresh session 2 writes and verifies everything; stock boots                                                                              |
 | `recover-split`                                                                | the same dead temple, `recover`'s write split over relay sessions (`AppWriter`, 30 s budget of host wall time; parts are sized from the slowest rate seen), the temple reset between sessions | added 2026-11-07: every session after the first CRC-checks the body so far, then adds a part; 197 sessions on a loaded host, none over the budget (longest 26.3 s), relay exit status 6 each; the vectors in the last; MRAM = stock (CRC `1c340963`), bootloader unchanged; **stock 2.4.0.24 boots** |
+| `temple-wdt-unfed`, `temple-wdt-fed` | the temple's nPM1300 watchdog (`WispPmicWdt` on IOM7, armed at power-on, period scaled to 2.5 s of virtual time); the same work with drdaeman's programs and with the feed | added 2026-11-07: unfed, the temple is power-cycled mid-session (`HELO` instead of a reply); fed, 5 kicks and nothing else to the PMIC, no power cycle; stock boots after both ([The temple's watchdog](#the-temples-watchdog-the-npm1300)) |
+| `recover-fed` | a dead temple recovered in **one** session with `recover_fed.bin` under the armed watchdog | added 2026-11-07: 3,700,080 B, CRC `1c340963`, 11 kicks, no power cycle, bootloader unchanged, **stock 2.4.0.24 boots** |
 | `install-over-2.4.0.24-k` (k = 0, 1, 2, 9, 10, 11, 19, 29, 30, 31, 36, 37, 38) | MRAM = first k of the 38 new pages, the rest the 2.4.0.24 bootloader                                                                                                                          | k = 0: boots stock. **k = 1 … 37: brick** (UsageFault loop in the bootloader, no `HELO`, no app). k = 38: boots stock with the loader's `HELO`                                                                                                                                                       |
 | `install-over-2.3.2.14-k` (k = 0 … 38 as above, plus 35)                       | the same over a 2.3.2.14 bootloader                                                                                                                                                           | k ≤ 30: boots stock (those pages are byte-identical). **k = 31 … 37: brick** (the hook page `0x42E000` is new, the loader pages `0x434000`–`0x435FFF` aren't yet). k = 38: boots stock with `HELO`                                                                                                   |
 
@@ -240,7 +242,7 @@ Model limits, in addition to rung 3's ([apps/wisp-fw/README.md](../../apps/wisp-
 
 ### Timing on hardware (estimates [I])
 
-Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 bytes at 1 Mbaud (~0.7 ms) and two CH340 USB round trips: estimated **7–10 ms per exchange**. `recover` streams the 3,700,064-byte body in 16-byte `INPUT_DATA` packets (231,254 exchanges) plus one progress report per 256 bytes (14,454), with the temple held in the bootloader (display off) in the case. `w18.py recover` skips drdaeman's full backup (the content to be replaced is checked by CRC instead), which would double that. `loader-hello` takes a few seconds; `info-dump` about 300 exchanges. **Measured on 2026-11-06 (F1): 17.5 ms per exchange [C].** A one-session `recover` would therefore take about 72 min, not 30–45. With the old relay, sessions stalled after about 20 s (the case's watchdog), so `recover` ran in 12 s sessions: about 3–3.5 h. The relay that feeds the watchdog brings it back to **about 72 min in one session, or about 75 min in the default 600 s parts** ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog), F2 below).
+Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 bytes at 1 Mbaud (~0.7 ms) and two CH340 USB round trips: estimated **7–10 ms per exchange**. `recover` streams the 3,700,064-byte body in 16-byte `INPUT_DATA` packets (231,254 exchanges) plus one progress report per 256 bytes (14,454), with the temple held in the bootloader (display off) in the case. `w18.py recover` skips drdaeman's full backup (the content to be replaced is checked by CRC instead), which would double that. `loader-hello` takes a few seconds; `info-dump` about 300 exchanges. **Measured on 2026-11-06 (F1): 17.5 ms per exchange [C].** A one-session `recover` would therefore take about 72 min, not 30–45. With the old relay, sessions stalled after about 20 s (the case's watchdog), so `recover` ran in 12 s sessions: about 3–3.5 h. The relay that feeds the case's watchdog and the programs that feed the temple's bring it back to **about 72 min in one session** ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog), [The temple's watchdog](#the-temples-watchdog-the-npm1300), F2 below). With the case fed but not the temple, the fallback is 20 s sessions: about 280 sessions, about 2.5 h.
 
 ### Tooling (`apps/wisp-recovery/w18.py`)
 
@@ -251,9 +253,9 @@ Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 by
 | `loader-hello --side S`                                                                          | nothing (temple reset by the case)                            | the bootloader region's CRC is the pinned image's                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `info-dump --side S`                                                                             | nothing                                                       | as above. Reads MCUCTRL, PWRCTRL; INFO0 (MRAM or, if powered, OTP); INFOC and the DCU/LCS registers **only if their power domain is already on**; it never powers anything up                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `link-soak --side S [--bytes N] [--max-session-s T \| --idle-s P]`                               | nothing (temple reset by the case)                            | as `loader-hello`. Streams N bytes (default 1 MiB, about 65,536 exchanges) of the app region **out** with `dump`, checks them against `checksum` of the same range, and reports the exchange count and time per exchange. A session as long and dense as `recover`'s, without a write. `--max-session-s T` splits it into sessions that each end T s after the relay starts, every part CRC-checked. `--idle-s P` first keeps the relay running P s with empty `G2TX` (no temple traffic): the wall-time-or-exchanges experiment, and a quick check that the relay feeds the case watchdog                                                                                                                                                                                                           |
-| `recover --side S --image .wisp-cache/stock/g2-2.4.0.24.bin [--max-session-s T] [--resume-at N]` | MRAM `0x438000–0x7BF56F` of side S, via the loader            | the image is the pinned stock 2.4.0.24 main (`df8cfddf…`); the bootloader CRC matches and the update flag is clear (else `--allow-pending-flag`), in every session; every write is inside the app region (the flag record and everything else are refused in code). Writes the body in parts, one per session ending T s after the relay starts (default 600 with the default relay, 12 with `--case-profile observed-33`; 0 = one session); each session first CRC-checks the body written so far, then CRC-checks its part. The 16 vector bytes go last, once, in a session that has just CRC-checked the whole body; then the full CRC. A stop prints `--resume-at N`; a resumed run CRC-checks those N bytes before writing. A HELO in the middle (temple reset) stops the session without a release |
+| `recover --side S --image .wisp-cache/stock/g2-2.4.0.24.bin [--max-session-s T] [--resume-at N]` | MRAM `0x438000–0x7BF56F` of side S, via the loader            | the image is the pinned stock 2.4.0.24 main (`df8cfddf…`); the bootloader CRC matches and the update flag is clear (else `--allow-pending-flag`), in every session; every write is inside the app region (the flag record and everything else are refused in code). Writes the body in one session by default (both watchdogs fed), or in parts, one per session ending T s after the relay starts (default 20 with `--no-temple-feed`, 12 with `--case-profile observed-33`; 0 = one session); each session first CRC-checks the body written so far, then CRC-checks its part. The 16 vector bytes go last, once, in a session that has just CRC-checked the whole body; then the full CRC. A stop prints `--resume-at N`; a resumed run CRC-checks those N bytes before writing. A HELO in the middle (temple reset) stops the session without a release |
 
-Every case command takes `--case-profile` (default `observed-33-feed`, the relay that feeds the case watchdog; `observed-33` is the old one). Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`, and sessions through the relay framing on a relay model and on drdaeman's real relay binary under Unicorn, with and without the watchdog feed, against an emulated YHM4005) and `wisp-fw:w18-test` (Renode).
+Every case command takes `--case-profile` (default `observed-33-feed`, the relay that feeds the case watchdog; `observed-33` is the old one) and feeds the temple's nPM1300 watchdog unless given `--no-temple-feed` ([The temple's watchdog](#the-temples-watchdog-the-npm1300)). Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT) and ours, `feed`, `dump_fed`, `recover_fed` (pinned, MIT, built by `wisp_w18/programs/build.sh`). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`, and sessions through the relay framing on a relay model and on drdaeman's real relay binary under Unicorn, with and without the watchdog feed, against an emulated YHM4005) and `wisp-fw:w18-test` (Renode).
 
 Every session's report keeps the error that stopped it, the step and write position, the cleanup failures beside it, and the last 16 exchanges (sent, received, time); the case's relay record is decoded. A relay exit status other than 6 is an error.
 
@@ -727,7 +729,7 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 **Tool changes.**
 
 - `--case-profile` defaults to `observed-33-feed` for every W18 command, so for both sides. `bootloader-plan` and `bootloader-install` check its pin.
-- `recover --max-session-s` defaults to 600 s with a feeding relay (12 s with `observed-33`; 0 = one session). `--resume-at` is unchanged.
+- `recover --max-session-s` defaulted to 600 s with a feeding relay (12 s with `observed-33`; 0 = one session). Superseded by [the temple's watchdog](#the-temples-watchdog-the-npm1300): 0 when the temple is fed too, 20 s without. `--resume-at` is unchanged.
 - `link-soak` still defaults to one session.
 
 **Remaining risk.**
@@ -736,6 +738,168 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 - **Pulse width.** The datasheet gives no minimum and says any falling edge feeds. Ours (4.5 ms) is longer than the app's (~1.5–2 ms at 64 MHz) and far longer than the app's ACMD bit pulses (23 and 90 delay-loop turns, start 350). It is the same kind of signal the app sends every 5 s.
 - **Per-exchange stall.** The probe does not rule out hypothesis 1 (a rare hang in stock HAL code with interrupts masked). If it exists, F1c stops at a random exchange, and the 4005 resets the case about 20 s after the last feed (record phase 1). `recover`'s default 600 s parts and `--resume-at` bound the cost of that.
 - **The unfed ROM time.** The ROM part before Go (case hash and relay load, ~7 s) and after `G2RS` is unfed. A session therefore has to start within ~18 s of the last feed. Back-to-back sessions start ~10 s apart. After a longer pause the case app runs and feeds.
+
+### The temple's watchdog: the nPM1300
+
+**Measured on hardware (2026-11-07, left temple, case watchdog fed; reported by the Mac thread).** With the case fed, a held temple now rebooted instead: the patched loader's `HELO` came back in the middle of the session. The relay's reset gives the temple a fresh boot 0.5–0.9 s after the relay starts.
+
+| Run | Reboot after the relay started |
+| --- | --- |
+| idle (empty `G2TX`s) | 31.4 s |
+| continuous `dump` traffic | 30.33 s, at exchange 1,571 |
+
+Until then `recover --max-session-s 20` was the fallback: about 280 sessions, about 2.5 h. The analysis below was done on t3-worker from the pinned images, drdaeman's sources, Ambiq's HAL headers, Zephyr's nPM1300 drivers and Renode. Nothing in it touched hardware. Tags: [C] checked (code, disassembly, or emulation as stated), [I] inferred, [D] datasheet or vendor source.
+
+**Verdict: the nPM1300 PMIC's watchdog, armed by the stock app. The temple's Apollo510 watchdog is not running.** The feed is now part of the tool: the RAM programs kick the PMIC's watchdog the way the stock app does, so a session can last as long as it needs.
+
+#### Which watchdog
+
+**The MCU [C value, D decoding].** Step E read `CHIPPN` = `0x10331220` (`MCUCTRL` `0x40020000`). The field layout is `apollo510.h`'s:
+
+| Field | Bits | Value | Meaning |
+| --- | --- | --- | --- |
+| PN | 31:24 | `0x10` | Apollo5 family (Apollo510) |
+| MRAMSIZE | 23:20 | 3 | 4 MB MRAM |
+| SRAMSIZE | 19:16 | 3 | ITCM 256 KB, DTCM 512 KB, SSRAM 3 MB |
+| REVMAJ/REVMIN | 15:8 | 1 / 2 | deprecated here; `CHIPREV` is the revision register |
+| PKG | 7:6 | 0 | SiP |
+| PINS | 5:3 | 4 | (the BGA-225 code) |
+
+A SiP Apollo510 with 4 MB MRAM: the Apollo510B (Apollo510 with the EM9305 radio in the package), as [hardware.md](hardware.md) has it from openCFW.
+
+**Not the Apollo510's own watchdog (WDT, `0x40024000`).**
+
+- The patched bootloader never touches it [C]. Neither the stock 2.3.2.14 bootloader nor drdaeman's `patch.bin` holds a literal in `0x40024000`–`0x40024FFF` or builds one with `movw`/`movt`. In Renode its `CFG` reads 0 throughout a held session.
+- The stock app's watchdog does not survive the relay's reset [D]. The app has one (`driver\wdt\watchdog.c`; WDT literals at `0x570DCC` in 2.4.0.24 [C]; about 30 s per [hardware.md](hardware.md)). But every Apollo510 reset resets the WDT: an external reset, AIRCR, a debugger reset, a WDT reset and a brown-out are all SWPOR level, "a reset of all blocks except for registers in clock gen, RTC, stimer, PMU" (hal_ambiq `am_hal_reset.h`).
+- And the timing does not fit [I]. A watchdog started at the fresh boot with a fixed period would fire at the same time after the boot. With the boot 0.5–0.9 s after the relay start, the streaming run needs a period of 29.4–29.8 s and the idle run one of 30.5–30.9 s. No single period gives both.
+
+**The nPM1300's watchdog [C for the stock app, D for the chip].** The PMIC sits on I2C7 (IOM7, GPIO22/23) at `0x6B` ([hardware.md](hardware.md#npm1300-pmic-battery-case)).
+
+- **Who starts it:** the stock 2.4.0.24 app. It arms the PMIC's timer as a watchdog in reset mode with 30.72 s and kicks it every second from its device manager (strings `[npmx_driver]ERROR:enable npmx watchdog` / `kick npmx watchdog`). Not the patched bootloader [C]: it sets up IOM7 at boot (below) but sends nothing to the PMIC. In Renode, IOM7's `DEVCFG` never holds `0x6B` before our programs run. Not the relay's reset waveform [I]: it only restarts the Apollo510. If it power-cycled the PMIC, the timer would be off and no reboot would come. The ROM/SBL [I]: it has no reason to, and the observed reboot is explained without it.
+- **Registers** [D: Nordic nPM1300 product specification; Zephyr `drivers/watchdog/wdt_npm13xx.c`, `drivers/mfd/mfd_npm13xx.c`]. TIMER base `0x07`, 16-bit register addresses sent high byte first:
+
+  | Register | Address | Use |
+  | --- | --- | --- |
+  | TASKTIMEREN | `0x0700` | start |
+  | TASKTIMERDIS | `0x0701` | stop |
+  | TIMERTARGETSTROBE | `0x0703` | load the period |
+  | **TASKWDOGKICK** | **`0x0704`** | **kick (write 1)** |
+  | TIMERCONFIG | `0x0705` | mode (bits 2:0): 0 boot monitor, 1 watchdog warning, **2 watchdog reset**, 3 general purpose; prescaler (bit 3): 16 ms or 2 ms |
+  | TIMERHI/MID/LO | `0x0708`–`0x070A` | 24-bit period in prescaler ticks |
+
+  **The stock app's own writes, seen in Renode [C, emulation]** (`temple-wdt-fed`, the tap's PMIC log after the release, in the order the app sends them):
+
+  | Write | Meaning |
+  | --- | --- |
+  | `07 05 0A` | mode 2 (watchdog reset) with the 2 ms prescaler [D for the bit meaning] |
+  | `07 08 00 3C 00` | period `0x003C00` = 15,360 ticks |
+  | `07 03 01` | load the period |
+  | `07 00 01` | start, 146 ms of virtual time later |
+
+  15,360 × 2 ms = **30.72 s**, as our static analysis had it. The app sends the register address as the first two data bytes, the same format as our kick.
+
+- **Action:** in reset mode the timer's expiry raises the watchdog-warning event, then a full power cycle of the temple ("warn event, then full power cycle", Zephyr). The Apollo510 starts again from its SBL, so the patched loader's `HELO` is the next frame on UART2. That is what came back mid-stream.
+- **The timing fits [I].** The app kicks every second, so at the relay's reset (0.5–0.9 s after the relay start) its last kick was 0–1 s earlier. The PMIC therefore fires 30.72 s after that, 30.2–31.6 s after the relay started. Measured: 30.33 s and 31.4 s. A spread of about one second is what a one-second kick interval gives.
+- **Why it never showed before:** every earlier session ended sooner, at about 20 s (the case's watchdog) or within 6 s (`loader-hello`, `info-dump`).
+- **In a real recovery** the app may be dead and may never have armed the timer. Then there is no limit. A temple with a working app, which covers every session so far and `recover` over a working app, has the limit.
+
+#### How the loader runs our RAM programs [C, drdaeman's `src/bootloader.c` at `1d22097`]
+
+- `boot_task_then_flag` (`0x43511C`) replaces the DFU task's call of `is_need_updata_image` (`0x42E656`). It creates the worker thread `u2-minimal` (priority 47, a 4 KiB stack inside the DFU task's frame) and waits in `while (held) DELAY(1)`. FreeRTOS and its tick (1,024 Hz) keep running for the whole hold.
+- The worker receives `LOAD`/`DATA` into `code[512]` on its own stack, cleans the D-cache, invalidates the I-cache and calls `boot_ram_invoke`. That saves the context, calls `entry(api, arg0, arg1)` in the worker's thread context with interrupts as the task has them, and restores it. One program runs at a time, synchronously, from SRAM.
+- `api->send` and `api->recv` are stop-and-wait: one loader exchange per 16 bytes, with a 2 s timeout each.
+- So the long programs loop on the temple for the whole stream. A 1 MiB `dump` is **one** program call of 65,536 exchanges (about 19 min). `recover`'s body is one call of about 245,000 exchanges (about 72 min).
+- Nothing in that path kicks anything. `checksum` is pure computation: about 1.1 s of Renode virtual time for the whole app region; its hardware time is not measured.
+
+#### The design: the programs feed the PMIC's watchdog
+
+Option (a) of the brief, adapted to the watchdog it really is. Writing `0xB2` to the Apollo510's `WDT->RSTRT` would do nothing, because that WDT is off. A "feed" is the I2C write the stock app makes once a second: `07 04 01` to `0x6B` (TASKWDOGKICK = 1).
+
+- **One kick** (`programs/pmic_kick.h`) goes through the bootloader's own IOM7 set-up [C, disassembly and Renode]:
+  - `HAL_I2CInit` (`0x430852`, called from board init `0x43053C`) initializes the IOM instances in its I2C table at `0x20000378`. Those are 2, 4, 5 and 7; entry 7 at `0x200003E8` is `{7, handle 0x200181F8, pins 0x4341F0, config 0x20000350}`. GPIO22/23 stay in their I2C function (`PINCFG` = `0x4200`: M7SCL/M7SDA, open drain, pull-up).
+  - It then puts each IOM in deep sleep with its registers saved in the handle (`0x4307DE` → `am_hal_iom_power_ctrl(handle, DEEPSLEEP, retain)`).
+  - The kick calls that same `am_hal_iom_power_ctrl` (`0x42CCD0`) with WAKE and retain. That powers IOM7 and restores exactly the registers the bootloader configured (`FIFOTHR`, `CLKCFG`, `MI2CCFG`, `SUBMODCTRL`, …).
+  - It then runs `am_hal_iom_blocking_transfer`'s sequence for a 3-byte write without an offset: wait for `STATUS` idle, save `INTEN` and set it to 0, `INTCLR`, `DEVCFG` = `0x6B`, `OFFSETHI` = 0, one `FIFOPUSH` (`0x00010407`, low byte first on the wire), `CMD` = `0x301`, then wait for `INTSTAT` `CMDCMP` or an error and for `STATUS` idle, `INTCLR`, restore `INTEN`.
+  - Finally it calls power_ctrl with DEEPSLEEP and retain, so on success IOM7 ends powered off with its state saved, as it started.
+  - Every wait is bounded (200,000 polls). Any failure returns a code and leaves the watchdog unfed.
+  - One failure latches: when the power-down is refused (IOM7 not idle after a busy start or a timeout, `0x200`/`0x400`, or `0x603`), IOM7 stays powered with no saved state. Every later power-up with retain is then refused (`0x107`, as at `0x42CD08`) until the temple resets.
+  - The register address goes out as data bytes, low FIFO byte first. That is how Ambiq's HAL sends a byte buffer (`am_hal_iom.c` pushes it as little-endian words) [D], and how g2emu's IOM model, under which the stock app's PMIC driver runs in Renode, decodes it [C, emulation]. Two misreadings were checked. Only the two address bytes swapped would be `0x0407` = 1, TASKBUCK2PWMCLR [D, Zephyr `regulator_npm13xx.c`], which puts BUCK2 in auto mode, its stock setting. All three bytes reversed would be `0x0001` = 4, the MAIN TASKSWRESET register with bit 0 clear [D, `mfd_npm13xx.c`]; task registers trigger on 1, so probably nothing [I]. On hardware, `feed.bin`'s NAK check and the reboot time in F1d show whether the kick lands.
+- **When:**
+  - `feed.bin` kicks once and returns the status (0 = kicked). The tool runs it right after each session's bootloader CRC check, before every `checksum` and before every idle `G2TX`. A failure stops the session with `temple watchdog feed failed: feed.bin status …` before anything long runs, and before anything is written.
+  - `dump_fed.bin` and `recover_fed.bin` are drdaeman's `dump.c` and `recover.c` with `pmic_kick_due()` before every `send`/`recv`, so before every exchange. It kicks when 1,024 ticks (one second, the stock app's rate) have passed since its last kick, and on its first call.
+  - They stop when a kick cannot even power IOM7 (the latched state above, a foreign I2C table, or a refused clock). `dump_fed` returns 2; `recover_fed` returns 6 at its next due kick, within about a second (a few more 256-byte blocks may be written and verified first, with the last good kick still at most about 2 s old). The host reports `temple watchdog feed failed during the write/read`, rather than running on unfed until the PMIC cuts the power in the middle of a ROM programming call. They retry any other failure a second later: a NAK, or a write that never completes but leaves IOM7 idle. A NAK that leaves CMDACT set ends in a timeout and a refused power-down, so it latches, and the program stops cleanly. Only `feed.bin` reports every code (`pmic_kick.h`, `PK_DETAIL`). The long programs have to fit in 512 bytes, so for them a failure is either "stop" or "retry".
+  - The longest gap without a kick is therefore about one second plus one exchange inside a stream (≤ 3 s even at the loader's 2 s exchange timeout), or one `checksum` between programs. Both are far below 30.72 s.
+  - `dump_fed` sends 16 bytes per `send()` call instead of 128. `send()` splits into 16-byte replies anyway, so the frames on the wire are identical to `dump.bin`'s.
+- **Footprint.** The calls into the bootloader:
+  - `am_hal_iom_power_ctrl` `0x42CCD1`;
+  - `xTaskGetTickCount` `0x4160E9` (drdaeman's `platform.h`);
+  - and, in `recover_fed` only, the stock MRAM routine `0x42E83D` that `recover.bin` already calls.
+
+  The reads: the I2C table entry (8 bytes). Between the two power_ctrl calls, IOM7 only (writes `INTEN`, `INTCLR`, `DEVCFG`, `OFFSETHI`, `FIFOPUSH`, `CMD`; reads `STATUS`, `FIFOPTR`, `INTSTAT`, `INTEN`). One PMIC register, a task register. Nothing else: no other peripheral, no other PMIC register, no MRAM beyond what `recover.bin` already writes. The period and the reset action are untouched.
+- **Why not (b), a one-shot program that lengthens the period.** It writes PMIC configuration that outlives the session. If the host vanishes, the temple then stays held in the loader for the whole longer period instead of 30 s. And it still needs everything above for one I2C write. With (a), a host that stops answering stops the kicks with it: the loader's next exchange times out, the program returns, and the PMIC resets the temple about 30 s later, exactly as without the feed. The bootloader's recovery from a hung temple stays as it was.
+- **Why the bootloader's HAL rather than raw registers.** The IOM7 clock, I2C timing and pins are what Even's bootloader set up for this bus, restored by its own function. Nothing is re-derived, and IOM7's power state is put back. It is the same kind of pinned binding as `recover.bin`'s MRAM routine: valid only for the 2.3.2.14-based patched bootloader, whose CRC every session checks before any of these programs runs. `feed` also checks the I2C table entry.
+- **(c) without temple code:** none found. The case cannot reach the PMIC, and the bootloader in MRAM stays as installed. The host-side split remains the fallback (`--no-temple-feed`).
+
+#### Pins and build
+
+| Program | Size | SHA-256 | Source |
+| --- | --- | --- | --- |
+| `feed.bin` | 232 B | `bd72c6b14fee4fbeee890d14a9a8e9ccd33a5b8cb071b0f9b1aa00ea7a7409d9` | `programs/feed.c` + `pmic_kick.h` (ours, MIT) |
+| `dump_fed.bin` | 280 B | `7ac581fd2028ff167ca0461ea9c844dc3dfd2842cabdfcc1637a332a28aafbc5` | `programs/dump_fed.c`: drdaeman's `dump.c` + the kick |
+| `recover_fed.bin` | 508 B | `8f5cefb93786f676b8d5c8131b3c6999775dc36bd59b9a4990f2b40678d6f610` | `programs/recover_fed.c`: drdaeman's `recover.c` + the kick |
+
+`apps/wisp-recovery/wisp_w18/programs/build.sh` builds them with drdaeman's compiler and flags: clang 21.1.8 from the nixpkgs revision his `flake.lock` pins (`c59305ba…`). Each is linked at 0 and at `0x1000`, and the two must be identical (position independent). `build.sh --verify` rebuilds and compares with `data/`. `build.sh --check-upstream <his checkout>` rebuilds his `checksum.c`, `dump.c` and `recover.c` with the same script: they match the pinned `checksum.bin`, `dump.bin` and `recover.bin` byte for byte [C]. `recover_fed.bin` is 4 bytes under the loader's 512-byte limit. The pins are in `pins.PROGRAMS`; the bootloader addresses they use are in `pins.py` next to them.
+
+#### Verified in emulation [C, emulation]
+
+- **The binaries under Unicorn** (`tests/temple_cpu.py`, `tests/test_temple_watchdog.py`). The real `.bin` files run with the bootloader functions and the loader's `send`/`recv` as stubs (18 RTOS ticks, 17.5 ms, per exchange), IOM7 and the PMIC as a model, and every access outside the program's own code, stack and `ram_api` recorded:
+  - `feed` sends exactly `07 04 01` to `0x6B`. It calls power_ctrl `(0x200181F8, WAKE, retain)` and then `(…, DEEPSLEEP, retain)`. Its writes are exactly `INTEN`=0, `INTCLR`, `DEVCFG`, `OFFSETHI`, `FIFOPUSH`, `CMD`, `INTCLR`, `INTEN` restored, and the only other reads are the table entry.
+  - Its failure codes: NAK `0x50010`, refused wake `0x107` (no transfer), refused sleep `0x603` (the one path that leaves IOM7 powered), no FIFO room `0x300`, busy `0x200`, foreign table `0x10` (no call at all).
+  - The power_ctrl stub keeps the HAL's saved-state flag. After a refused power-down, `recover_fed` stops with 6 at its next kick, about a second later. A busy IOM7 is refused the power-down as in the bootloader (`0x42CE38`), so it latches too, and `dump_fed` stops with 2. A write that never completes but leaves IOM7 idle (`0x400`) is retried, not latched. With another bootloader's I2C table, the stream stops before its first frame and nothing is called. With a refused power-up from the start, `dump_fed` returns 2 and `recover_fed` returns 6, before any frame or write. Under constant NAKs that leave IOM7 idle, `dump_fed` completes, retrying each second.
+  - `dump_fed` sends the same frames as `dump.bin` over 64 KiB and kicks first, then every 1,024–1,042 ticks.
+  - `recover_fed` writes the same MRAM in the same MRAM-routine calls and sends the same progress reports as `recover.bin`, with the same kick spacing. Its API check, argument check and early end of input behave as `recover.c`'s.
+  - drdaeman's binaries never touch IOM7 or the tick.
+- **The tool against a fake temple with the PMIC watchdog** (`fake_temple.FakePmicWatchdog`: armed at every relay reset with the app's last kick 0.5 s earlier, 30.72 s, a power cycle answers the next exchange with a `HELO`). Through the relay model on one virtual clock (17.5 ms per exchange):
+  - `link-soak --no-temple-feed`, 1 MiB, one session: the temple reboots **30.22 s after the relay started** (hardware: 30.33 s), reported as `temple_reset_since_relay_start_s`.
+  - Default `link-soak`, 1 MiB: **one session of about 19 min**, CRC matches, no reboot, never more than 2 s without a kick.
+  - `--idle-s 60`: survives with the feed; without it, it ends in a `HELO` during the pause.
+  - Default `recover` (64 KiB synthetic image, 77 s): one session, no reboot.
+  - `--no-temple-feed`: splits at 20 s (the new default), every session ≤ 20 s, no reboot.
+  - `--no-temple-feed --max-session-s 0`: rebooted mid-write, vectors not written; a fed rerun completes.
+  - A PMIC that NAKs every kick: `recover` stops with `temple watchdog feed failed … 0x50010` before anything is written.
+  - IOM7 latching in the middle of a fed write: `recover` stops with `temple watchdog feed failed during the write`, before the PMIC fires.
+- **Renode, against the real patched bootloader** (`wisp-fw:w18-test`, cases `temple-wdt-unfed`, `temple-wdt-fed`, `recover-fed`; model `renode/models/WispPmicWdt.cs` on IOM7). Renode runs an exchange in about 12 µs of virtual time, not 17.5 ms, so the model's period is scaled to 2.5 s of virtual time. The programs' one-second kick interval is real RTOS ticks. The model is armed at power-on, as the stock app leaves it. When it fires, the harness cuts power (`rstgen PowerCut`). A reset requested from inside the model, while a lockstep host was attached, left the emulation stalled after the host detached.
+
+  The shared work for `temple-wdt-*`: three CRCs of the 3.7 MB app region and a 1 MiB dump. Results on 2026-11-07 (t3-worker, Renode 1.16.1, the final binaries):
+
+  | Case | Result |
+  | --- | --- |
+  | `temple-wdt-unfed` (drdaeman's programs, the same work) | the PMIC model fires mid-session; the loader's `HELO` comes back as the answer to a `RUN` (the hardware's signature), the host stops with `temple rebooted mid-session`, no kick was ever written, and after the reboot the stock app boots |
+  | `temple-wdt-fed` (the same work, fed) | 5 kicks in the session (4 by `feed.bin`, 1 by `dump_fed.bin`) and no other PMIC write; no power cycle; CRCs and dump correct; RLSD, the stock app boots |
+  | `recover-fed` (a dead temple, `recover` in one session with `recover_fed.bin`, under the armed watchdog) | 3,700,080 B written and verified (CRC `1c340963`), 11 kicks and no other PMIC write in the session (4 by `feed.bin`), no power cycle, bootloader unchanged, the stock app boots |
+  | `hello` (rerun with the tap on IOM7) | unchanged: passes |
+
+  So the kick path works against the real bootloader's IOM HAL: power_ctrl accepts the handle, restores IOM7, the transfer completes, and IOM7 goes back to sleep, every time. Between kicks the session keeps running. The power-up/power-down is repeated more than ten times in one session without a failure.
+
+#### Tool changes
+
+- Every case command feeds the temple by default; `--no-temple-feed` runs drdaeman's programs only, as before.
+- `recover --max-session-s` defaults to **0 (one session)** when both watchdogs are fed, **20** with `--no-temple-feed`, and 12 with the `observed-33` relay. The split path, its CRC resume and `--resume-at` are unchanged.
+- Reports carry `temple_feed`, each session's `feeds` (runs of `feed.bin`), and on a mid-session reboot `temple_reset_since_relay_start_s`.
+- `loader-hello` and `info-dump` also feed. That is one PMIC task write per program, the same write the stock app makes every second. MRAM stays read-only.
+
+#### Remaining risks
+
+- **Not on hardware yet.** Emulation runs our reading of the bootloader's IOM HAL and of the nPM1300's register map. If a kick does not reach the PMIC, one of two things happens:
+  - `feed.bin` says so at the start of the session (NAK, timeout or a HAL status), and the tool stops before anything long runs;
+  - or the temple reboots about 30 s in, exactly as today.
+
+  Either shows within a minute of F1d, and neither writes anything.
+- **The bus after the relay's reset.** If the reset hit the stock app in the middle of an I2C transfer, the PMIC could hold SDA low. `feed.bin` then fails (`0x50…` or `0x400`) and the session stops before anything long. There is no I2C bus-clear in the program. Rerunning resets the temple again.
+- **A failure in the middle of a long program** (found by the second review). A latched IOM7 stops `dump_fed`/`recover_fed` cleanly (2/6). Failures that do not latch are retried each second without a limit: NAKs that leave IOM7 idle, or a missing FIFO room or completion. `recover_fed` is 508 of 512 bytes, so there is no room for a cap such as "stop after 20 s without a good kick". If such failures never clear, the PMIC resets the temple about 30 s after the last good kick, in the middle of the write, as without the feed. `feed.bin` at the start of the session (and of each part) catches a PMIC that does not answer at all. With the default one-session `recover` that costs the whole run (the old vectors stay; the next run starts over). `--max-session-s 600` bounds it to one part, and each part starts with a `feed.bin` that reports the code.
+- **Calls into the bootloader** at pinned addresses (power_ctrl, the tick). They are valid for the patched 2.3.2.14 bootloader only, which each session's CRC check proves first. Their stack use adds to the worker's 4 KiB about as much as the loader's own `send` path does [I].
+- **The stock app's parameters** (reset mode, 30.72 s, 1 s kicks) come from our static analysis of 2.4.0.24 [C]. If an app armed a much shorter period, the one-second kick would still cover anything above about 3 s.
+- **What a kick cannot fix:** a program that hangs inside the loader without calling `send`/`recv` (a fault in our code) stops the kicks. The PMIC then resets the temple, which is the intended fail-safe.
 
 ### Step by step for Jan (Mac, left temple first)
 
@@ -771,32 +935,48 @@ Stops:
 
 **E. Read-only INFO dump.** `… w18.py info-dump --side left`. Success: JSON with MCUCTRL, PWRCTRL, INFO0, and INFOC/DCU, or `skipped` for each domain that is powered off. Paste it into the hardware log. If the temple hangs in the loader (a read faulted; no reply), rerun `loader-hello`: the reset clears it.
 
-**F. Prove recovery** (W17's proof). Long relay sessions stalled because the case's YHM4005 watchdog reset the case about 20 s after the relay started. The tool's default relay now feeds it ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). F1 (2026-11-06), F1a and F1b (2026-11-07) ran with the old relay; they and the case-only probe are in the [hardware log](safety.md).
+**F. Prove recovery** (W17's proof). Two watchdogs stopped long relay sessions:
 
-Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`. `git pull` first. Every command below then loads the relay `observed-33-feed` (`4c7475fa…`) by default, and the `bridge_loaded` line in its output names that hash.
+- the case's YHM4005, about 20 s after the relay started. The default relay feeds it ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)).
+- the temple's nPM1300, about 30 s after it. The tool now feeds it ([The temple's watchdog](#the-temples-watchdog-the-npm1300)).
 
-**F1c. One long session, read-only (about 20 min).**
-`… w18.py link-soak --side left`
-It streams 1 MiB of the app region out with `dump`, in **one** relay session of about 65,600 exchanges at 17.5 ms, and checks it against the temple's CRC. Nothing is written. The old relay stopped such a session after about 1,100 exchanges.
+F1 (2026-11-06), F1a and F1b (2026-11-07) ran with the old relay, and the case-only probe confirmed the YHM4005; they are in the [hardware log](safety.md). The runs of 2026-11-07 with the new relay rebooted the temple 30.33 s (streaming) and 31.4 s (idle) after the relay started.
+
+Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`. `git pull` first. Every command below then:
+
+- loads the relay `observed-33-feed` (`4c7475fa…`) by default, and the `bridge_loaded` line in its output names that hash;
+- feeds the temple's watchdog, so the report says `"temple_feed": true` and each session's `feeds` is at least 1.
+
+**F1d. One long session, read-only (about 20 min).**
+
+1. `… w18.py loader-hello --side left` (a few seconds). Its first `feed.bin` run is the first time the kick meets the PMIC. A `temple watchdog feed failed: feed.bin status …` here means stop and send the report.
+2. `… w18.py link-soak --side left`
+
+The soak streams 1 MiB of the app region out with `dump_fed`, in **one** relay session of about 65,600 exchanges at 17.5 ms, and checks it against the temple's CRC. Nothing is written to MRAM. The only writes are the PMIC watchdog kicks, once a second, the same write the stock app makes. Before the temple feed, such a session was rebooted about 30 s in.
 Success: `OK: 1048576 bytes streamed and matched the temple's CRC (…) in about 1150 s, … exchanges, about 17.5 ms each, 1 session(s)`, `relay_exit_status 6`, the case back on 1.2.57, and the temple boots normally. Add a hardware-log row.
-Stops (nothing is written either way; rerun `loader-hello` once afterwards):
+Stops (nothing is written to MRAM either way; rerun `loader-hello` once afterwards):
 
-- **About 20 s in** (`stall.since_relay_start_s` ≈ 19–22, around exchange #1,100): the feed does not reach the watchdog on hardware. Do not run F2. Send the report.
-- **Later, at a random point:** the watchdog is fed, but something else stops the relay (hypothesis 1, a rare hang in stock case code). Send the report. F2 can still run in its default 600 s parts, each resumable.
+- **`temple watchdog feed failed: feed.bin status 0x…`**: the kick does not reach the PMIC. The code says where (`pmic_kick.h`):
+  - `0x1nn`: IOM7 power-up refused (HAL status nn);
+  - `0x5nnnn`: I2C error (`INTSTAT` bits; `0x10` = NAK);
+  - `0x400`: the write did not finish;
+  - `0x10`: not the pinned bootloader's I2C table.
 
-For a quicker first look (about 2 min, read-only): `… w18.py link-soak --side left --idle-s 60 --bytes 65536`. The relay runs 60 s with no temple traffic (two idle ticks of about 30 s each), then streams 64 KiB. The old relay stopped in such a pause 20 s in.
+  Do not run F2 with the feed. Send the report. F2 can still run with `--no-temple-feed`.
+- **`temple rebooted mid-session` with `temple_reset_since_relay_start_s` ≈ 30–32**: the kick reports success but does not reach the watchdog. Same fallback.
+- **About 20 s in** (`stall.since_relay_start_s` ≈ 19–22, no `HELO`): the case's watchdog again. Send the report.
+- **Later, at a random point:** something else stops the relay (case hypothesis 1, a rare hang in stock case code). Send the report. F2 can still run in resumable parts (`--max-session-s 600`).
 
-**F2. Write** (only after F1c passed). About 75 min in the default parts, about 72 min in one session.
+**F2. Write** (only after F1d passed). About 72 min in one session.
 `… w18.py recover --side left --image .wisp-cache/stock/g2-2.4.0.24.bin`
 
-- **Default: parts of at most 600 s after the relay starts.**
+- **Default: one session**, with both watchdogs fed. That is 245,707 exchanges (231,253 `INPUT_DATA` plus 14,454 progress reports) at 17.5 ms each, plus about a minute of checks. A stop leaves the old vectors but nothing to resume from, because the body is CRC-checked only at the end. The next run starts over.
+- **Resumable parts:** add `--max-session-s 600`.
   - The first session writes a 4 KiB part to measure the rate.
   - About eight sessions then write ~500 KiB each.
   - A last session writes the vectors, after a CRC of the whole body.
-  - That makes about 10 sessions. Each adds about 15 s for the ROM entry, the case hash, the relay load and the cleanup.
-  - A stop costs at most one part.
-- **One session:** add `--max-session-s 0`. This is about 72 min: 245,707 exchanges (231,253 `INPUT_DATA` plus 14,454 progress reports) at 17.5 ms each, plus about a minute of checks. A stop leaves the old vectors but nothing to resume from, because the body is CRC-checked only at the end. The next run starts over.
-- With `--case-profile observed-33` (the old relay) the default goes back to 12 s sessions: about 3–3.5 h.
+  - That makes about 10 sessions and about 75 min. Each adds about 15 s for the ROM entry, the case hash, the relay load and the cleanup. A stop costs at most one part.
+- **Fallback without the temple feed:** `--no-temple-feed`. The default is then 20 s sessions: about 280 sessions, about 2.5 h. With `--case-profile observed-33` (the old relay) it is 12 s sessions: about 3–3.5 h.
 
 Success:
 
@@ -819,7 +999,8 @@ Stops:
 - Jan's case firmware version (1.2.57 expected) and the temples' hardware version (drdaeman tested hardware 5).
 - Whether the bootloader in MRAM is the 2.4.0.24 one. It can't be read before the install ([W18 procedure](#what-gets-installed)); the install replaces it entirely.
 - INFOC / INFO0 / DCU contents: is SWD open, is SBL wired recovery provisioned, is secure boot off? Step 3 answers this.
-- Why long case relay sessions stalled: answered, the case's YHM4005 watchdog ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog)). Open: does the relay's feed work on hardware, and is there also a rarer per-exchange stall? F1c decides both.
+- Why long case relay sessions stalled: answered, the case's YHM4005 watchdog ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog)). The relay's feed works on hardware: on 2026-11-07, sessions ran past 30 s, until the temple's own watchdog rebooted the temple. Open: is there also a rarer per-exchange stall? F1d's 20-minute session shows it.
+- Why a held temple rebooted about 30 s after the relay started once the case was fed: answered, the nPM1300's watchdog that the stock app arms ([The temple's watchdog](#the-temples-watchdog-the-npm1300)). Open: does the programs' kick reach the PMIC on hardware? F1d decides.
 - Why a brief banner boot seems not to feed the case watchdog when a relay start does, though both run the case's `MX_GPIO_Init` ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). It does not affect the fix.
 - How long a full `recover` takes on hardware: about 72–75 min at the measured 17.5 ms per exchange ([timing](#timing-on-hardware-estimates-i)), not 40 s: every 16 bytes costs one request/reply with a 6-tick delay in the loader. Whether the temple stays seated that long.
 - How long the stock app's bootloader copy really takes (its log line `Write file to MRAM success, time = %d ms`; estimated about 1 s).

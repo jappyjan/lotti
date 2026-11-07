@@ -131,7 +131,9 @@ class CliDefaults(unittest.TestCase):
         return reports[0]
 
     def test_the_feeding_relay_is_the_default_and_sessions_follow_it(self):
-        self.assertEqual(self.run_recover()["max_session_s"], cli.DEFAULT_MAX_SESSION_FEED_S)
+        # Both watchdogs fed (the default): one session. The split stays the fallback.
+        self.assertIsNone(self.run_recover()["max_session_s"])
+        self.assertEqual(self.run_recover("--no-temple-feed")["max_session_s"], cli.DEFAULT_MAX_SESSION_UNFED_TEMPLE_S)
         self.assertEqual(self.run_recover("--case-profile", "observed-33")["max_session_s"], cli.DEFAULT_MAX_SESSION_S)
         self.assertIsNone(self.run_recover("--max-session-s", "0")["max_session_s"])  # one session
         self.assertEqual(self.run_recover("--case-profile", "observed-33", "--max-session-s", "30")["max_session_s"], 30)

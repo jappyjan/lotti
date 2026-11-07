@@ -10,12 +10,16 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
 
-Case relay sessions stalled on hardware about 20 s after the relay started: the case's YHM4005
-watchdog reset the case, because only the case app fed it (recovery.md, "Long relay sessions").
-The default relay (observed-33-feed) feeds it, so session length no longer matters. `recover`
-still splits its write into sessions of at most --max-session-s seconds after the relay starts,
-resuming each by CRC, so a stop costs at most one part; `link-soak` can do the same. With the
-old observed-33 relay (--case-profile observed-33) keep sessions short, as before.
+Two watchdogs limit a session, one in the case and one in the temple (recovery.md, "Long relay
+sessions" and "The temple's watchdog"):
+  - The case's YHM4005 reset the case about 20 s after the relay started, because only the case
+    app fed it. The default relay (observed-33-feed) feeds it.
+  - The temple's nPM1300 watchdog (armed by the stock app, 30.72 s, kicked every second by it)
+    power-cycles a held temple about 30 s after the relay's reset. By default the session feeds
+    it (feed.bin, dump_fed.bin, recover_fed.bin), so a session may last as long as it needs and
+    `recover` writes in one session. --no-temple-feed runs drdaeman's programs only; then
+    `recover` splits its write into sessions of at most --max-session-s (default 20) seconds
+    after the relay starts, each resumed by CRC, as before.
 """
 
 from __future__ import annotations
@@ -36,15 +40,18 @@ from .session import BLOCK, AppWriter, Session, SessionError
 RUNS = Path(__file__).resolve().parents[1] / "runs"
 # The left temple's relay sessions stopped 19.5-22.2 s after the relay started (link-soak) and
 # about 20 s and 80 s in (recover): the case's watchdog. recovery.md, "Long relay sessions".
-# Without the feed (observed-33) a session must end well inside 20 s; with it, parts are only a
-# resume granularity: ten minutes of writing, about 500 KiB at 17.5 ms per exchange (17 exchanges
-# per 256 body bytes).
+# Without the case feed (observed-33) a session must end well inside 20 s. With it, the temple's
+# nPM1300 watchdog power-cycled a held temple 30.3-31.4 s after the relay started (2026-11-07);
+# without the temple feed a session must end before that: 20 s leaves the time for the part's
+# CRC and the release. With both feeds a session has no limit (0).
 DEFAULT_MAX_SESSION_S = 12.0
-DEFAULT_MAX_SESSION_FEED_S = 600.0
+DEFAULT_MAX_SESSION_UNFED_TEMPLE_S = 20.0
 
 
-def default_max_session_s(profile: str) -> float:
-    return DEFAULT_MAX_SESSION_FEED_S if profile.endswith(pins.RELAY_FEED_SUFFIX) else DEFAULT_MAX_SESSION_S
+def default_max_session_s(profile: str, temple_feed: bool = True) -> float:
+    if not profile.endswith(pins.RELAY_FEED_SUFFIX):
+        return DEFAULT_MAX_SESSION_S
+    return 0.0 if temple_feed else DEFAULT_MAX_SESSION_UNFED_TEMPLE_S
 
 
 def plan_text(side: str, patched: bytes) -> str:
@@ -115,6 +122,10 @@ def latest_step0(side: str, max_age_h: float = 24.0) -> dict:
             raise SystemExit(f"step-0 report {path.name} is not case 1.2.57 / app 2.4.0.24 / hardware 5")
         return {"report": path.name, "profile": data.get("bridge_profile")}
     raise SystemExit(f"no step-0 report for the {side} temple in {RUNS}; run step0.py --side {side} first")
+
+
+def temple_feed(args) -> bool:
+    return not getattr(args, "no_temple_feed", False)
 
 
 def make_link(args):
@@ -236,14 +247,14 @@ def run_sessions(args, name: str, step, on_stop=None) -> int:
     stopped it (not whatever the cleanup ran into), its step and position, the cleanup failures
     and its last frames. `on_stop(report)` adds to the report of a stopped run."""
     patched = image.build_patched_bootloader()
-    report: dict = {"side": args.side, "command": name, "sessions": []}
+    report: dict = {"side": args.side, "command": name, "temple_feed": temple_feed(args), "sessions": []}
     code = 1
     link = session = None
     try:
         index = 0
         while True:
             link = make_link(args)
-            session = Session(link)
+            session = Session(link, temple_feed=temple_feed(args))
             entry: dict = {"index": index}
             report["sessions"].append(entry)
             with session:
@@ -252,6 +263,7 @@ def run_sessions(args, name: str, step, on_stop=None) -> int:
                 report.update(fields or {})
                 entry["relay_seconds"] = round(session.elapsed(), 1)  # before the release
             entry["exchanges"] = getattr(getattr(link, "recent", None), "count", None)
+            entry["feeds"] = session.feeds
             if finished:
                 break
             index += 1
@@ -265,6 +277,9 @@ def run_sessions(args, name: str, step, on_stop=None) -> int:
             report["stopped_in"] = session.step
             report["position"] = session.position
             report["cleanup_errors"] = session.cleanup_errors
+            if session.temple_reset_s is not None:  # the temple's watchdog fires 30-31 s in
+                report["temple_reset_since_relay_start_s"] = session.temple_reset_s
+                print(f"  the temple rebooted {session.temple_reset_s} s after the relay started", file=sys.stderr)
             print(f"  while: {session.step} {session.position or ''}", file=sys.stderr)
             for failure in session.cleanup_errors:
                 print(f"  cleanup also failed: {failure}", file=sys.stderr)
@@ -414,7 +429,7 @@ def cmd_recover(args) -> int:
         print("REFUSED: --image is not the pinned stock 2.4.0.24 main app (bundle or raw image)", file=sys.stderr)
         return 2
     if args.max_session_s is None:
-        args.max_session_s = default_max_session_s(args.case_profile)
+        args.max_session_s = default_max_session_s(args.case_profile, temple_feed(args))
     budget = args.max_session_s or None
     try:
         writer = AppWriter(stock, budget=budget, resume_at=args.resume_at)
@@ -475,6 +490,10 @@ def main(argv=None) -> int:
                             help="the case relay: YHM baseline table of the case (Jan's case: observed-33, from "
                                  "step 0), '-feed' = it feeds the case's YHM4005 watchdog (default "
                                  f"{pins.DEFAULT_CASE_PROFILE}; observed-33 is the old relay, for comparison)")
+            sp.add_argument("--no-temple-feed", action="store_true",
+                            help="do not feed the temple's nPM1300 watchdog (drdaeman's programs only); the "
+                                 "PMIC then resets a held temple about 30 s after the relay starts, so keep "
+                                 "sessions short (recover: --max-session-s 20 is the default then)")
             sp.add_argument("--renode-port", type=int, help=argparse.SUPPRESS)  # emulation only
 
     common(sub.add_parser("bootloader-plan", help="print the plan; touches nothing"), link=False)
@@ -503,9 +522,9 @@ def main(argv=None) -> int:
     sp.add_argument("--allow-pending-flag", action="store_true")
     sp.add_argument("--max-session-s", type=float, default=None,
                     help=f"end every session within this many seconds after the relay starts; the write "
-                         f"continues in the next session after a CRC check of what is written (default "
-                         f"{DEFAULT_MAX_SESSION_FEED_S:g} with a feeding relay, {DEFAULT_MAX_SESSION_S:g} with "
-                         f"observed-33; 0: one session)")
+                         f"continues in the next session after a CRC check of what is written (default 0, one "
+                         f"session, when both watchdogs are fed; {DEFAULT_MAX_SESSION_UNFED_TEMPLE_S:g} with "
+                         f"--no-temple-feed; {DEFAULT_MAX_SESSION_S:g} with the observed-33 relay)")
     sp.add_argument("--resume-at", type=lambda v: int(v, 0), default=0,
                     help="body bytes an earlier recover run wrote and verified (it prints the value); "
                          "they are CRC-checked against the image before anything is written")
