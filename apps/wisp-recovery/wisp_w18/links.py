@@ -16,7 +16,10 @@ the Renode W18 harness. Only the ROM bring-up and the ROM-side record check are 
 SocketLink: the Renode W18 model (apps/wisp-fw/renode/models/WispCaseLink.cs), lockstep.
 
 Every link keeps its last frames (`recent`) and an exchange count, so a failed session can
-report where it stopped even when the cleanup fails too (`diagnostics()`).
+report where it stopped even when the cleanup fails too (`diagnostics()`). It also records when
+the relay (or, without a case, the link) started: `relay_started` on the link's clock, and the
+same moment as `relay_started_t` in the diagnostics, on the time base of the frames' `t`. The
+session-time guard (`--max-session-s`) measures from there.
 """
 
 from __future__ import annotations
@@ -72,8 +75,11 @@ class _Recent:
         self.items.append(entry)
         return entry
 
-    def report(self) -> dict:
-        return {"exchanges": self.count, "seconds": round(self.clock() - self.t0, 1), "recent": list(self.items)}
+    def report(self, relay_started: float | None = None) -> dict:
+        out = {"exchanges": self.count, "seconds": round(self.clock() - self.t0, 1), "recent": list(self.items)}
+        if relay_started is not None:
+            out["relay_started_t"] = round(relay_started - self.t0, 3)
+        return out
 
 
 def decode_relay_record(retained: bytes) -> dict:
@@ -132,6 +138,7 @@ class SocketLink:
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.trace = trace  # optional open text file: one line per frame each way
         self.recent = _Recent()
+        self.relay_started = None
 
     def _read(self, n: int) -> bytes:
         out = bytearray()
@@ -157,6 +164,7 @@ class SocketLink:
         self.sock.sendall(struct.pack("<H", len(data)) + data)
 
     def start(self) -> bytes:
+        self.relay_started = self.recent.clock()
         return self._frame()
 
     def exchange(self, frame: bytes) -> bytes:
@@ -171,7 +179,7 @@ class SocketLink:
         return reply
 
     def diagnostics(self) -> dict:
-        return self.recent.report()
+        return self.recent.report(self.relay_started)
 
     def next_frame(self) -> bytes:
         """Answer the pending temple frame with nothing and wait for the next one."""
@@ -194,10 +202,12 @@ class _RelayFraming:
     port = None
     ready = False
     route = 0
+    relay_started = None
     sleep = staticmethod(time.sleep)
+    IDLE_TIMEOUT = 120.0  # s; the relay answers an empty G2TX after its own poll bound (~10-20 s)
 
-    def _init_recent(self) -> None:
-        self.recent = _Recent()
+    def _init_recent(self, clock=time.monotonic) -> None:
+        self.recent = _Recent(clock)
 
     def _arm(self) -> bytes:
         port = self.port
@@ -250,6 +260,39 @@ class _RelayFraming:
             entry["error"] = repr(error)
             raise
 
+    def idle(self) -> tuple[int, bytes, float]:
+        """One empty G2TX: the relay hands nothing to the temple, re-arms its pogo receiver (the
+        same stock UART re-init as every exchange) and waits for a temple frame up to its poll
+        bound. A held loader sends nothing, so the normal answer is G2RX status 2 with no frame.
+        Keeps the relay running without temple traffic; returns (status, frame, seconds)."""
+        if self.port is None or not self.ready:
+            raise LinkError("relay is not running")
+        packet = b"G2TX\0"
+        packet += bytes((sum(packet) & 255,))
+        entry = self.recent.begin(b"")
+        entry["idle"] = True
+        start = self.recent.clock()
+        timeout, self.port.timeout = self.port.timeout, self.IDLE_TIMEOUT
+        try:
+            self.port.write(packet)
+            self.port.flush()
+            head = read_exact(self.port, 6, "relay response to an empty G2TX")
+            if head[:4] != b"G2RX" or head[5] > 32:
+                raise LinkError(f"invalid relay header {head.hex()}")
+            tail = read_exact(self.port, head[5] + 1, "temple response")
+            if tail[-1] != (sum(head) + sum(tail[:-1])) & 255:
+                raise LinkError("relay checksum mismatch")
+            entry["received"], entry["relay_status"] = tail[:-1].hex(), head[4]
+            seconds = self.recent.clock() - start
+            entry["seconds"] = round(seconds, 3)
+            return head[4], tail[:-1], seconds
+        except BaseException as error:
+            entry["error"] = repr(error)
+            raise
+        finally:
+            if self.port is not None:
+                self.port.timeout = timeout
+
     def _exit_relay(self) -> int:
         """G2EX; the bridge restores the YHM route and answers G2RS. Returns its exit status."""
         port = self.port
@@ -269,23 +312,24 @@ class _RelayFraming:
         return status
 
     def diagnostics(self) -> dict:
-        return {**self.recent.report(), "events": list(getattr(self, "events", []))}
+        return {**self.recent.report(self.relay_started), "events": list(getattr(self, "events", []))}
 
 
 class RelayPortLink(_RelayFraming):
     """The relay framing on a port that already runs the relay (relay_model.RelayModel)."""
 
-    def __init__(self, port, side: str = "left", log=None):
+    def __init__(self, port, side: str = "left", log=None, clock=time.monotonic):
         self.port, self.route = port, case_pins.ROUTES[side]
         self.events: list[dict] = []
         self._log = log or (lambda event: None)
-        self._init_recent()
+        self._init_recent(clock)
 
     def log(self, event: dict) -> None:
         self.events.append(event)
         self._log(event)
 
     def start(self) -> bytes:
+        self.relay_started = self.recent.clock()  # the port already runs the relay
         return self._arm()
 
     def close(self) -> None:
@@ -345,6 +389,9 @@ class CaseRelayLink(_RelayFraming):
                 raise LinkError(f"case flash differs at {address:#x}")
         self.loader.load_bridge()  # writes the relay (allowlisted: its own bytes or zeros)
         self.loader.go_bridge()
+        # From here the case runs the relay from SRAM, not its flash firmware or its ROM.
+        self.relay_started = self.recent.clock()
+        self.log({"relay_started_t": round(self.relay_started - self.recent.t0, 3)})
         return self._arm()
 
     def close(self) -> None:

@@ -18,6 +18,9 @@ Cases (end states):
   recover       app region erased (dead temple): recover writes stock 2.4.0.24, stock boots
   recover-relay the same, every frame through the relay framing; the relay exits with status 6
   recover-cut   power cut in the middle of recover; a second recover completes, stock boots
+  recover-split recover's write split over many relay sessions (AppWriter with a session-time
+                budget): each session resumes after a CRC of the body so far, the temple is reset
+                between sessions, the vectors go last; stock boots
   install-*     the post-cut MRAM states of the stock app's bootloader copy (4 KiB chunks, lowest
                 first, as reverse-engineered from 2.4.0.24): k of 38 chunks new, the rest old
 """
@@ -41,7 +44,7 @@ from rung3 import STOCK_MARK, Renode, evenota_components
 from wisp_w18 import image, pins
 from wisp_w18.links import RelayPortLink, SocketLink
 from wisp_w18.relay_model import RelayModel
-from wisp_w18.session import Session
+from wisp_w18.session import AppWriter, Session
 
 FLAG = 0x7FE000
 JUMP_RE = re.compile(r"(just jump to app|APP jumpaddr app)\(0x438000\)")
@@ -358,6 +361,60 @@ class Harness:
         finally:
             run.close()
 
+    def recover_split(self, name="recover-split", budget=30.0, max_sessions=400):
+        """A dead temple recovered over many short relay sessions, as `recover --max-session-s`
+        does on hardware: one AppWriter, a fresh relay session per part (each through the relay
+        framing), the temple reset between sessions as the next relay session's reset does. The
+        budget is host wall seconds; emulated exchanges are faster than real ones, so it is
+        larger than the hardware default but still splits the image into several sessions."""
+        run = Run(self.work, name, self.patched, None)
+        log = []
+        writer = AppWriter(self.app, budget=budget, log=log.append)
+        sessions = []
+        try:
+            t0 = time.time()
+            t = 0.0
+            while len(sessions) < max_sessions:
+                def host(link):
+                    with Session(link, log=log.append) as s:
+                        s.require_patched_bootloader(self.patched)
+                        finished = writer.run(s)
+                        return {"finished": finished, "body": writer.done, "elapsed": round(s.elapsed(), 1)}
+                thread, result = run.attach(host, relay=True)
+                if sessions:
+                    run.r.cmd("rstgen PowerCut")  # the next relay session resets the temple
+                spent = 0
+                while thread.is_alive() and spent < 600:
+                    run.r.cmd('emulation RunFor "1"')
+                    spent += 1
+                t += spent
+                if "error" in result or not result.get("value"):
+                    self.record(name, False, f"session {len(sessions)}: {result.get('error')!r}",
+                                f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+                    return
+                exits = [e["relay_exit_status"] for e in result["link"].events if "relay_exit_status" in e]
+                sessions.append({**result["value"], "exit": exits})
+                if result["value"]["finished"]:
+                    break
+            t += run.run_until(run.stock_running, 60)
+            mram = run.mram()
+            app_ok = mram[0x38000:0x38000 + len(self.app)] == self.app
+            boot_ok = mram[0x10000:0x10000 + len(self.patched)] == self.patched
+            done = bool(sessions) and sessions[-1]["finished"]
+            exits_ok = all(s["exit"] == [6] for s in sessions)
+            ok = done and len(sessions) > 2 and app_ok and boot_ok and exits_ok and run.stock_running()
+            longest = max((s["elapsed"] for s in sessions), default=0)
+            self.record(name, ok, (f"stock 2.4.0.24 written over {len(sessions)} relay sessions (longest "
+                                   f"{longest} s of the {budget:g} s budget), each resumed after a CRC of the body so "
+                                   f"far, vectors last ({writer.result.get('crc_after')}); exit status 6 every "
+                                   f"time; bootloader unchanged; stock app running" if ok else
+                                   f"done={done} sessions={sessions} app_ok={app_ok} boot_ok={boot_ok} "
+                                   f"stock={run.stock_running()}"),
+                        f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+            (run.dir / "host.log").write_text("\n".join(map(str, log + sessions)) + "\n")
+        finally:
+            run.close()
+
     def install_states(self, old: bytes, label: str, ks):
         """Post-cut MRAM states of the stock app's bootloader copy (chunks of 4 KiB, ascending)."""
         for k in ks:
@@ -386,7 +443,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
-                                                   "recover-relay", "recover-cut", "install"])
+                                                   "recover-relay", "recover-cut", "recover-split", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -408,6 +465,8 @@ def main() -> int:
         h.recover("recover-relay", relay=True)
     if "recover-cut" in only:
         h.recover("recover-cut-40pct", cut_fraction=0.4)
+    if "recover-split" in only:
+        h.recover_split()
     if "install" in only:
         ks = [int(k) for k in a.install_chunks.split(",")]
         if "2.4.0.24" in a.install_old:
