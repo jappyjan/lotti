@@ -10,9 +10,12 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
 
-Case relay sessions stall on hardware after about 20 s or 1,000-4,000 exchanges (recovery.md,
-"Long relay sessions"). `recover` therefore splits its write into sessions of at most
---max-session-s seconds after the relay starts, resuming each by CRC; `link-soak` can do the same.
+Case relay sessions stalled on hardware about 20 s after the relay started: the case's YHM4005
+watchdog reset the case, because only the case app fed it (recovery.md, "Long relay sessions").
+The default relay (observed-33-feed) feeds it, so session length no longer matters. `recover`
+still splits its write into sessions of at most --max-session-s seconds after the relay starts,
+resuming each by CRC, so a stop costs at most one part; `link-soak` can do the same. With the
+old observed-33 relay (--case-profile observed-33) keep sessions short, as before.
 """
 
 from __future__ import annotations
@@ -32,8 +35,16 @@ from .session import BLOCK, AppWriter, Session, SessionError
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
 # The left temple's relay sessions stopped 19.5-22.2 s after the relay started (link-soak) and
-# about 20 s and 80 s in (recover); short sessions always passed. recovery.md, "Long relay sessions".
+# about 20 s and 80 s in (recover): the case's watchdog. recovery.md, "Long relay sessions".
+# Without the feed (observed-33) a session must end well inside 20 s; with it, parts are only a
+# resume granularity: ten minutes of writing, about 500 KiB at 17.5 ms per exchange (17 exchanges
+# per 256 body bytes).
 DEFAULT_MAX_SESSION_S = 12.0
+DEFAULT_MAX_SESSION_FEED_S = 600.0
+
+
+def default_max_session_s(profile: str) -> float:
+    return DEFAULT_MAX_SESSION_FEED_S if profile.endswith(pins.RELAY_FEED_SUFFIX) else DEFAULT_MAX_SESSION_S
 
 
 def plan_text(side: str, patched: bytes) -> str:
@@ -65,7 +76,7 @@ Window  from the first chunk at 0x410000 to the last: the app's synchronous copy
 Preconditions (bootloader-install checks the ones marked *):
   * the image above rebuilds from the cached bundle and matches every pin
   * the 2.4.0.24 bundle is cached and its main app matches its pin (rule 7: stock offline)
-  * the case relay rebuilds and matches its pin ({pins.RELAY_SHA256['observed-33'][:16]}..., observed-33)
+  * the case relay rebuilds and matches its pin ({pins.RELAY_SHA256[pins.DEFAULT_CASE_PROFILE][:16]}..., {pins.DEFAULT_CASE_PROFILE})
   * a passed step-0 report for the {side} temple from the last 24 h: case 1.2.57,
     temple app 2.4.0.24, hardware 5
   * the BLE device advertises as the {side} temple (name ..._{side[0].upper()}_xxxxxx), MTU >= 243,
@@ -117,7 +128,7 @@ def make_link(args):
 def cmd_plan(args) -> int:
     patched = image.build_patched_bootloader()
     image.stock_main()
-    image.build_relay("observed-33")
+    image.build_relay(pins.DEFAULT_CASE_PROFILE)
     print(plan_text(args.side, patched))
     return 0
 
@@ -402,6 +413,8 @@ def cmd_recover(args) -> int:
     if image.sha(stock) != pins.STOCK_MAIN_SHA256:
         print("REFUSED: --image is not the pinned stock 2.4.0.24 main app (bundle or raw image)", file=sys.stderr)
         return 2
+    if args.max_session_s is None:
+        args.max_session_s = default_max_session_s(args.case_profile)
     budget = args.max_session_s or None
     try:
         writer = AppWriter(stock, budget=budget, resume_at=args.resume_at)
@@ -458,8 +471,10 @@ def main(argv=None) -> int:
         sp.add_argument("--side", choices=pins.SIDES, required=True)
         if link:
             sp.add_argument("--port", help="case serial port (default: the only /dev/cu.*usbserial*)")
-            sp.add_argument("--case-profile", choices=sorted(pins.RELAY_SHA256), default="observed-33",
-                            help="YHM baseline table of the case (Jan's case: observed-33, from step 0)")
+            sp.add_argument("--case-profile", choices=sorted(pins.RELAY_SHA256), default=pins.DEFAULT_CASE_PROFILE,
+                            help="the case relay: YHM baseline table of the case (Jan's case: observed-33, from "
+                                 "step 0), '-feed' = it feeds the case's YHM4005 watchdog (default "
+                                 f"{pins.DEFAULT_CASE_PROFILE}; observed-33 is the old relay, for comparison)")
             sp.add_argument("--renode-port", type=int, help=argparse.SUPPRESS)  # emulation only
 
     common(sub.add_parser("bootloader-plan", help="print the plan; touches nothing"), link=False)
@@ -468,7 +483,7 @@ def main(argv=None) -> int:
     sp.add_argument("--address", required=True, help="the temple's BLE address/UUID")
     sp.add_argument("--adapter", help="Linux BlueZ adapter (not used on macOS)")
     sp.add_argument("--battery", type=int, help="battery % read in the Even app; must be >= 80")
-    sp.add_argument("--case-profile", choices=sorted(pins.RELAY_SHA256), default="observed-33")
+    sp.add_argument("--case-profile", choices=sorted(pins.RELAY_SHA256), default=pins.DEFAULT_CASE_PROFILE)
     sp.add_argument("--go", required=True, help="the token bootloader-plan prints")
     common(sub.add_parser("loader-hello", help="read-only loader check through the case"))
     common(sub.add_parser("info-dump", help="read-only INFO0/INFOC/debug-lock dump"))
@@ -486,10 +501,11 @@ def main(argv=None) -> int:
     common(sp)
     sp.add_argument("--image", required=True, help="the 2.4.0.24 bundle (.wisp-cache/stock/g2-2.4.0.24.bin) or its raw main image")
     sp.add_argument("--allow-pending-flag", action="store_true")
-    sp.add_argument("--max-session-s", type=float, default=DEFAULT_MAX_SESSION_S,
+    sp.add_argument("--max-session-s", type=float, default=None,
                     help=f"end every session within this many seconds after the relay starts; the write "
                          f"continues in the next session after a CRC check of what is written (default "
-                         f"{DEFAULT_MAX_SESSION_S:g}; 0: one session)")
+                         f"{DEFAULT_MAX_SESSION_FEED_S:g} with a feeding relay, {DEFAULT_MAX_SESSION_S:g} with "
+                         f"observed-33; 0: one session)")
     sp.add_argument("--resume-at", type=lambda v: int(v, 0), default=0,
                     help="body bytes an earlier recover run wrote and verified (it prints the value); "
                          "they are CRC-checked against the image before anything is written")

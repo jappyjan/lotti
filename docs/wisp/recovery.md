@@ -240,7 +240,7 @@ Model limits, in addition to rung 3's ([apps/wisp-fw/README.md](../../apps/wisp-
 
 ### Timing on hardware (estimates [I])
 
-Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 bytes at 1 Mbaud (~0.7 ms) and two CH340 USB round trips: estimated **7–10 ms per exchange**. `recover` streams the 3,700,064-byte body in 16-byte `INPUT_DATA` packets (231,254 exchanges) plus one progress report per 256 bytes (14,454), with the temple held in the bootloader (display off) in the case. `w18.py recover` skips drdaeman's full backup (the content to be replaced is checked by CRC instead), which would double that. `loader-hello` takes a few seconds; `info-dump` about 300 exchanges. **Measured on 2026-11-06 (F1): 17.5 ms per exchange [C].** A one-session `recover` would therefore take about 72 min, not 30–45. Long relay sessions stall, so `recover` now runs in short sessions, which takes about 3–3.5 h ([Long relay sessions](#long-relay-sessions-f1-stalled-too-and-it-is-not-the-cases-watchdog)).
+Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 bytes at 1 Mbaud (~0.7 ms) and two CH340 USB round trips: estimated **7–10 ms per exchange**. `recover` streams the 3,700,064-byte body in 16-byte `INPUT_DATA` packets (231,254 exchanges) plus one progress report per 256 bytes (14,454), with the temple held in the bootloader (display off) in the case. `w18.py recover` skips drdaeman's full backup (the content to be replaced is checked by CRC instead), which would double that. `loader-hello` takes a few seconds; `info-dump` about 300 exchanges. **Measured on 2026-11-06 (F1): 17.5 ms per exchange [C].** A one-session `recover` would therefore take about 72 min, not 30–45. With the old relay, sessions stalled after about 20 s (the case's watchdog), so `recover` ran in 12 s sessions: about 3–3.5 h. The relay that feeds the watchdog brings it back to **about 72 min in one session, or about 75 min in the default 600 s parts** ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog), F2 below).
 
 ### Tooling (`apps/wisp-recovery/w18.py`)
 
@@ -250,10 +250,10 @@ Each loader exchange costs the loader's 6-tick reply delay (~5.9 ms), 32 + 32 by
 | `bootloader-install --side S --address A --battery N --go TOKEN`                                 | **MRAM `0x410000–0x435FFF` of side S, via the stock BLE OTA** | `--go` is exactly `W18-LEFT-87e2d4e0a7a6` (or `-RIGHT-`); N ≥ 80; a passed step-0 report for side S from the last 24 h (case 1.2.57, app 2.4.0.24, hardware 5); every pin; the BLE name says side S; MTU ≥ 243; stock authentication passes. Sends only the pinned image, never replays a block, accepts only END status 8                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `loader-hello --side S`                                                                          | nothing (temple reset by the case)                            | the bootloader region's CRC is the pinned image's                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `info-dump --side S`                                                                             | nothing                                                       | as above. Reads MCUCTRL, PWRCTRL; INFO0 (MRAM or, if powered, OTP); INFOC and the DCU/LCS registers **only if their power domain is already on**; it never powers anything up                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `link-soak --side S [--bytes N] [--max-session-s T \| --idle-s P]`                               | nothing (temple reset by the case)                            | as `loader-hello`. Streams N bytes (default 1 MiB, about 65,536 exchanges) of the app region **out** with `dump`, checks them against `checksum` of the same range, and reports the exchange count and time per exchange. A session as long and dense as `recover`'s, without a write. `--max-session-s T` splits it into sessions that each end T s after the relay starts, every part CRC-checked. `--idle-s P` first keeps the relay running P s with empty `G2TX` (no temple traffic): the wall-time-or-exchanges experiment                                                                                                                                                                                                           |
-| `recover --side S --image .wisp-cache/stock/g2-2.4.0.24.bin [--max-session-s T] [--resume-at N]` | MRAM `0x438000–0x7BF56F` of side S, via the loader            | the image is the pinned stock 2.4.0.24 main (`df8cfddf…`); the bootloader CRC matches and the update flag is clear (else `--allow-pending-flag`), in every session; every write is inside the app region (the flag record and everything else are refused in code). Writes the body in parts, one per session ending T s after the relay starts (default 12; 0 = one session); each session first CRC-checks the body written so far, then CRC-checks its part. The 16 vector bytes go last, once, in a session that has just CRC-checked the whole body; then the full CRC. A stop prints `--resume-at N`; a resumed run CRC-checks those N bytes before writing. A HELO in the middle (temple reset) stops the session without a release |
+| `link-soak --side S [--bytes N] [--max-session-s T \| --idle-s P]`                               | nothing (temple reset by the case)                            | as `loader-hello`. Streams N bytes (default 1 MiB, about 65,536 exchanges) of the app region **out** with `dump`, checks them against `checksum` of the same range, and reports the exchange count and time per exchange. A session as long and dense as `recover`'s, without a write. `--max-session-s T` splits it into sessions that each end T s after the relay starts, every part CRC-checked. `--idle-s P` first keeps the relay running P s with empty `G2TX` (no temple traffic): the wall-time-or-exchanges experiment, and a quick check that the relay feeds the case watchdog                                                                                                                                                                                                           |
+| `recover --side S --image .wisp-cache/stock/g2-2.4.0.24.bin [--max-session-s T] [--resume-at N]` | MRAM `0x438000–0x7BF56F` of side S, via the loader            | the image is the pinned stock 2.4.0.24 main (`df8cfddf…`); the bootloader CRC matches and the update flag is clear (else `--allow-pending-flag`), in every session; every write is inside the app region (the flag record and everything else are refused in code). Writes the body in parts, one per session ending T s after the relay starts (default 600 with the default relay, 12 with `--case-profile observed-33`; 0 = one session); each session first CRC-checks the body written so far, then CRC-checks its part. The 16 vector bytes go last, once, in a session that has just CRC-checked the whole body; then the full CRC. A stop prints `--resume-at N`; a resumed run CRC-checks those N bytes before writing. A HELO in the middle (temple reset) stops the session without a release |
 
-Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`, and sessions through the relay framing on a relay model and on drdaeman's real relay binary under Unicorn) and `wisp-fw:w18-test` (Renode).
+Every case command takes `--case-profile` (default `observed-33-feed`, the relay that feeds the case watchdog; `observed-33` is the old one). Hard-coded in `wisp_w18/pins.py`: every hash above, the only writable regions, the token. The RAM programs are drdaeman's `checksum`, `dump`, `recover` (pinned, MIT). Tests: `pnpm nx run wisp-recovery:test` (fakes, including a power cut in the middle of `recover`, and sessions through the relay framing on a relay model and on drdaeman's real relay binary under Unicorn, with and without the watchdog feed, against an emulated YHM4005) and `wisp-fw:w18-test` (Renode).
 
 Every session's report keeps the error that stopped it, the step and write position, the cleanup failures beside it, and the last 16 exchanges (sent, received, time); the case's relay record is decoded. A relay exit status other than 6 is an error.
 
@@ -261,7 +261,7 @@ Every session's report keeps the error that stopped it, the step and write posit
 
 Both runs of `recover` on the left temple (19:30 and 19:37 UTC, the second after a reseat) stopped the same way. Everything up to the writer passed: `HELO`, hold, bootloader CRC `63cd8dda`, flag clear, app CRC `d9864941`. Then no reply came, three 60 s timeouts ran out, and the relay never answered `G2EX`. The temple was unharmed ([hardware log](safety.md)). The analysis below was done on t3-worker, from code, emulation and the relay record the tool read back. Nothing in it touched hardware.
 
-**Root cause: not found with confidence.** (Follow-up: F1 stalled the same way, and the watchdog was ruled out; see [Long relay sessions](#long-relay-sessions-f1-stalled-too-and-it-is-not-the-cases-watchdog).) What is settled:
+**Root cause: not found with confidence.** (Follow-up: F1 stalled the same way. The MCU's own watchdog was ruled out. The cause is the case's external YHM4005 watchdog; see [Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog).) What is settled:
 
 - **It is not our framing [C].** Every host frame is byte-identical to drdaeman's reference host code at `1d22097`. That covers `protocol.py` `request` (RQST, INPUT_DATA = count, 16 data bytes, CRC-32) and `link.py` `exchange` (G2TX length and checksum, the G2RX checks). In emulation, his real relay binary under Unicorn forwards a streamed write behind the unmodified `CaseRelayLink` (`tests/test_relay.py`). A full stock `recover` also passes in Renode through the relay framing: 245,795 exchanges (`recover-relay` above). His own hardware test of `recv` through the relay covered a 1 KiB range (programmed, read back, restored): a few hundred exchanges per session, not hundreds of thousands [C, PROTOCOL.md].
 - **The case MCU stopped running the relay [C, relay record].** The record layout comes from our disassembly of the bridge and from `case_exchange.c`:
@@ -301,7 +301,9 @@ Hypotheses, most likely first:
 - Step C's liveness check uses a new BLE connection and is informational: a missing answer is reported, not fatal.
 - New tests: sessions through the relay framing, on the relay model (a port of `case_exchange.c`) and on drdaeman's real relay binary under Unicorn, both behind the code `CaseRelayLink` runs. Making the case stop while it forwards the first `INPUT_DATA` reproduces the hardware's relay record byte for byte in the model and field for field in the binary, and the report shows the original timeout with the cleanup failures beside it. `recover-relay` covers the same path in Renode.
 
-### Long relay sessions: F1 stalled too, and it is not the case's watchdog
+### Long relay sessions: the case's YHM4005 watchdog
+
+**Resolved on 2026-11-07.** The stalls are the case's external watchdog, a YHM4005 that only the case app feeds. A case-only probe confirmed it on hardware. The relay now feeds it: [The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog). The history follows in order. The MCU's own watchdog (IWDG, ruled out below) is indeed not involved. The wall-time hypothesis (2) was right. [The ~30 s clock that survives case resets](#the-30-s-clock-that-survives-case-resets) found the chip.
 
 On 2026-11-06 at 22:31 UTC the read-only `link-soak` (F1) stopped the same way as both `recover` runs. It made 1,110 good exchanges at 17.5 ms each, then exchange #1111 got no answer. The relay record was the step-F record again: phase 1, route restore never started, last temple send 32 bytes, capture = #1110's reply, UART error flags 0. Nothing was written, and the temple was fine after one `loader-hello`. So the problem is **long case relay sessions**, not `recv` or anything specific to writing. The analysis below was done on t3-worker from the reports, the Mac thread's transcript and disassembly. Nothing in it touched hardware.
 
@@ -389,7 +391,7 @@ Each pause tick also measures the relay's poll bound on real hardware. It is rep
 
 The timing across five stalls fits one clock: time since the case's own 1.2.57 app last ran for more than a moment. Brief banner boots do not reset it. This analysis looked for an external chip that the app services and the ROM and relay do not. It was done on t3-worker from the pinned image (SHA-256 `773b6d4c…`), Capstone, Unicorn and the vendor datasheet. Nothing touched hardware. Tags: [C] checked in the code, [I] inferred, [D] datasheet.
 
-**Verdict: the case has an external watchdog, a YHMICROS YHM4005, and the app arms it at every boot. Only the app feeds it.** It is the strongest candidate for the stalls. Its configured timeout is 20 s nominal, though, a little short of the observed 26.6–31.0 s (see "What does not fit yet").
+**Verdict: the case has an external watchdog, a YHMICROS YHM4005, and the app arms it at every boot. Only the app feeds it.** It is the strongest candidate for the stalls (confirmed on hardware the same day: [The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). Its configured timeout is 20 s nominal, though, a little short of the observed 26.6–31.0 s (see "What does not fit yet").
 
 **The chips and their buses [C].** The case has no hardware I2C. There is no I2C1/2/3 base literal, and every chip is bit-banged on GPIO.
 
@@ -419,8 +421,8 @@ Decoded with the datasheet [D]:
 **How the app feeds it [C].** The feed is in `pwrManagerTask` (entry `0x08007201`, created at `0x080069EC`):
 
 - Each loop it increments a counter at `0x20000884`, which starts at 0. When `counter % 5 == 0` (`0x08007220`) and the flag at `0x200000BE` is set, it calls `0x08002CB8` → `0x0800A270`. The flag is 1 in the decompressed `.data`; console command `0xDF` ("%s dog feed") toggles it.
-- `0x0800A270` drives PB2 as a push-pull output (init struct at `0x20000014`: pin mask 4, output, no pull, very high speed). It sets PB2 high for about 0.1 ms, low for about 4.4 ms (41 × a 350-iteration delay loop), then high again [C; the µs values are an estimate at 16 MHz, I].
-- The loop ends with `osDelay(1000)` (`0x08007EDA`). The tick is 1 kHz: SysTick LOAD = SystemCoreClock / 1000 − 1 at `0x0800C078`, with SystemCoreClock = 16 MHz. So **one feed every 5 loops, about every 5 s**, plus the loop body's own time.
+- `0x0800A270` drives PB2 as a push-pull output (init struct at `0x20000014`: pin mask 4, output, no pull, very high speed). It sets PB2 high for about 0.1 ms, low for about 4.4 ms (41 × a 350-iteration delay loop), then high again [C; the µs values are an estimate at 16 MHz, I; the case runs at 64 MHz, so about 1.5–2 ms low: see [the correction below](#the-relay-feeds-the-case-watchdog)].
+- The loop ends with `osDelay(1000)` (`0x08007EDA`). The tick is 1 kHz: SysTick LOAD = SystemCoreClock / 1000 − 1 at `0x0800C078`, with SystemCoreClock = 16 MHz (its reset value; `SystemClock_Config` raises the clock to 64 MHz and the tick stays 1 kHz [I]). So **one feed every 5 loops, about every 5 s**, plus the loop body's own time.
 - The first feed comes on the task's first loop. The arming in the self-check also clears the timer (RST_DOG). There is no other periodic action toward any chip: no timer ISR, and no charger re-write that looks like a kick.
 
 **What happens in the ROM and the relay [C + I].**
@@ -472,6 +474,263 @@ Decoded with the datasheet [D]:
 
 Sources: the YHM4005 product page, <http://www.yhmicros.com/productw.asp?id=136>, and the datasheet it links (V1.0, Dec 2024, `pdfjs/web/202697105331182.pdf` on that host, register map §5.1.4); STM32 AN3155 (Write Memory address check).
 
+#### The relay feeds the case watchdog
+
+**Confirmed on hardware (2026-11-07, case only, read-only; [hardware log](safety.md)).** The probe synced the case ROM and sent `GET` once a second, with no relay and no temple traffic. The case reset about 17–19 s after the ROM entry and then every ~20–21 s, whatever the app had run before (2 s or 30 s). After each reset the ROM needed a fresh `0x7F` sync. Log: `apps/wisp-recovery/runs/case-wdt-probe-20261107T162921Z.txt` (Mac). So the YHM4005 above is the cause of every long-session stall, with the timeout the app sets (reg 5 = `0x3B`, 20 s), fed by any falling edge on PB2 (reg 4 = `0x07`). Only the app's `pwrManagerTask` feeds it (`0x08007220` → `0x0800A270`, every 5 s). The ROM loader and drdaeman's relay never touch PB2.
+
+**Two corrections to the analysis above [C].**
+
+- **The case runs at 64 MHz, not 16 MHz.** `SystemClock_Config` (`0x08008438`) sets HSI16 × 8 / 2 = 64 MHz, AHB and APB ÷1. 16 MHz is only `SystemCoreClock`'s reset value. The bridge calls this function first, so the relay runs at 64 MHz too. Its own constants assume that clock (`BRR` = 556 for 115,200 Bd, 21,334 turns of a 3-cycle loop per millisecond). The measured 18.1 s empty-`G2TX` bound also fits: 64,000,000 polls of an 18-cycle loop at 64 MHz. So the app's feed pulse is about 1.5–2 ms low, not 4.4 ms.
+- **What did not fit now does.** The relay stalls came 19.2–22.4 s after the relay started (F1, F1a), that is 20 s ± 10 % after the relay start, not after the app last ran. The relay start drives PB2 low once: the bridge's first calls into the case flash are `main()`'s own `HAL_Init`, `SystemClock_Config`, `MX_GPIO_Init` and the PMIC bus init. `MX_GPIO_Init` (`0x08006A40`) does `HAL_GPIO_WritePin(GPIOB, PB2, 0)` and then makes PB2 a push-pull output. If the line idles high while the MCU leaves it floating, as it does in the ROM, that is one falling edge, one feed, at every relay start [I]. The case-only probe (no relay) reset 17–19 s after the ROM entry, as the app's last feed plus 20 s predicts. A banner boot runs the same `MX_GPIO_Init` before `Power up...`, yet F1b suggests banner boots do not reset the clock. That difference is not explained. It does not matter for the fix.
+
+**The fix: case relay `observed-33-feed` (the tool's new default, both temples).**
+
+| | |
+| --- | --- |
+| Pin | `ad9ccb587f861aa4531753216a35e6f1fa8c9011eed03b5cd6c8c199b764ef94`, 5,796 bytes (`pins.RELAY_SHA256["observed-33-feed"]`) |
+| Built by | `image.build_relay("observed-33-feed")`: observed-33 (`6beb9a5e…`, rebuilt from the pinned template and the cached case firmware), then `relay_feed.apply()`. Six 4-byte sites are re-pointed, each checked for drdaeman's exact bytes, and 288 bytes of our code are appended at `0x20011584`. |
+| Our code | `wisp_w18/data/case_relay_feed.S` (MIT), assembled with binutils 2.46 to `case_relay_feed.bin`, SHA-256 `e78a88bb83947ae05bae319635ec7a75d996a50c0818ecd055f99a939ab7e87b` (the commands are in the file's header) |
+| Old relay | `--case-profile observed-33` still loads `6beb9a5e…`, for comparison |
+
+What it does:
+
+- **At relay start** (in place of the bridge's `bl 0x200103e8`, before the banner), after the bridge's own init:
+  - `RCC_IOPENR` |= GPIOBEN and `RCC_APBENR1` |= TIM6EN, both read-modify-write.
+  - PB2 is set up as the app's feed sets it up: first `BSRR` = PB2 high, then `OTYPER` push-pull, `PUPDR` no pull, `OSPEEDR` very high and `MODER` bits 5:4 = `01`. Each is a read-modify-write of PB2's bits only.
+  - PB2 stays high for 100 µs, then goes low: the first feed, within a millisecond of Go.
+  - TIM6 starts at 10 kHz (`PSC` = 6399), with `URS` set.
+- **The feed itself:** PB2 is low for 4.5 ms (45 ticks), then high for 2.0 s (20,000 ticks), and so on. Each change happens at the first poll after TIM6 overflows, in `feed_tick`. One falling edge comes every 2.0045 s plus the time to that poll. The 4005 needs one within 18 s (20 s − 10 %).
+- **Where it polls.** The check is one load and one bit test of TIM6's update flag. It sits in every loop the relay can wait in:
+
+  | Loop | Site |
+  | --- | --- |
+  | the bridge's host read (`G2RQ`) | `0x2001031C` |
+  | the wait for the temple's `HELO` | `0x2001074C` |
+  | the wait for a temple frame (the per-exchange loop, and the empty-`G2TX` poll bound) | `0x200108B2` |
+  | the relay's host read (`G2TX`, `G2EX`) | `0x200109BC` |
+  | the bridge's ~6 s wait between `G2RS` and its reset, in a version that polls (`fed_delay`) | `0x20010232` |
+
+  The host resets the case 0.3 s after `G2RS`, so the relay is inside that wait when the cleanup starts. The 4005 has been fed less than 2.1 s before.
+- **Why TIM6.** The relay runs with interrupts masked and SysTick off: the bridge clears `SYST_CSR` and every NVIC enable. So the time source has to be polled.
+  - TIM6 is a basic timer the case app never references (no `0x40001000` literal in 1.2.57). Its update flag is sticky: a stretch without polls (a stock UART re-init, a YHM2510 transaction, the ~0.1 s temple reset waveform) delays the next feed but never loses one, however long the stretch.
+  - SysTick `COUNTFLAG` would wrap every 0.26 s at 64 MHz (2.1 s at HCLK/8). Any gap longer than one wrap would silently lose time, which is the unsafe direction.
+  - The clock is the app's own 64 MHz. If it were ever 4× slower, the feeds would come every 8 s, still inside 18 s.
+- **Why no busy pulse.** A 4.5 ms busy-wait would drop host bytes (USART1, a 1-byte receive register, 87 µs a byte) or temple bytes (USART3 at 1 Mbaud, overrun detection off). The pulse is started and ended by later polls, so a poll never waits. The temple path is unchanged: no frame, delay or waveform byte differs.
+- **Not hooked, on purpose:**
+  - **Even's temple reset waveform.** It takes about 0.1 s, and its delays (the relay's `case_reset_delay_ms`) must keep their exact timing. The `HELO` wait right after it polls.
+  - **The bridge's 0.1 s delay before the banner.** It comes right after the first feed.
+  - **The host transmit loops.** UART-bound, at most a few ms.
+  - **The stock case HAL calls.** They take µs. If one hung with interrupts masked (hypothesis 1 above), nothing in SRAM could help. The 4005 would then reset the case about 20 s later, which the cleanup handles.
+- **Layout.** Nothing the tool or the bridge relies on moves. The record stays at `0x20011A00`, `PROOF` at `0x20011B00`, the `G2RQ` buffer at `0x20011900` and the `G2RS` buffer at `0x20011C00`; the stack top is `0x2001F000`. The code uses `0x20011584`–`0x200116A3` of the free `0x20011584`–`0x200118FF`. The tool's SRAM allowlist (`rom.sram_regions`) admits the 5,796-byte program region because it ends below the record. As before, the ROM may only write the relay's own bytes or zeros.
+- **Safety.** The added code addresses only `RCC_IOPENR`/`RCC_APBENR1`, GPIOB and TIM6. Its literal pool holds no other address, and it calls only the bridge's init and itself. It never calls into the case flash. Under emulation no instruction writes the case flash or the FLASH registers (checked in every new test). The ROM command allowlist and the SRAM allowlist are unchanged. The case flash is still never written.
+- **Side effect: longer poll bounds [I, cycle counts from the listing].** Each poll now costs about 13 more cycles:
+
+  | Wait | Before | Now |
+  | --- | --- | --- |
+  | `G2RQ` | ~14 s | ~27 s |
+  | `HELO` | ~16 s | ~29 s |
+  | temple frame, and the empty-`G2TX` answer | 18.1 s (measured) | ~31 s |
+  | host byte | ~13 s | ~26 s |
+
+  The host's timeouts (60 s per frame, 120 s per empty `G2TX`) still cover them. `link-soak --idle-s` ticks are about 30 s now.
+
+The changed regions, disassembled (`arm-none-eabi-objdump`). Everything else is byte-identical to observed-33.
+
+| Site | observed-33 | observed-33-feed |
+| --- | --- | --- |
+| `0x20010032` | `f000 f9d9  bl 0x200103e8` (bridge init) | `f001 faa7  bl 0x20011584 <feed_start>` |
+| `0x20010232` | `f000 f9f7  bl 0x20010624` (the wait before the reset) | `f001 fa1c  bl 0x2001166e <fed_delay>` |
+| `0x2001031C` | `69d0  ldr r0, [r2, #28]` / `210f  movs r1, #15` | `f001 f97b  bl 0x20011616 <poll_bridge_rx>` |
+| `0x2001074C` | `69d9  ldr r1, [r3, #28]` / `240f  movs r4, #15` | `f000 ff6e  bl 0x2001162c <poll_beacon>` |
+| `0x200108B2` | `2002  movs r0, #2` / `2b00  cmp r3, #0` | `f000 fec6  bl 0x20011642 <poll_temple_rx>` |
+| `0x200109BC` | `6826  ldr r6, [r4, #0]` / `0737  lsls r7, r6, #28` | `f000 fe4c  bl 0x20011658 <poll_host_rx>` |
+
+No branch targets the second instruction of a displaced pair. Each enclosing function saved LR on entry, so the extra `bl` clobbers nothing live. Each hook runs the displaced pair last, so the flags the next branch tests are theirs.
+
+<details>
+<summary>The appended code, 0x20011584–0x200116A3 (288 bytes)</summary>
+
+```text
+20011584 <feed_start>:
+20011584:  b510       push    {r4, lr}
+20011586:  f7fe ff2f  bl      200103e8 <bridge_init>
+2001158a:  483f       ldr     r0, [pc, #252]  @ literal at 20011688
+2001158c:  6801       ldr     r1, [r0, #0]
+2001158e:  2202       movs    r2, #2
+20011590:  4311       orrs    r1, r2
+20011592:  6001       str     r1, [r0, #0]
+20011594:  6881       ldr     r1, [r0, #8]
+20011596:  2210       movs    r2, #16
+20011598:  4311       orrs    r1, r2
+2001159a:  6081       str     r1, [r0, #8]
+2001159c:  6881       ldr     r1, [r0, #8]
+2001159e:  483b       ldr     r0, [pc, #236]  @ literal at 2001168c
+200115a0:  2104       movs    r1, #4
+200115a2:  6181       str     r1, [r0, #24]
+200115a4:  6841       ldr     r1, [r0, #4]
+200115a6:  2204       movs    r2, #4
+200115a8:  4391       bics    r1, r2
+200115aa:  6041       str     r1, [r0, #4]
+200115ac:  68c1       ldr     r1, [r0, #12]
+200115ae:  2230       movs    r2, #48 @ 0x30
+200115b0:  4391       bics    r1, r2
+200115b2:  60c1       str     r1, [r0, #12]
+200115b4:  6881       ldr     r1, [r0, #8]
+200115b6:  4311       orrs    r1, r2
+200115b8:  6081       str     r1, [r0, #8]
+200115ba:  6801       ldr     r1, [r0, #0]
+200115bc:  4391       bics    r1, r2
+200115be:  2210       movs    r2, #16
+200115c0:  4311       orrs    r1, r2
+200115c2:  6001       str     r1, [r0, #0]
+200115c4:  4932       ldr     r1, [pc, #200]  @ literal at 20011690
+200115c6:  3901       subs    r1, #1
+200115c8:  d1fd       bne.n   200115c6 <feed_start+0x42>
+200115ca:  4b32       ldr     r3, [pc, #200]  @ literal at 20011694
+200115cc:  2104       movs    r1, #4
+200115ce:  6019       str     r1, [r3, #0]
+200115d0:  4931       ldr     r1, [pc, #196]  @ literal at 20011698
+200115d2:  6299       str     r1, [r3, #40] @ 0x28
+200115d4:  2101       movs    r1, #1
+200115d6:  0489       lsls    r1, r1, #18
+200115d8:  6181       str     r1, [r0, #24]
+200115da:  212c       movs    r1, #44 @ 0x2c
+200115dc:  62d9       str     r1, [r3, #44] @ 0x2c
+200115de:  2101       movs    r1, #1
+200115e0:  6159       str     r1, [r3, #20]
+200115e2:  2100       movs    r1, #0
+200115e4:  6119       str     r1, [r3, #16]
+200115e6:  2105       movs    r1, #5
+200115e8:  6019       str     r1, [r3, #0]
+200115ea:  bd10       pop     {r4, pc}
+
+200115ec <feed_tick>:
+200115ec:  b407       push    {r0, r1, r2}
+200115ee:  4829       ldr     r0, [pc, #164]  @ literal at 20011694
+200115f0:  2100       movs    r1, #0
+200115f2:  6101       str     r1, [r0, #16]
+200115f4:  4925       ldr     r1, [pc, #148]  @ literal at 2001168c
+200115f6:  694a       ldr     r2, [r1, #20]
+200115f8:  0752       lsls    r2, r2, #29
+200115fa:  d504       bpl.n   20011606 <feed_tick+0x1a>
+200115fc:  2201       movs    r2, #1
+200115fe:  0492       lsls    r2, r2, #18
+20011600:  618a       str     r2, [r1, #24]
+20011602:  222c       movs    r2, #44 @ 0x2c
+20011604:  e002       b.n     2001160c <feed_tick+0x20>
+20011606:  2204       movs    r2, #4
+20011608:  618a       str     r2, [r1, #24]
+2001160a:  4a24       ldr     r2, [pc, #144]  @ literal at 2001169c
+2001160c:  62c2       str     r2, [r0, #44] @ 0x2c
+2001160e:  2201       movs    r2, #1
+20011610:  6142       str     r2, [r0, #20]
+20011612:  bc07       pop     {r0, r1, r2}
+20011614:  4770       bx      lr
+
+20011616 <poll_bridge_rx>:
+20011616:  4922       ldr     r1, [pc, #136]  @ literal at 200116a0
+20011618:  6809       ldr     r1, [r1, #0]
+2001161a:  0849       lsrs    r1, r1, #1
+2001161c:  d303       bcc.n   20011626 <poll_bridge_rx+0x10>
+2001161e:  4671       mov     r1, lr
+20011620:  f7ff ffe4  bl      200115ec <feed_tick>
+20011624:  468e       mov     lr, r1
+20011626:  69d0       ldr     r0, [r2, #28]
+20011628:  210f       movs    r1, #15
+2001162a:  4770       bx      lr
+
+2001162c <poll_beacon>:
+2001162c:  4c1c       ldr     r4, [pc, #112]  @ literal at 200116a0
+2001162e:  6824       ldr     r4, [r4, #0]
+20011630:  0864       lsrs    r4, r4, #1
+20011632:  d303       bcc.n   2001163c <poll_beacon+0x10>
+20011634:  4674       mov     r4, lr
+20011636:  f7ff ffd9  bl      200115ec <feed_tick>
+2001163a:  46a6       mov     lr, r4
+2001163c:  69d9       ldr     r1, [r3, #28]
+2001163e:  240f       movs    r4, #15
+20011640:  4770       bx      lr
+
+20011642 <poll_temple_rx>:
+20011642:  4817       ldr     r0, [pc, #92]  @ literal at 200116a0
+20011644:  6800       ldr     r0, [r0, #0]
+20011646:  0840       lsrs    r0, r0, #1
+20011648:  d303       bcc.n   20011652 <poll_temple_rx+0x10>
+2001164a:  4670       mov     r0, lr
+2001164c:  f7ff ffce  bl      200115ec <feed_tick>
+20011650:  4686       mov     lr, r0
+20011652:  2002       movs    r0, #2
+20011654:  2b00       cmp     r3, #0
+20011656:  4770       bx      lr
+
+20011658 <poll_host_rx>:
+20011658:  4f11       ldr     r7, [pc, #68]  @ literal at 200116a0
+2001165a:  683f       ldr     r7, [r7, #0]
+2001165c:  087f       lsrs    r7, r7, #1
+2001165e:  d303       bcc.n   20011668 <poll_host_rx+0x10>
+20011660:  4677       mov     r7, lr
+20011662:  f7ff ffc3  bl      200115ec <feed_tick>
+20011666:  46be       mov     lr, r7
+20011668:  6826       ldr     r6, [r4, #0]
+2001166a:  0737       lsls    r7, r6, #28
+2001166c:  4770       bx      lr
+
+2001166e <fed_delay>:
+2001166e:  b510       push    {r4, lr}
+20011670:  0884       lsrs    r4, r0, #2
+20011672:  d007       beq.n   20011684 <fed_delay+0x16>
+20011674:  480a       ldr     r0, [pc, #40]  @ literal at 200116a0
+20011676:  6800       ldr     r0, [r0, #0]
+20011678:  0840       lsrs    r0, r0, #1
+2001167a:  d301       bcc.n   20011680 <fed_delay+0x12>
+2001167c:  f7ff ffb6  bl      200115ec <feed_tick>
+20011680:  3c01       subs    r4, #1
+20011682:  d1f7       bne.n   20011674 <fed_delay+0x6>
+20011684:  bd10       pop     {r4, pc}
+20011686:  0000       .short  0x0000
+20011688:  40021034   .word   0x40021034
+2001168c:  50000400   .word   0x50000400
+20011690:  00000855   .word   0x00000855
+20011694:  40001000   .word   0x40001000
+20011698:  000018ff   .word   0x000018ff
+2001169c:  00004e1f   .word   0x00004e1f
+200116a0:  40001010   .word   0x40001010
+```
+
+</details>
+
+**Verified in emulation (t3-worker, Unicorn 2.1.3; `tests/test_case_watchdog.py`, [C, emulation]).** `fake_case.py` now models emulated time, GPIOB, TIM6 and a YHM4005 on PB2. The 4005 resets the case 20 s after the last falling edge, keeps SRAM and leaves the case in its ROM. That ROM stays deaf until the next reset if its first byte is not `0x7F`. The relay binary under test is the template (Even's waveform is a hook), with and without the feed. It runs behind the real `CaseRelayLink`, `Session` and `cli`.
+
+| Run | Old relay (observed-33 layout) | New relay (with the feed) |
+| --- | --- | --- |
+| idle, empty `G2TX`s only | the first is answered 18.16 s after the relay started (hardware: 18.1 s); the 4005 resets the case 20.01 s after the relay started; the next `G2TX` gets no answer; record phase 1 (the hardware's); the ROM hears `G2TX` first and stays deaf, and the cleanup's NRST still gets a fresh one | three `G2TX`s, 87 s in all; no reset; 42 feeds, one every 2.10–2.11 s (2.0045 s plus up to two 50 ms emulation steps); exit status 6, route restored |
+| pulse shape (0.5 ms steps) | | 14 pulses: low 5.0 ms (4.5 ms plus one step), high 2.0001 s |
+| `link-soak --bytes 65536`, 17.5 ms per exchange, one session | stops at exchange #1,133, the 4005 firing 20.00 s after the relay started (hardware F1: #1,111) | passes: 4,113 exchanges, 73 s, CRC matches, no reset |
+| `recover --max-session-s 0`, 110,000 B, 17.5 ms per exchange | | passes in one session: 7,397 exchanges, 131 s; body, vectors last, final CRC |
+| the 4005's next reset lands in the cleanup's ROM session | the cleanup's first ROM session is cut, the second (fresh NRST) reads the record and zeroes the SRAM; the case ends on its app | |
+
+`relay_model.RelayModel` has the same watchdog (`watchdog_s`, `feeds_watchdog`). Without the feed, one 64 KiB soak session stops 20 s in. With it, the soak passes in one session of more than 60 s. The session-guard tests keep the old relay (`--case-profile observed-33`), where the guard is what keeps a session alive.
+
+**Cleanup after an unexpected case silence [C + I].** After a 4005 reset during a session, the host's next bytes (`G2TX`, `G2EX`) reach the case ROM before any `0x7F`. Its autobaud locks onto them, and it ignores syncs until the next reset.
+
+- `close()` sends `G2EX`, gets no answer and records the timeout, as before.
+- `enter_rom` then asserts RTS, that is NRST. That is a fresh ROM, which takes the `0x7F` sync, so **NRST is enough**.
+- What NRST does not stop is the 4005 itself. On an unfed case it resets the MCU every ~20.5 s, and that can cut the cleanup's ~2 s ROM session. The ROM part of the cleanup (record read, SRAM clear) is therefore retried once from a fresh NRST (`case_rom_cleanup_retry` in the events).
+- With the new relay the case was fed less than 2.1 s before the host's NRST, so the cleanup has at least 16 s.
+
+**Tool changes.**
+
+- `--case-profile` defaults to `observed-33-feed` for every W18 command, so for both sides. `bootloader-plan` and `bootloader-install` check its pin.
+- `recover --max-session-s` defaults to 600 s with a feeding relay (12 s with `observed-33`; 0 = one session). `--resume-at` is unchanged.
+- `link-soak` still defaults to one session.
+
+**Remaining risk.**
+
+- **Not on hardware yet.** Emulation runs our reading of the STM32G0B1 (RM0444: `RCC_APBENR1` TIM6EN = bit 4, TIM6 at `0x40001000`, GPIOB at `0x50000400`) and of the 4005 (any falling edge feeds). If TIM6 did not count, the relay would feed only at its start and stall about 20 s in, like the old one. That is no worse than today, and F1c below shows it within 20 s.
+- **Pulse width.** The datasheet gives no minimum and says any falling edge feeds. Ours (4.5 ms) is longer than the app's (~1.5–2 ms at 64 MHz) and far longer than the app's ACMD bit pulses (23 and 90 delay-loop turns, start 350). It is the same kind of signal the app sends every 5 s.
+- **Per-exchange stall.** The probe does not rule out hypothesis 1 (a rare hang in stock HAL code with interrupts masked). If it exists, F1c stops at a random exchange, and the 4005 resets the case about 20 s after the last feed (record phase 1). `recover`'s default 600 s parts and `--resume-at` bound the cost of that.
+- **The unfed ROM time.** The ROM part before Go (case hash and relay load, ~7 s) and after `G2RS` is unfed. A session therefore has to start within ~18 s of the last feed. Back-to-back sessions start ~10 s apart. After a longer pause the case app runs and feeds.
+
 ### Step by step for Jan (Mac, left temple first)
 
 Setup, once: on the Mac, in the repo, `git pull`, `pnpm nx run wisp-ota:build`, then `node packages/wisp-ota/dist/cli.js fetch 2.3.2.14` and `… fetch 2.4.0.24` (both SHA-256 checked into `.wisp-cache/stock/`). `uv` provides pyserial and bleak per command. Find the left temple's BLE identifier with the Even app closed, for example `uv run --with bleak==0.22.3 python -c "import asyncio, bleak; [print(d.address, d.name) for d in asyncio.run(bleak.BleakScanner.discover(10))]"`: its name ends `_L_xxxxxx` (on macOS the identifier is a UUID).
@@ -506,29 +765,37 @@ Stops:
 
 **E. Read-only INFO dump.** `… w18.py info-dump --side left`. Success: JSON with MCUCTRL, PWRCTRL, INFO0, and INFOC/DCU, or `skipped` for each domain that is powered off. Paste it into the hardware log. If the temple hangs in the loader (a read faulted; no reply), rerun `loader-hello`: the reset clears it.
 
-**F. Prove recovery** (W17's proof). Long case relay sessions stall after about 20 s or 1,000–4,000 exchanges ([Long relay sessions](#long-relay-sessions-f1-stalled-too-and-it-is-not-the-cases-watchdog)). So F now starts with two read-only steps. Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`.
+**F. Prove recovery** (W17's proof). Long relay sessions stalled because the case's YHM4005 watchdog reset the case about 20 s after the relay started. The tool's default relay now feeds it ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). F1 (2026-11-06), F1a and F1b (2026-11-07) ran with the old relay; they and the case-only probe are in the [hardware log](safety.md).
 
-**F1a. Wall time or exchange count? (read-only, about 3 min).**
-`… w18.py link-soak --side left --idle-s 45 --bytes 65536`
-The relay runs 45 s with no temple traffic (`idle: relay answered after … s` lines, each one the relay's poll bound), then 64 KiB stream out.
+Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`. `git pull` first. Every command below then loads the relay `observed-33-feed` (`ad9ccb58…`) by default, and the `bridge_loaded` line in its output names that hash.
 
-- Stops during the pause (`while: idle pause…`): **wall time**. Go to F1b. Note `stall.since_relay_start_s` and the `idle_ticks_s` from the report.
-- The pause passes and the stream stops: **per exchange**. Stop here. F2 needs the relay fix first (a new PR). Send the report.
-- Everything passes (`OK: 65536 bytes …`): go to F1b, which measures how often it happens.
+**F1c. One long session, read-only (about 20 min).**
+`… w18.py link-soak --side left`
+It streams 1 MiB of the app region out with `dump`, in **one** relay session of about 65,600 exchanges at 17.5 ms, and checks it against the temple's CRC. Nothing is written. The old relay stopped such a session after about 1,100 exchanges.
+Success: `OK: 1048576 bytes streamed and matched the temple's CRC (…) in about 1150 s, … exchanges, about 17.5 ms each, 1 session(s)`, `relay_exit_status 6`, the case back on 1.2.57, and the temple boots normally. Add a hardware-log row.
+Stops (nothing is written either way; rerun `loader-hello` once afterwards):
 
-In every case, rerun `loader-hello` once afterwards if the run stopped, as before.
+- **About 20 s in** (`stall.since_relay_start_s` ≈ 19–22, around exchange #1,100): the feed does not reach the watchdog on hardware. Do not run F2. Send the report.
+- **Later, at a random point:** the watchdog is fed, but something else stops the relay (hypothesis 1, a rare hang in stock case code). Send the report. F2 can still run in its default 600 s parts, each resumable.
 
-**F1b. Soak the full 1 MiB in short sessions (read-only, about 50 min).**
-`… w18.py link-soak --side left --max-session-s 12`
-Success: one `session k: …/1048576 bytes streamed and CRC-checked (… s since the relay started)` line per session (about 120 sessions, each under 12 s), then `OK: 1048576 bytes streamed and matched the temple's CRC …`, `relay_exit_status 6` every session, the case back on 1.2.57, and the temple boots normally. The run as a whole goes far past 33 s; no single relay session does.
-Stops: `STOPPED: …` with `while: stream bytes […) …` means a short session stalled too, with nothing written. **Do not run F2.** Send the report (it has `stall.since_relay_start_s`), then rerun `loader-hello` once.
+For a quicker first look (about 2 min, read-only): `… w18.py link-soak --side left --idle-s 60 --bytes 65536`. The relay runs 60 s with no temple traffic (two idle ticks of about 30 s each), then streams 64 KiB. The old relay stopped in such a pause 20 s in.
 
-**F2. Write** (only after F1b passed; budget about 3–3.5 h at the default 12 s sessions).
+**F2. Write** (only after F1c passed). About 75 min in the default parts, about 72 min in one session.
 `… w18.py recover --side left --image .wisp-cache/stock/g2-2.4.0.24.bin`
+
+- **Default: parts of at most 600 s after the relay starts.**
+  - The first session writes a 4 KiB part to measure the rate.
+  - About eight sessions then write ~500 KiB each.
+  - A last session writes the vectors, after a CRC of the whole body.
+  - That makes about 10 sessions. Each adds about 15 s for the ROM entry, the case hash, the relay load and the cleanup.
+  - A stop costs at most one part.
+- **One session:** add `--max-session-s 0`. This is about 72 min: 245,707 exchanges (231,253 `INPUT_DATA` plus 14,454 progress reports) at 17.5 ms each, plus about a minute of checks. A stop leaves the old vectors but nothing to resume from, because the body is CRC-checked only at the end. The next run starts over.
+- With `--case-profile observed-33` (the old relay) the default goes back to 12 s sessions: about 3–3.5 h.
+
 Success:
 
 - `app region CRC-32 before …`, then the first progress line after 256 body bytes, within seconds;
-- one `session k: body …/3700064 bytes written and CRC-checked` line per session, each later session after a `resume check: … bytes already in MRAM match the image` line;
+- with parts: one `session k: body …/3700064 bytes written and CRC-checked` line per session, each later session after a `resume check: … bytes already in MRAM match the image` line;
 - in the last session, the vectors and `OK: stock 2.4.0.24 main app written and verified (<crc>) in N session(s)`;
 - boot released, then the temple boots, and the Even app and Lotti work.
 
@@ -546,8 +813,9 @@ Stops:
 - Jan's case firmware version (1.2.57 expected) and the temples' hardware version (drdaeman tested hardware 5).
 - Whether the bootloader in MRAM is the 2.4.0.24 one. It can't be read before the install ([W18 procedure](#what-gets-installed)); the install replaces it entirely.
 - INFOC / INFO0 / DCU contents: is SWD open, is SBL wired recovery provisioned, is secure boot off? Step 3 answers this.
-- Why long case relay sessions stall: not the case's watchdog. A per-exchange hang in stock HAL code, or a wall-time limit about 20 s after the relay starts? F1a decides ([Long relay sessions](#long-relay-sessions-f1-stalled-too-and-it-is-not-the-cases-watchdog)).
-- How long a full `recover` takes on hardware: estimated 30–45 min ([timing](#timing-on-hardware-estimates-i)), not 40 s: every 16 bytes costs one request/reply with a 6-tick delay in the loader. Whether the temple stays seated that long.
+- Why long case relay sessions stalled: answered, the case's YHM4005 watchdog ([Long relay sessions](#long-relay-sessions-the-cases-yhm4005-watchdog)). Open: does the relay's feed work on hardware, and is there also a rarer per-exchange stall? F1c decides both.
+- Why a brief banner boot seems not to feed the case watchdog when a relay start does, though both run the case's `MX_GPIO_Init` ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). It does not affect the fix.
+- How long a full `recover` takes on hardware: about 72–75 min at the measured 17.5 ms per exchange ([timing](#timing-on-hardware-estimates-i)), not 40 s: every 16 bytes costs one request/reply with a 6-tick delay in the loader. Whether the temple stays seated that long.
 - How long the stock app's bootloader copy really takes (its log line `Write file to MRAM success, time = %d ms`; estimated about 1 s).
 - The pogo pin count and the 1.8 V/3.3 V levels on the UART lines (the case's YHM2510 level-shifts them).
 - The SWD pad map: needs a donor teardown, and nobody has published one.
