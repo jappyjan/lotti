@@ -229,7 +229,18 @@ def bl_encode(pc: int, target: int) -> bytes:
 
 def build_relay(profile: str, cache: Path = CACHE) -> bytes:
     """drdaeman's case.bin, rebuilt: the template plus the relocated reset waveform from the
-    cached case 1.2.57 firmware, then the step-0 bridge variant for this case's YHM profile."""
+    cached case 1.2.57 firmware, then the step-0 bridge variant for this case's YHM profile.
+    A profile ending in "-feed" is that relay with our YHM4005 feed (relay_feed.py) on top."""
+    from . import relay_feed
+
+    if profile.endswith(pins.RELAY_FEED_SUFFIX):
+        base = profile.removesuffix(pins.RELAY_FEED_SUFFIX)
+        if base not in pins.RELAY_SHA256 or profile not in pins.RELAY_SHA256:
+            raise ImageError(f"unknown case profile {profile!r}")
+        image = relay_feed.apply(build_relay(base, cache))
+        if sha(image) != pins.RELAY_SHA256[profile]:
+            raise ImageError(f"{profile} case relay failed its pin")
+        return image
     template = bytearray((DATA / "case_relay_template.bin").read_bytes())
     if sha(template) != pins.RELAY_TEMPLATE_SHA256 or len(template) != pins.RELAY_BYTES:
         raise ImageError("case relay template failed its pin")

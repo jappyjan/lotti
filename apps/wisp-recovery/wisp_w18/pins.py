@@ -74,7 +74,14 @@ RELAY_SHA256 = {
     # Same bytes 1670/1680/1690/1700 patched 0x22 -> 0x33 as the step-0 observed-33 bridge
     # (the relay embeds the bridge at offset 0; Jan's case has YHM register 8 = 0x33).
     "observed-33": "6beb9a5e131e3ac171a20dcf53630b26d60a732f36f30f98ba64eef263b7edc8",
+    # observed-33 plus our YHM4005 feed (relay_feed.py, data/case_relay_feed.S; MIT): six
+    # 4-byte sites re-pointed and 300 bytes appended at 0x20011584, 5,808 bytes in all. The case
+    # watchdog reset every relay session about 20 s in without it (recovery.md).
+    "observed-33-feed": "4c7475fada40e748e64d2a47d5d60fa8a189f23d7afd74f7cecd8f95844047d5",
 }
+RELAY_FEED_SUFFIX = "-feed"
+# The relay the tool loads unless told otherwise, for both temples (one case).
+DEFAULT_CASE_PROFILE = "observed-33-feed"
 RELAY_ADDRESS = 0x2001_0000
 RELAY_BANNER = b"G2_POGO_BRIDGE_V1\n"
 RELAY_SEQUENCE = 31

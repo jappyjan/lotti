@@ -42,6 +42,7 @@ SOFTWARE.
 - The bridge binary above is byte-identical to its `tools/g2patch/data/case_bridge.bin`.
 - `wisp_w18/`: the loader protocol (`handshake.py`, `auth.py`, `protocol.py`), the stock BLE OTA install (`ble_ota.py`, `flash.py`), the bootloader patch and component layout (`patch.py`, `firmware.py`), the recovery write order (`recovery.py`, `recover.py`), the case relay session (`link.py`) and the relay assembly (`artifacts.py`), ported to Python with W18's allowlist added.
 - `wisp_w18/data/patch.bin`, `checksum.bin`, `dump.bin`, `recover.bin`: built from his sources at `1d22097` with his Makefile and flake (clang 21.1.8); `patch.bin` contains BearSSL 0.6 code (MIT, Thomas Pornin), as his build does. `case_relay_template.bin`: his `build/case.bin` with the 372 bytes of Even's case reset waveform (offset 0x1400) zeroed; Even's bytes are only ever read from the local cache at run time.
+- The `observed-33-feed` relay (`wisp_w18/relay_feed.py`) is his `case.bin` with the observed-33 table, with six of its instructions re-pointed to code of ours appended after it: `wisp_w18/data/case_relay_feed.S` and its build `case_relay_feed.bin` (MIT, this repository; it pulses PB2 for the case's YHM4005 watchdog). No code of his or Even's is in those two files.
 
 ```
 MIT License

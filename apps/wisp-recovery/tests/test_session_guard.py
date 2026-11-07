@@ -9,7 +9,11 @@ sessions that end inside --max-session-s; each recover session CRC-checks the bo
 far before it adds to it; the vectors are written once, last, after a whole-body CRC; a stopped
 split write resumes (--resume-at) only after its CRC check; the idle pause (--idle-s) tells the
 two failure models apart. And drdaeman's real relay binary answers the empty G2TX the idle pause
-sends."""
+sends.
+
+The cause turned out to be the case's YHM4005 watchdog (test_case_watchdog.py); with the relay
+that feeds it, the guard is only a resume granularity. These tests keep the old relay's defaults
+(`--case-profile observed-33`), where it is what keeps a session alive."""
 
 import hashlib
 import sys
@@ -74,11 +78,12 @@ def run_cli(argv, case):
     return code, reports[0]
 
 
-def recover_cli(stock, case, *extra):
+def recover_cli(stock, case, *extra, profile="observed-33"):
+    """`recover` as the old relay runs it (the guard's 12 s default), unless `profile` says otherwise."""
     with tempfile.TemporaryDirectory() as tmp, SmallStock(stock):
         raw = Path(tmp) / "stock.bin"
         raw.write_bytes(stock)
-        return run_cli(["recover", "--side", "left", "--image", str(raw), *extra], case)
+        return run_cli(["recover", "--side", "left", "--image", str(raw), "--case-profile", profile, *extra], case)
 
 
 def app_bytes(n):

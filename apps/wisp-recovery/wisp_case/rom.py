@@ -42,7 +42,7 @@ def _xor(data: bytes) -> int:
 
 def sram_regions(bridge: bytes) -> tuple[tuple[int, int], ...]:
     """The SRAM ranges this tool may write: the program region (its exact length: the 1,720-byte
-    step-0 bridge, or the 5,508-byte W18 case relay that embeds it) and the bridge's record."""
+    step-0 bridge, or the W18 case relay that embeds it: 5,508 bytes, 5,808 with the YHM4005 feed) and the bridge's record."""
     regions = ((pins.BRIDGE_ADDRESS, len(bridge)),) + pins.SRAM_WRITE_REGIONS[1:]
     if pins.BRIDGE_ADDRESS + len(bridge) > pins.RESULT_ADDRESS:
         raise RefusedError("program image would overlap the bridge record")
