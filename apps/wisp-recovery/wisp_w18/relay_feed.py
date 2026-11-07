@@ -27,18 +27,18 @@ DATA = Path(__file__).with_name("data")
 
 BASE = 0x2001_1584  # = RELAY_ADDRESS + RELAY_BYTES: right after the relocated waveform stubs
 LIMIT = 0x2001_1900  # the bridge's G2RQ buffer; the feed code must end before it
-BIN_SHA256 = "e78a88bb83947ae05bae319635ec7a75d996a50c0818ecd055f99a939ab7e87b"
-BIN_BYTES = 288
+BIN_SHA256 = "ff1efaf733b52ba26975583c8e630411f15bf073cb498b64247da5c73c5983c3"
+BIN_BYTES = 300
 
 # Symbols of case_relay_feed.S as linked at BASE (arm-none-eabi-nm).
 FEED_START = 0x2001_1584
-FEED_TICK = 0x2001_15EC
-POLL_BRIDGE_RX = 0x2001_1616
-POLL_BEACON = 0x2001_162C
-POLL_TEMPLE_RX = 0x2001_1642
-POLL_HOST_RX = 0x2001_1658
-FED_DELAY = 0x2001_166E
-FED_DELAY_COUNTER = 0x2001_1680  # `subs r4, #1` of fed_delay's loop (the emulator fast-forwards it)
+FEED_TICK = 0x2001_15F4
+POLL_BRIDGE_RX = 0x2001_161E
+POLL_BEACON = 0x2001_1634
+POLL_TEMPLE_RX = 0x2001_164A
+POLL_HOST_RX = 0x2001_1660
+FED_DELAY = 0x2001_1676
+FED_DELAY_COUNTER = 0x2001_1688  # `subs r4, #1` of fed_delay's loop (the emulator fast-forwards it)
 END = BASE + BIN_BYTES
 
 # (relay address, the 4 bytes there in drdaeman's relay, the new target, what it was)

@@ -487,9 +487,9 @@ Sources: the YHM4005 product page, <http://www.yhmicros.com/productw.asp?id=136>
 
 | | |
 | --- | --- |
-| Pin | `ad9ccb587f861aa4531753216a35e6f1fa8c9011eed03b5cd6c8c199b764ef94`, 5,796 bytes (`pins.RELAY_SHA256["observed-33-feed"]`) |
-| Built by | `image.build_relay("observed-33-feed")`: observed-33 (`6beb9a5e…`, rebuilt from the pinned template and the cached case firmware), then `relay_feed.apply()`. Six 4-byte sites are re-pointed, each checked for drdaeman's exact bytes, and 288 bytes of our code are appended at `0x20011584`. |
-| Our code | `wisp_w18/data/case_relay_feed.S` (MIT), assembled with binutils 2.46 to `case_relay_feed.bin`, SHA-256 `e78a88bb83947ae05bae319635ec7a75d996a50c0818ecd055f99a939ab7e87b` (the commands are in the file's header) |
+| Pin | `4c7475fada40e748e64d2a47d5d60fa8a189f23d7afd74f7cecd8f95844047d5`, 5,808 bytes (`pins.RELAY_SHA256["observed-33-feed"]`) |
+| Built by | `image.build_relay("observed-33-feed")`: observed-33 (`6beb9a5e…`, rebuilt from the pinned template and the cached case firmware), then `relay_feed.apply()`. Six 4-byte sites are re-pointed, each checked for drdaeman's exact bytes, and 300 bytes of our code are appended at `0x20011584`. |
+| Our code | `wisp_w18/data/case_relay_feed.S` (MIT), assembled with binutils 2.46 to `case_relay_feed.bin`, SHA-256 `ff1efaf733b52ba26975583c8e630411f15bf073cb498b64247da5c73c5983c3` (the commands are in the file's header) |
 | Old relay | `--case-profile observed-33` still loads `6beb9a5e…`, for comparison |
 
 What it does:
@@ -497,9 +497,9 @@ What it does:
 - **At relay start** (in place of the bridge's `bl 0x200103e8`, before the banner), after the bridge's own init:
   - `RCC_IOPENR` |= GPIOBEN and `RCC_APBENR1` |= TIM6EN, both read-modify-write.
   - PB2 is set up as the app's feed sets it up: first `BSRR` = PB2 high, then `OTYPER` push-pull, `PUPDR` no pull, `OSPEEDR` very high and `MODER` bits 5:4 = `01`. Each is a read-modify-write of PB2's bits only.
-  - PB2 stays high for 100 µs, then goes low: the first feed, within a millisecond of Go.
-  - TIM6 starts at 10 kHz (`PSC` = 6399), with `URS` set.
-- **The feed itself:** PB2 is low for 4.5 ms (45 ticks), then high for 2.0 s (20,000 ticks), and so on. Each change happens at the first poll after TIM6 overflows, in `feed_tick`. One falling edge comes every 2.0045 s plus the time to that poll. The 4005 needs one within 18 s (20 s − 10 %).
+  - PB2 stays high for 100 µs, then goes low for a busy 4.5 ms and high again: the first feed, within a millisecond of Go. No UART traffic is possible yet, and the bridge busy-waits 0.1 s right after anyway.
+  - TIM6 starts at 10 kHz (`PSC` = 6399), with `URS` set, in the 2.0 s high phase.
+- **The feed itself:** PB2 is low for 4.5 ms (45 ticks), then high for 2.0 s (20,000 ticks), and so on. Each change happens at the first poll after TIM6 overflows, in `feed_tick`, so a stretch without polls (at most ~0.1 s, the temple reset waveform) lengthens that phase. A long low is harmless: the app's own boot holds PB2 low from `MX_GPIO_Init` to its first feed. One falling edge comes every 2.0045 s plus the time to that poll. The 4005 needs one within 18 s (20 s − 10 %).
 - **Where it polls.** The check is one load and one bit test of TIM6's update flag. It sits in every loop the relay can wait in:
 
   | Loop | Site |
@@ -508,9 +508,9 @@ What it does:
   | the wait for the temple's `HELO` | `0x2001074C` |
   | the wait for a temple frame (the per-exchange loop, and the empty-`G2TX` poll bound) | `0x200108B2` |
   | the relay's host read (`G2TX`, `G2EX`) | `0x200109BC` |
-  | the bridge's ~6 s wait between `G2RS` and its reset, in a version that polls (`fed_delay`) | `0x20010232` |
+  | the bridge's 25 ms wait between `G2RS` and its reset, in a version that polls (`fed_delay`) | `0x20010232` |
 
-  The host resets the case 0.3 s after `G2RS`, so the relay is inside that wait when the cleanup starts. The 4005 has been fed less than 2.1 s before.
+  So the relay feeds right up to the bridge's own reset, 25 ms after `G2RS`. The case then waits unfed in its ROM for the host's cleanup: NRST 0.3 s later, about 2 s of ROM work, then the case app runs and feeds. That is at most about 4.5 s after the last feed.
 - **Why TIM6.** The relay runs with interrupts masked and SysTick off: the bridge clears `SYST_CSR` and every NVIC enable. So the time source has to be polled.
   - TIM6 is a basic timer the case app never references (no `0x40001000` literal in 1.2.57). Its update flag is sticky: a stretch without polls (a stock UART re-init, a YHM2510 transaction, the ~0.1 s temple reset waveform) delays the next feed but never loses one, however long the stretch.
   - SysTick `COUNTFLAG` would wrap every 0.26 s at 64 MHz (2.1 s at HCLK/8). Any gap longer than one wrap would silently lose time, which is the unsafe direction.
@@ -521,7 +521,7 @@ What it does:
   - **The bridge's 0.1 s delay before the banner.** It comes right after the first feed.
   - **The host transmit loops.** UART-bound, at most a few ms.
   - **The stock case HAL calls.** They take µs. If one hung with interrupts masked (hypothesis 1 above), nothing in SRAM could help. The 4005 would then reset the case about 20 s later, which the cleanup handles.
-- **Layout.** Nothing the tool or the bridge relies on moves. The record stays at `0x20011A00`, `PROOF` at `0x20011B00`, the `G2RQ` buffer at `0x20011900` and the `G2RS` buffer at `0x20011C00`; the stack top is `0x2001F000`. The code uses `0x20011584`–`0x200116A3` of the free `0x20011584`–`0x200118FF`. The tool's SRAM allowlist (`rom.sram_regions`) admits the 5,796-byte program region because it ends below the record. As before, the ROM may only write the relay's own bytes or zeros.
+- **Layout.** Nothing the tool or the bridge relies on moves. The record stays at `0x20011A00`, `PROOF` at `0x20011B00`, the `G2RQ` buffer at `0x20011900` and the `G2RS` buffer at `0x20011C00`; the stack top is `0x2001F000`. The code uses `0x20011584`–`0x200116AF` of the free `0x20011584`–`0x200118FF`. The tool's SRAM allowlist (`rom.sram_regions`) admits the 5,808-byte program region because it ends below the record. As before, the ROM may only write the relay's own bytes or zeros.
 - **Safety.** The added code addresses only `RCC_IOPENR`/`RCC_APBENR1`, GPIOB and TIM6. Its literal pool holds no other address, and it calls only the bridge's init and itself. It never calls into the case flash. Under emulation no instruction writes the case flash or the FLASH registers (checked in every new test). The ROM command allowlist and the SRAM allowlist are unchanged. The case flash is still never written.
 - **Side effect: longer poll bounds [I, cycle counts from the listing].** Each poll now costs about 13 more cycles:
 
@@ -539,22 +539,22 @@ The changed regions, disassembled (`arm-none-eabi-objdump`). Everything else is 
 | Site | observed-33 | observed-33-feed |
 | --- | --- | --- |
 | `0x20010032` | `f000 f9d9  bl 0x200103e8` (bridge init) | `f001 faa7  bl 0x20011584 <feed_start>` |
-| `0x20010232` | `f000 f9f7  bl 0x20010624` (the wait before the reset) | `f001 fa1c  bl 0x2001166e <fed_delay>` |
-| `0x2001031C` | `69d0  ldr r0, [r2, #28]` / `210f  movs r1, #15` | `f001 f97b  bl 0x20011616 <poll_bridge_rx>` |
-| `0x2001074C` | `69d9  ldr r1, [r3, #28]` / `240f  movs r4, #15` | `f000 ff6e  bl 0x2001162c <poll_beacon>` |
-| `0x200108B2` | `2002  movs r0, #2` / `2b00  cmp r3, #0` | `f000 fec6  bl 0x20011642 <poll_temple_rx>` |
-| `0x200109BC` | `6826  ldr r6, [r4, #0]` / `0737  lsls r7, r6, #28` | `f000 fe4c  bl 0x20011658 <poll_host_rx>` |
+| `0x20010232` | `f000 f9f7  bl 0x20010624` (the 25 ms wait before the reset) | `f001 fa20  bl 0x20011676 <fed_delay>` |
+| `0x2001031C` | `69d0  ldr r0, [r2, #28]` / `210f  movs r1, #15` | `f001 f97f  bl 0x2001161e <poll_bridge_rx>` |
+| `0x2001074C` | `69d9  ldr r1, [r3, #28]` / `240f  movs r4, #15` | `f000 ff72  bl 0x20011634 <poll_beacon>` |
+| `0x200108B2` | `2002  movs r0, #2` / `2b00  cmp r3, #0` | `f000 feca  bl 0x2001164a <poll_temple_rx>` |
+| `0x200109BC` | `6826  ldr r6, [r4, #0]` / `0737  lsls r7, r6, #28` | `f000 fe50  bl 0x20011660 <poll_host_rx>` |
 
 No branch targets the second instruction of a displaced pair. Each enclosing function saved LR on entry, so the extra `bl` clobbers nothing live. Each hook runs the displaced pair last, so the flags the next branch tests are theirs.
 
 <details>
-<summary>The appended code, 0x20011584–0x200116A3 (288 bytes)</summary>
+<summary>The appended code, 0x20011584–0x200116AF (300 bytes)</summary>
 
 ```text
 20011584 <feed_start>:
 20011584:  b510       push    {r4, lr}
 20011586:  f7fe ff2f  bl      200103e8 <bridge_init>
-2001158a:  483f       ldr     r0, [pc, #252]  @ literal at 20011688
+2001158a:  4841       ldr     r0, [pc, #260]  @ literal at 20011690
 2001158c:  6801       ldr     r1, [r0, #0]
 2001158e:  2202       movs    r2, #2
 20011590:  4311       orrs    r1, r2
@@ -564,7 +564,7 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 20011598:  4311       orrs    r1, r2
 2001159a:  6081       str     r1, [r0, #8]
 2001159c:  6881       ldr     r1, [r0, #8]
-2001159e:  483b       ldr     r0, [pc, #236]  @ literal at 2001168c
+2001159e:  483d       ldr     r0, [pc, #244]  @ literal at 20011694
 200115a0:  2104       movs    r1, #4
 200115a2:  6181       str     r1, [r0, #24]
 200115a4:  6841       ldr     r1, [r0, #4]
@@ -583,118 +583,123 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 200115be:  2210       movs    r2, #16
 200115c0:  4311       orrs    r1, r2
 200115c2:  6001       str     r1, [r0, #0]
-200115c4:  4932       ldr     r1, [pc, #200]  @ literal at 20011690
+200115c4:  4934       ldr     r1, [pc, #208]  @ literal at 20011698
 200115c6:  3901       subs    r1, #1
 200115c8:  d1fd       bne.n   200115c6 <feed_start+0x42>
-200115ca:  4b32       ldr     r3, [pc, #200]  @ literal at 20011694
-200115cc:  2104       movs    r1, #4
-200115ce:  6019       str     r1, [r3, #0]
-200115d0:  4931       ldr     r1, [pc, #196]  @ literal at 20011698
-200115d2:  6299       str     r1, [r3, #40] @ 0x28
-200115d4:  2101       movs    r1, #1
-200115d6:  0489       lsls    r1, r1, #18
+200115ca:  2101       movs    r1, #1
+200115cc:  0489       lsls    r1, r1, #18
+200115ce:  6181       str     r1, [r0, #24]
+200115d0:  4932       ldr     r1, [pc, #200]  @ literal at 2001169c
+200115d2:  3901       subs    r1, #1
+200115d4:  d1fd       bne.n   200115d2 <feed_start+0x4e>
+200115d6:  2104       movs    r1, #4
 200115d8:  6181       str     r1, [r0, #24]
-200115da:  212c       movs    r1, #44 @ 0x2c
-200115dc:  62d9       str     r1, [r3, #44] @ 0x2c
-200115de:  2101       movs    r1, #1
-200115e0:  6159       str     r1, [r3, #20]
-200115e2:  2100       movs    r1, #0
-200115e4:  6119       str     r1, [r3, #16]
-200115e6:  2105       movs    r1, #5
-200115e8:  6019       str     r1, [r3, #0]
-200115ea:  bd10       pop     {r4, pc}
+200115da:  4b31       ldr     r3, [pc, #196]  @ literal at 200116a0
+200115dc:  6019       str     r1, [r3, #0]
+200115de:  4931       ldr     r1, [pc, #196]  @ literal at 200116a4
+200115e0:  6299       str     r1, [r3, #40] @ 0x28
+200115e2:  4931       ldr     r1, [pc, #196]  @ literal at 200116a8
+200115e4:  62d9       str     r1, [r3, #44] @ 0x2c
+200115e6:  2101       movs    r1, #1
+200115e8:  6159       str     r1, [r3, #20]
+200115ea:  2100       movs    r1, #0
+200115ec:  6119       str     r1, [r3, #16]
+200115ee:  2105       movs    r1, #5
+200115f0:  6019       str     r1, [r3, #0]
+200115f2:  bd10       pop     {r4, pc}
 
-200115ec <feed_tick>:
-200115ec:  b407       push    {r0, r1, r2}
-200115ee:  4829       ldr     r0, [pc, #164]  @ literal at 20011694
-200115f0:  2100       movs    r1, #0
-200115f2:  6101       str     r1, [r0, #16]
-200115f4:  4925       ldr     r1, [pc, #148]  @ literal at 2001168c
-200115f6:  694a       ldr     r2, [r1, #20]
-200115f8:  0752       lsls    r2, r2, #29
-200115fa:  d504       bpl.n   20011606 <feed_tick+0x1a>
-200115fc:  2201       movs    r2, #1
-200115fe:  0492       lsls    r2, r2, #18
-20011600:  618a       str     r2, [r1, #24]
-20011602:  222c       movs    r2, #44 @ 0x2c
-20011604:  e002       b.n     2001160c <feed_tick+0x20>
-20011606:  2204       movs    r2, #4
-20011608:  618a       str     r2, [r1, #24]
-2001160a:  4a24       ldr     r2, [pc, #144]  @ literal at 2001169c
-2001160c:  62c2       str     r2, [r0, #44] @ 0x2c
-2001160e:  2201       movs    r2, #1
-20011610:  6142       str     r2, [r0, #20]
-20011612:  bc07       pop     {r0, r1, r2}
-20011614:  4770       bx      lr
+200115f4 <feed_tick>:
+200115f4:  b407       push    {r0, r1, r2}
+200115f6:  482a       ldr     r0, [pc, #168]  @ literal at 200116a0
+200115f8:  4926       ldr     r1, [pc, #152]  @ literal at 20011694
+200115fa:  694a       ldr     r2, [r1, #20]
+200115fc:  0752       lsls    r2, r2, #29
+200115fe:  d504       bpl.n   2001160a <feed_tick+0x16>
+20011600:  2201       movs    r2, #1
+20011602:  0492       lsls    r2, r2, #18
+20011604:  618a       str     r2, [r1, #24]
+20011606:  222c       movs    r2, #44 @ 0x2c
+20011608:  e002       b.n     20011610 <feed_tick+0x1c>
+2001160a:  2204       movs    r2, #4
+2001160c:  618a       str     r2, [r1, #24]
+2001160e:  4a26       ldr     r2, [pc, #152]  @ literal at 200116a8
+20011610:  62c2       str     r2, [r0, #44] @ 0x2c
+20011612:  2201       movs    r2, #1
+20011614:  6142       str     r2, [r0, #20]
+20011616:  2200       movs    r2, #0
+20011618:  6102       str     r2, [r0, #16]
+2001161a:  bc07       pop     {r0, r1, r2}
+2001161c:  4770       bx      lr
 
-20011616 <poll_bridge_rx>:
-20011616:  4922       ldr     r1, [pc, #136]  @ literal at 200116a0
-20011618:  6809       ldr     r1, [r1, #0]
-2001161a:  0849       lsrs    r1, r1, #1
-2001161c:  d303       bcc.n   20011626 <poll_bridge_rx+0x10>
-2001161e:  4671       mov     r1, lr
-20011620:  f7ff ffe4  bl      200115ec <feed_tick>
-20011624:  468e       mov     lr, r1
-20011626:  69d0       ldr     r0, [r2, #28]
-20011628:  210f       movs    r1, #15
-2001162a:  4770       bx      lr
+2001161e <poll_bridge_rx>:
+2001161e:  4923       ldr     r1, [pc, #140]  @ literal at 200116ac
+20011620:  6809       ldr     r1, [r1, #0]
+20011622:  0849       lsrs    r1, r1, #1
+20011624:  d303       bcc.n   2001162e <poll_bridge_rx+0x10>
+20011626:  4671       mov     r1, lr
+20011628:  f7ff ffe4  bl      200115f4 <feed_tick>
+2001162c:  468e       mov     lr, r1
+2001162e:  69d0       ldr     r0, [r2, #28]
+20011630:  210f       movs    r1, #15
+20011632:  4770       bx      lr
 
-2001162c <poll_beacon>:
-2001162c:  4c1c       ldr     r4, [pc, #112]  @ literal at 200116a0
-2001162e:  6824       ldr     r4, [r4, #0]
-20011630:  0864       lsrs    r4, r4, #1
-20011632:  d303       bcc.n   2001163c <poll_beacon+0x10>
-20011634:  4674       mov     r4, lr
-20011636:  f7ff ffd9  bl      200115ec <feed_tick>
-2001163a:  46a6       mov     lr, r4
-2001163c:  69d9       ldr     r1, [r3, #28]
-2001163e:  240f       movs    r4, #15
-20011640:  4770       bx      lr
+20011634 <poll_beacon>:
+20011634:  4c1d       ldr     r4, [pc, #116]  @ literal at 200116ac
+20011636:  6824       ldr     r4, [r4, #0]
+20011638:  0864       lsrs    r4, r4, #1
+2001163a:  d303       bcc.n   20011644 <poll_beacon+0x10>
+2001163c:  4674       mov     r4, lr
+2001163e:  f7ff ffd9  bl      200115f4 <feed_tick>
+20011642:  46a6       mov     lr, r4
+20011644:  69d9       ldr     r1, [r3, #28]
+20011646:  240f       movs    r4, #15
+20011648:  4770       bx      lr
 
-20011642 <poll_temple_rx>:
-20011642:  4817       ldr     r0, [pc, #92]  @ literal at 200116a0
-20011644:  6800       ldr     r0, [r0, #0]
-20011646:  0840       lsrs    r0, r0, #1
-20011648:  d303       bcc.n   20011652 <poll_temple_rx+0x10>
-2001164a:  4670       mov     r0, lr
-2001164c:  f7ff ffce  bl      200115ec <feed_tick>
-20011650:  4686       mov     lr, r0
-20011652:  2002       movs    r0, #2
-20011654:  2b00       cmp     r3, #0
-20011656:  4770       bx      lr
+2001164a <poll_temple_rx>:
+2001164a:  4818       ldr     r0, [pc, #96]  @ literal at 200116ac
+2001164c:  6800       ldr     r0, [r0, #0]
+2001164e:  0840       lsrs    r0, r0, #1
+20011650:  d303       bcc.n   2001165a <poll_temple_rx+0x10>
+20011652:  4670       mov     r0, lr
+20011654:  f7ff ffce  bl      200115f4 <feed_tick>
+20011658:  4686       mov     lr, r0
+2001165a:  2002       movs    r0, #2
+2001165c:  2b00       cmp     r3, #0
+2001165e:  4770       bx      lr
 
-20011658 <poll_host_rx>:
-20011658:  4f11       ldr     r7, [pc, #68]  @ literal at 200116a0
-2001165a:  683f       ldr     r7, [r7, #0]
-2001165c:  087f       lsrs    r7, r7, #1
-2001165e:  d303       bcc.n   20011668 <poll_host_rx+0x10>
-20011660:  4677       mov     r7, lr
-20011662:  f7ff ffc3  bl      200115ec <feed_tick>
-20011666:  46be       mov     lr, r7
-20011668:  6826       ldr     r6, [r4, #0]
-2001166a:  0737       lsls    r7, r6, #28
-2001166c:  4770       bx      lr
+20011660 <poll_host_rx>:
+20011660:  4f12       ldr     r7, [pc, #72]  @ literal at 200116ac
+20011662:  683f       ldr     r7, [r7, #0]
+20011664:  087f       lsrs    r7, r7, #1
+20011666:  d303       bcc.n   20011670 <poll_host_rx+0x10>
+20011668:  4677       mov     r7, lr
+2001166a:  f7ff ffc3  bl      200115f4 <feed_tick>
+2001166e:  46be       mov     lr, r7
+20011670:  6826       ldr     r6, [r4, #0]
+20011672:  0737       lsls    r7, r6, #28
+20011674:  4770       bx      lr
 
-2001166e <fed_delay>:
-2001166e:  b510       push    {r4, lr}
-20011670:  0884       lsrs    r4, r0, #2
-20011672:  d007       beq.n   20011684 <fed_delay+0x16>
-20011674:  480a       ldr     r0, [pc, #40]  @ literal at 200116a0
-20011676:  6800       ldr     r0, [r0, #0]
-20011678:  0840       lsrs    r0, r0, #1
-2001167a:  d301       bcc.n   20011680 <fed_delay+0x12>
-2001167c:  f7ff ffb6  bl      200115ec <feed_tick>
-20011680:  3c01       subs    r4, #1
-20011682:  d1f7       bne.n   20011674 <fed_delay+0x6>
-20011684:  bd10       pop     {r4, pc}
-20011686:  0000       .short  0x0000
-20011688:  40021034   .word   0x40021034
-2001168c:  50000400   .word   0x50000400
-20011690:  00000855   .word   0x00000855
-20011694:  40001000   .word   0x40001000
-20011698:  000018ff   .word   0x000018ff
-2001169c:  00004e1f   .word   0x00004e1f
-200116a0:  40001010   .word   0x40001010
+20011676 <fed_delay>:
+20011676:  b510       push    {r4, lr}
+20011678:  0884       lsrs    r4, r0, #2
+2001167a:  d007       beq.n   2001168c <fed_delay+0x16>
+2001167c:  480b       ldr     r0, [pc, #44]  @ literal at 200116ac
+2001167e:  6800       ldr     r0, [r0, #0]
+20011680:  0840       lsrs    r0, r0, #1
+20011682:  d301       bcc.n   20011688 <fed_delay+0x12>
+20011684:  f7ff ffb6  bl      200115f4 <feed_tick>
+20011688:  3c01       subs    r4, #1
+2001168a:  d1f7       bne.n   2001167c <fed_delay+0x6>
+2001168c:  bd10       pop     {r4, pc}
+2001168e:  0000       .short  0x0000
+20011690:  40021034   .word   0x40021034
+20011694:  50000400   .word   0x50000400
+20011698:  00000855   .word   0x00000855
+2001169c:  00017700   .word   0x00017700
+200116a0:  40001000   .word   0x40001000
+200116a4:  000018ff   .word   0x000018ff
+200116a8:  00004e1f   .word   0x00004e1f
+200116ac:  40001010   .word   0x40001010
 ```
 
 </details>
@@ -703,11 +708,12 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 
 | Run | Old relay (observed-33 layout) | New relay (with the feed) |
 | --- | --- | --- |
-| idle, empty `G2TX`s only | the first is answered 18.16 s after the relay started (hardware: 18.1 s); the 4005 resets the case 20.01 s after the relay started; the next `G2TX` gets no answer; record phase 1 (the hardware's); the ROM hears `G2TX` first and stays deaf, and the cleanup's NRST still gets a fresh one | three `G2TX`s, 87 s in all; no reset; 42 feeds, one every 2.10–2.11 s (2.0045 s plus up to two 50 ms emulation steps); exit status 6, route restored |
+| idle, empty `G2TX`s only | the first is answered 18.16 s after the relay started (hardware: 18.1 s); the 4005 resets the case 20.01 s after the relay started; the next `G2TX` gets no answer; record phase 1 (the hardware's); the ROM hears `G2TX` first and stays deaf, and the cleanup's NRST still gets a fresh one | three `G2TX`s, 87 s in all; no reset; 42 feeds, one every 2.01–2.10 s (2.0045 s plus up to two 50 ms emulation steps); exit status 6, route restored |
 | pulse shape (0.5 ms steps) | | 14 pulses: low 5.0 ms (4.5 ms plus one step), high 2.0001 s |
 | `link-soak --bytes 65536`, 17.5 ms per exchange, one session | stops at exchange #1,133, the 4005 firing 20.00 s after the relay started (hardware F1: #1,111) | passes: 4,113 exchanges, 73 s, CRC matches, no reset |
 | `recover --max-session-s 0`, 110,000 B, 17.5 ms per exchange | | passes in one session: 7,397 exchanges, 131 s; body, vectors last, final CRC |
 | the 4005's next reset lands in the cleanup's ROM session | the cleanup's first ROM session is cut, the second (fresh NRST) reads the record and zeroes the SRAM; the case ends on its app | |
+| every wait loop, given time (host thinks 3 s per frame, `HELO` 3 s late) | | all four poll hooks call `feed_tick`; the 25 ms `fed_delay`, run alone with the flag set, feeds and returns cleanly |
 
 `relay_model.RelayModel` has the same watchdog (`watchdog_s`, `feeds_watchdog`). Without the feed, one 64 KiB soak session stops 20 s in. With it, the soak passes in one session of more than 60 s. The session-guard tests keep the old relay (`--case-profile observed-33`), where the guard is what keeps a session alive.
 
@@ -715,8 +721,8 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 
 - `close()` sends `G2EX`, gets no answer and records the timeout, as before.
 - `enter_rom` then asserts RTS, that is NRST. That is a fresh ROM, which takes the `0x7F` sync, so **NRST is enough**.
-- What NRST does not stop is the 4005 itself. On an unfed case it resets the MCU every ~20.5 s, and that can cut the cleanup's ~2 s ROM session. The ROM part of the cleanup (record read, SRAM clear) is therefore retried once from a fresh NRST (`case_rom_cleanup_retry` in the events).
-- With the new relay the case was fed less than 2.1 s before the host's NRST, so the cleanup has at least 16 s.
+- What NRST does not stop is the 4005 itself. On an unfed case it resets the MCU every ~20.5 s, and that can cut the cleanup's ~2 s ROM session. The ROM part of the cleanup (record read, SRAM clear) is therefore retried once from a fresh NRST (`case_rom_cleanup_retry` in the events). A retry does not read the record again if the first attempt already checked it, because the cut may have come after the first attempt had zeroed it.
+- With the new relay the case was fed at most about 2.4 s before the host's NRST (2.0 s gap, the bridge's 25 ms, the host's 0.3 s), so the cleanup has more than 15 s.
 
 **Tool changes.**
 
@@ -767,7 +773,7 @@ Stops:
 
 **F. Prove recovery** (W17's proof). Long relay sessions stalled because the case's YHM4005 watchdog reset the case about 20 s after the relay started. The tool's default relay now feeds it ([The relay feeds the case watchdog](#the-relay-feeds-the-case-watchdog)). F1 (2026-11-06), F1a and F1b (2026-11-07) ran with the old relay; they and the case-only probe are in the [hardware log](safety.md).
 
-Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`. `git pull` first. Every command below then loads the relay `observed-33-feed` (`ad9ccb58…`) by default, and the `bridge_loaded` line in its output names that hash.
+Every step needs the temple seated, the lid open, the case on USB, and the Mac on its charger with `caffeinate`. `git pull` first. Every command below then loads the relay `observed-33-feed` (`4c7475fa…`) by default, and the `bridge_loaded` line in its output names that hash.
 
 **F1c. One long session, read-only (about 20 min).**
 `… w18.py link-soak --side left`

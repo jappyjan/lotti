@@ -75,9 +75,9 @@ RELAY_SHA256 = {
     # (the relay embeds the bridge at offset 0; Jan's case has YHM register 8 = 0x33).
     "observed-33": "6beb9a5e131e3ac171a20dcf53630b26d60a732f36f30f98ba64eef263b7edc8",
     # observed-33 plus our YHM4005 feed (relay_feed.py, data/case_relay_feed.S; MIT): six
-    # 4-byte sites re-pointed and 288 bytes appended at 0x20011584, 5,796 bytes in all. The case
+    # 4-byte sites re-pointed and 300 bytes appended at 0x20011584, 5,808 bytes in all. The case
     # watchdog reset every relay session about 20 s in without it (recovery.md).
-    "observed-33-feed": "ad9ccb587f861aa4531753216a35e6f1fa8c9011eed03b5cd6c8c199b764ef94",
+    "observed-33-feed": "4c7475fada40e748e64d2a47d5d60fa8a189f23d7afd74f7cecd8f95844047d5",
 }
 RELAY_FEED_SUFFIX = "-feed"
 # The relay the tool loads unless told otherwise, for both temples (one case).

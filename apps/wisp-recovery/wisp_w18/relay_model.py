@@ -28,7 +28,8 @@ the watchdog resets the case that many seconds after its last feed, which a rela
 variant: observed-33 never feeds it again, so the case stops `watchdog_s` after the relay
 started, as on hardware; observed-33-feed feeds it every 2 s, so it never does. A watchdog reset
 keeps SRAM and leaves the case in its ROM, which answers no relay frame: the same silence and
-the same record as the stops above.
+the same record as the stops above. `idle_s` stays the old relay's 12 s; the feeding relay's empty-G2TX
+bound is about 31 s on hardware.
 """
 
 from __future__ import annotations

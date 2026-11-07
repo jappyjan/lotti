@@ -80,16 +80,17 @@ class FeedPatch(unittest.TestCase):
     def test_the_added_code_touches_only_rcc_gpiob_and_tim6(self):
         code = relay_feed.blob()
         for word in relay_feed.literals(code):
-            if word >= 0x1_0000:  # an address, not a count
+            if word >= 0x0100_0000:  # an address, not a count
                 self.assertIn(word, relay_feed.PERIPHERALS, hex(word))
         pool = len(code) - 4 * len(relay_feed.literals(code))
         for at, target in thumb_bls(code[:pool], relay_feed.BASE):
             self.assertIn(target, relay_feed.CALLS, f"{at:#x} calls {target:#x}")
-        # No address in the case flash or its FLASH controller anywhere, and no `blx`.
+        # No address in the case flash or its FLASH controller anywhere; no `blx`, no `bx` but `bx lr`.
         for word in relay_feed.literals(code):
             self.assertFalse(0x0800_0000 <= word < 0x0810_0000 or 0x4002_2000 <= word < 0x4002_2400)
         halfwords = struct.unpack_from(f"<{pool // 2}H", code)
         self.assertFalse(any(h & 0xFF87 == 0x4780 for h in halfwords))
+        self.assertTrue(all(h == 0x4770 for h in halfwords if h & 0xFF87 == 0x4700))
         self.assertEqual(struct.unpack_from("<H", code, relay_feed.FED_DELAY_COUNTER - relay_feed.BASE)[0], 0x3C01)
 
     def test_apply_refuses_another_layout(self):
@@ -267,12 +268,74 @@ class RealRelayWatchdog(unittest.TestCase):
         # Small poll steps take a few seconds of wall time per idle tick.
         case, link, events, error = self.idle_session(FED, 1, poll_step_s=0.0005, read_cap_s=30.0)
         self.assertIsNone(error)
-        edges = [(t, level) for t, level in case.pb2_edges if t > case.relay_started_at + 0.2]  # after the start
+        # The first pulse is a busy wait, which takes no emulated time; the timed ones follow.
+        edges = [(t, level) for t, level in case.pb2_edges if t > case.relay_started_at + 0.001]
         lows = [b[0] - a[0] for a, b in zip(edges, edges[1:]) if a[1] == 0 and b[1] == 1]
         highs = [b[0] - a[0] for a, b in zip(edges, edges[1:]) if a[1] == 1 and b[1] == 0]
         self.assertGreater(len(lows), 10)
         self.assertTrue(all(0.0045 <= w <= 0.0051 for w in lows), lows)  # 4.5 ms (+ one 0.5 ms step)
         self.assertTrue(all(2.0 <= h <= 2.0011 for h in highs), highs)  # 2.0 s
+
+    def test_every_wait_loop_feeds(self):
+        """Each of the four poll hooks calls feed_tick, given time to: the host thinking 3 s before
+        each frame, a HELO 3 s after the reset waveform. (fed_delay, 23 ms long: next test.)"""
+        import time
+
+        mram = temple()
+        case = self.case(mram)
+        case.host_think_s, case.helo_delay_s = 3.0, 3.0
+        patches = self.patches(case, FED)
+        for p in patches:
+            p.start()
+        try:
+            # Real waits where the host pauses on hardware too: between G2RQ's two halves (so the
+            # bridge's host read waits), and before the cleanup's NRST.
+            link = links.CaseRelayLink("/dev/fake", "left", "x", opener=fc.opener_for(case),
+                                       sleep=lambda s: time.sleep(s) if s in (0.005, 0.3) else None)
+            with session.Session(link, log=lambda m: None) as s:
+                s.require_patched_bootloader(FAKE_PATCHED)
+                for _ in range(8):
+                    s.flag()
+        finally:
+            for p in patches:
+                p.stop()
+        returns = {relay_feed.POLL_BRIDGE_RX: "bridge host read", relay_feed.POLL_BEACON: "HELO wait",
+                   relay_feed.POLL_TEMPLE_RX: "temple frame wait", relay_feed.POLL_HOST_RX: "relay host read"}
+        callers = {next(name for start, name in sorted(returns.items(), reverse=True) if lr >= start)
+                   for lr in case.feed_callers}
+        self.assertEqual(callers, set(returns.values()))
+        self.assertEqual(case.wdt_resets, [])
+        self.assertGreater(case.now() - case.relay_started_at, 2 * WATCHDOG_S)
+        events = {k: v for e in link.events for k, v in e.items()}
+        self.assertEqual(events["relay_exit_status"], 6)
+        self.assertEqual(case.forbidden_writes, [])
+
+    def test_fed_delay_feeds_and_returns(self):
+        """The 25 ms wait before the bridge's reset, run on its own with TIM6's flag already set:
+        it calls feed_tick, keeps r4, balances the stack and returns where the bridge called it."""
+        from unicorn.arm_const import UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R4, UC_ARM_REG_SP
+
+        case = self.case(temple())
+        uc = case.uc
+        uc.mem_write(pins.RELAY_ADDRESS, FED)
+        uc.mem_write(fc.RCC_APBENR1, struct.pack("<I", 0x10))  # TIM6 clocked
+        case.gpiob_moder = 0xFFFFFFDF  # PB2 an output, driven high (as after feed_start)
+        case.gpiob_odr = 4
+        uc.mem_write(fc.GPIOB, struct.pack("<I", case.gpiob_moder))
+        uc.mem_write(fc.GPIOB + 0x14, struct.pack("<I", case.gpiob_odr))
+        case.tim.update({"cr1": 5, "psc": 6399, "psc_active": 6399, "arr": 19999, "sr": 1})
+        uc.mem_write(fc.TIM6 + 0x10, struct.pack("<I", 1))
+        back = 0x2001_0236  # after the bridge's `bl` at 0x20010232
+        uc.reg_write(UC_ARM_REG_SP, 0x2001_F000)
+        uc.reg_write(UC_ARM_REG_R0, 0x80000)
+        uc.reg_write(UC_ARM_REG_R4, 0x1234)
+        uc.reg_write(UC_ARM_REG_LR, back | 1)
+        uc.emu_start(relay_feed.FED_DELAY | 1, back, timeout=60_000_000)
+        self.assertEqual(case.feed_callers[:1], [relay_feed.FED_DELAY + 0x12])  # after the `bl feed_tick` in its loop
+        self.assertEqual(case.wdt_feeds, [0.0])  # PB2 high -> low
+        self.assertEqual((uc.reg_read(UC_ARM_REG_R4), uc.reg_read(UC_ARM_REG_SP)), (0x1234, 0x2001_F000))
+        self.assertAlmostEqual(case.now(), 0x80000 // 4 * 6 * fc.CYCLES_PER_INSN / fc.CPU_HZ, delta=0.002)
+        self.assertEqual(case.forbidden_writes, [])
 
     def cli_run(self, relay, argv, mram, setup=None):
         case = self.case(mram)

@@ -33,6 +33,9 @@ Emulated time and the case's YHM4005 watchdog (recovery.md, "Long relay sessions
   case (SRAM kept, the ROM again because DTR is released) and does so again every
   `wdt_timeout_s` while nothing feeds it. A banner boot does not feed it (hardware, F1b).
   `wdt_feeds` and `wdt_resets` record when; `pb2_edges` every level change.
+- `host_think_s` adds emulated time each time the relay finds no host byte waiting, and
+  `helo_delay_s` delays the temple's HELO, so every wait loop of the relay gets time to feed.
+  `feed_callers` records where the -feed relay's feed_tick was called from.
 - `forbidden_writes` lists any write to the case flash or its FLASH registers (there must be none).
 """
 
@@ -68,6 +71,7 @@ HOST_READ_POLLS = (  # where the relay reads USART1's ISR while it waits for the
 POLL_COUNTERS = {
     0x200105C2: (UC_ARM_REG_R3, True, 6, 6),  # bridge capture
     0x2001090C: (UC_ARM_REG_R3, True, 12, 19),  # W18 relay_receive (the temple frame wait): +bl, 4, bx
+    0x20010770: (UC_ARM_REG_R0, True, 11, 17),  # W18 HELO wait
     relay_feed.FED_DELAY_COUNTER: (UC_ARM_REG_R4, False, 6, 6),  # -feed: the wait before the reset
 }
 FED_SITE = relay_feed.SITES[3][0]  # 0x200108b2: `movs r0, #2` in drdaeman's relay, a `bl` with the feed
@@ -130,7 +134,8 @@ class FakeTemple:
 
 class FakeCase:
     def __init__(self, flash_length, temples=None, yhm=IDLE_YHM, rom_reply_banner=BANNER,
-                 rts_resets=True, status_line=None, wdt_timeout_s=None, exchange_s=0.0, poll_step_s=0.05):
+                 rts_resets=True, status_line=None, wdt_timeout_s=None, exchange_s=0.0, poll_step_s=0.05,
+                 helo_delay_s=0.0, host_think_s=0.0):
         # rts_resets=False models a driver whose RTS changes never reach the case: the app
         # keeps running and only prints its periodic status line (status_line) when listened to.
         self.rts_resets = rts_resets
@@ -152,6 +157,11 @@ class FakeCase:
         # Emulated time, the YHM4005 on PB2, TIM6 (see the module docstring).
         self.clock_s = 0.0
         self.exchange_s, self.poll_step_s = exchange_s, poll_step_s
+        # The temple's HELO this long after the reset waveform; this much emulated time each time the
+        # relay finds no host byte waiting (the host thinking, or USB latency).
+        self.helo_delay_s, self.host_think_s = helo_delay_s, host_think_s
+        self.pending_rx = None  # (due time, bytes) for the temple's delayed HELO
+        self.feed_callers: list[int] = []  # return address of every call of the -feed relay's feed_tick
         self.wdt_timeout_s = wdt_timeout_s
         self.wdt_last_feed = 0.0
         self.wdt_feeds: list[float] = []
@@ -423,6 +433,9 @@ class FakeCase:
 
         def advance(c, seconds):
             self.clock_s += seconds
+            if self.pending_rx and self.clock_s >= self.pending_rx[0]:
+                self.temple_rx.extend(self.pending_rx[1])
+                self.pending_rx = None
             self._tim_sync(c)
             return wdt_check(c)
 
@@ -461,8 +474,13 @@ class FakeCase:
                 side = self._routed_side()
                 temple = self.temples.get(side)
                 if temple is not None and hasattr(temple, "reset"):
-                    self.temple_rx.extend(temple.reset())
+                    if self.helo_delay_s:
+                        self.pending_rx = (self.clock_s + self.helo_delay_s, temple.reset())
+                    else:
+                        self.temple_rx.extend(temple.reset())
                 ret(c)
+            elif address == relay_feed.FEED_TICK:
+                self.feed_callers.append(c.reg_read(UC_ARM_REG_LR) & ~1)
             elif address == DELAY_LOOP:
                 turns = c.reg_read(UC_ARM_REG_R0)
                 ret(c)
@@ -487,6 +505,8 @@ class FakeCase:
                 with self.cond:
                     pc = c.reg_read(UC_ARM_REG_PC)
                     if any(lo <= pc < hi for lo, hi in HOST_READ_POLLS):
+                        if not self.host_in and self.host_think_s and advance(c, self.host_think_s):
+                            return  # the watchdog reset the case meanwhile
                         self.cond.wait_for(lambda: self.host_in or self.stop, timeout=10)
                     flags = 0xC0 | (0x20 if self.host_in else 0)
                 c.mem_write(address, struct.pack("<I", flags))
@@ -543,7 +563,7 @@ class FakeCase:
             self.forbidden_writes.append((address, value))
 
         for address in (*STUB_INIT, STUB_I2C_READ, STUB_I2C_WRITE, STUB_UART3_TX, RELAY_WAVEFORM, DELAY_LOOP,
-                        DELAY_YHM, *POLL_COUNTERS):
+                        DELAY_YHM, relay_feed.FEED_TICK, *POLL_COUNTERS):
             uc.hook_add(u.UC_HOOK_CODE, code, begin=address, end=address)
         uc.hook_add(u.UC_HOOK_MEM_READ, mem_read, begin=0x4000_4800, end=0x4000_482F)  # USART3
         uc.hook_add(u.UC_HOOK_MEM_READ, mem_read, begin=0x4001_3800, end=0x4001_382F)  # USART1

@@ -16,7 +16,7 @@
 @   0x200108b2  movs/cmp           -> bl poll_temple_rx  (relay: wait for a temple frame,
 @                                                         also the empty-G2TX poll bound)
 @   0x200109bc  ldr/lsls           -> bl poll_host_rx    (relay: wait for a host byte)
-@   0x20010232  bl 0x20010624      -> bl fed_delay       (exit: the ~6 s wait before the reset)
+@   0x20010232  bl 0x20010624      -> bl fed_delay       (exit: the 25 ms wait before the reset)
 @
 @ Each poll_* runs the two instructions it displaced, flags included, after one cheap check:
 @ TIM6's update flag. Nothing here calls into the case flash, and nothing waits with a UART
@@ -28,8 +28,10 @@
 @ feed but never loses one; interrupts stay masked throughout.
 @
 @ Pulse shape, as the app's feed (0x0800A270): PB2 push-pull, no pull, idle high, low for a
-@ while, high again. The app holds it low for 14,000 turns of its delay loop, about 1.5-2 ms at
+@ while, high again. The app holds it low for 14,000 turns of its delay loop, about 1.1-2 ms at
 @ 64 MHz; this holds it at least 4.5 ms (the datasheet gives no minimum; any falling edge feeds).
+@ The first pulse, at relay start, is a busy 4.5 ms; later ones end at the first poll after
+@ 4.5 ms, so a stretch without polls (at most ~0.1 s: the temple reset waveform) lengthens one.
 @ One falling edge every 2.0045 s plus the time to the next poll; the 4005 needs one every 18 s
 @ (20 s -10 %).
 @
@@ -50,6 +52,7 @@
         .set PULSE_ARR,    44           @ low for 45 ticks = 4.5 ms
         .set GAP_ARR,      19999        @ high for 20,000 ticks = 2.0 s
         .set HIGH_SPIN,    2133         @ 3 cycles each at 64 MHz: 100 us high before the first low
+        .set LOW_SPIN,     96000        @ 3 cycles each at 64 MHz: the first pulse, 4.5 ms low
 
         .section .bridge, "ax"          @ placed at 0x200103e8 by the link, not in the output
         .thumb_func
@@ -97,16 +100,20 @@ feed_start:
         ldr     r1, =HIGH_SPIN
 1:      subs    r1, #1
         bne     1b
-        ldr     r3, =TIM6
-        movs    r1, #4
-        str     r1, [r3, #0x00]         @ CR1 = URS, stopped: UG will not set the update flag
-        ldr     r1, =PSC_10KHZ
-        str     r1, [r3, #0x28]         @ PSC
         movs    r1, #1
         lsls    r1, r1, #18
         str     r1, [r0, #0x18]         @ BSRR: PB2 low -- the first feed, at relay start
-        movs    r1, #PULSE_ARR
-        str     r1, [r3, #0x2C]         @ ARR: the pulse
+        ldr     r1, =LOW_SPIN           @ busy here is harmless: no UART traffic before the banner
+2:      subs    r1, #1
+        bne     2b
+        movs    r1, #4
+        str     r1, [r0, #0x18]         @ BSRR: PB2 high
+        ldr     r3, =TIM6
+        str     r1, [r3, #0x00]         @ CR1 = URS, stopped: UG will not set the update flag
+        ldr     r1, =PSC_10KHZ
+        str     r1, [r3, #0x28]         @ PSC
+        ldr     r1, =GAP_ARR
+        str     r1, [r3, #0x2C]         @ ARR: the first gap
         movs    r1, #1
         str     r1, [r3, #0x14]         @ EGR = UG: load PSC, CNT = 0
         movs    r1, #0
@@ -121,8 +128,6 @@ feed_start:
 feed_tick:
         push    {r0, r1, r2}
         ldr     r0, =TIM6
-        movs    r1, #0
-        str     r1, [r0, #0x10]         @ SR = 0: clear the update flag
         ldr     r1, =GPIOB
         ldr     r2, [r1, #0x14]         @ ODR
         lsls    r2, r2, #29             @ PB2 -> N
@@ -138,6 +143,9 @@ feed_tick:
 3:      str     r2, [r0, #0x2C]         @ ARR
         movs    r2, #1
         str     r2, [r0, #0x14]         @ EGR = UG: CNT = 0, the new period starts now
+        movs    r2, #0
+        str     r2, [r0, #0x10]         @ SR = 0: clear the update flag (after UG: URS = 1, and
+                                        @ the next overflow is >= 4.5 ms away, so none is lost)
         pop     {r0, r1, r2}
         bx      lr
 
@@ -175,10 +183,10 @@ poll_host_rx:                           @ 0x200109bc, the relay's host read (G2T
         poll_hook r7, "ldr r6, [r4, #0]", "lsls r7, r6, #28"
 
         .thumb_func
-@ In place of the bridge's last `bl 0x20010624` (r0 = 0x08000000 turns of a 3-cycle loop, about
-@ 6.3 s) between G2RS and its reset: the same wait, about 5.8 s (11 cycles per turn), feeding.
-@ The host resets the case into its ROM 0.3 s after G2RS, so this is where the relay is
-@ when that happens, and the 4005 has been fed less than 2.1 s before.
+@ In place of the bridge's last `bl 0x20010624` (r0 = 0x80000 turns of a 3-cycle loop, 25 ms)
+@ between G2RS and its reset: the same wait, about 23 ms (11 cycles per turn), still polling, so
+@ the relay feeds right up to its reset. The case then waits in its ROM, unfed, for the host's
+@ cleanup (NRST 0.3 s after G2RS, about 2 s of ROM work, then the case app runs and feeds).
 fed_delay:
         push    {r4, lr}
         lsrs    r4, r0, #2

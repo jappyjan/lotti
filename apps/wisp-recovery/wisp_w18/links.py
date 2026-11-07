@@ -204,7 +204,7 @@ class _RelayFraming:
     route = 0
     relay_started = None
     sleep = staticmethod(time.sleep)
-    IDLE_TIMEOUT = 120.0  # s; the relay answers an empty G2TX after its own poll bound (~10-20 s)
+    IDLE_TIMEOUT = 120.0  # s; the relay answers an empty G2TX after its own poll bound (18 s; ~31 s with the feed)
 
     def _init_recent(self, clock=time.monotonic) -> None:
         self.recent = _Recent(clock)
@@ -411,22 +411,27 @@ class CaseRelayLink(_RelayFraming):
             # unfed case every ~20.5 s (relay stopped, or the old observed-33 relay), and a reset in
             # the middle of this ROM session cuts it. NRST alone always gives a ROM that takes a
             # fresh 0x7F sync, whatever the host sent the silent case before (G2TX, G2EX).
+            # A retry reads the record only if the first attempt had not: that one may have zeroed it.
+            checked = False
             for attempt in (1, 2):
                 try:
                     self.sleep(0.3)
                     self.port, self.loader = enter_rom(self.device, self.image, self.opener, self.sleep, self.log)
-                    retained = self.loader.read_memory(case_pins.RESULT_ADDRESS, case_pins.RESULT_LENGTH)
-                    proof = self.loader.read_memory(case_pins.PROOF_ADDRESS, len(case_pins.PROOF))
-                    words = struct.unpack_from("<14I", retained)
-                    restored = (
-                        proof == case_pins.PROOF and words[:5] == (0x47524247, 2, 2, self.route, pins.RELAY_SEQUENCE)
-                        and words[6:9] == (0x3FF,) * 3 and words[9] == 0x1FF and words[13] == 0
-                        and retained[56:66] == retained[76:86]
-                    )
-                    self.log({"route_restored": restored, "relay_record": retained.hex(),
-                              "relay_record_decoded": decode_relay_record(retained)})
-                    if not restored and "case route restoration not verified" not in errors:
-                        errors.append("case route restoration not verified")
+                    if not checked:
+                        retained = self.loader.read_memory(case_pins.RESULT_ADDRESS, case_pins.RESULT_LENGTH)
+                        proof = self.loader.read_memory(case_pins.PROOF_ADDRESS, len(case_pins.PROOF))
+                        words = struct.unpack_from("<14I", retained)
+                        restored = (
+                            proof == case_pins.PROOF
+                            and words[:5] == (0x47524247, 2, 2, self.route, pins.RELAY_SEQUENCE)
+                            and words[6:9] == (0x3FF,) * 3 and words[9] == 0x1FF and words[13] == 0
+                            and retained[56:66] == retained[76:86]
+                        )
+                        self.log({"route_restored": restored, "relay_record": retained.hex(),
+                                  "relay_record_decoded": decode_relay_record(retained)})
+                        checked = True
+                        if not restored:
+                            errors.append("case route restoration not verified")
                     self.loader.clear_sram()
                     self.log({"case_sram_cleared": True})
                     break
