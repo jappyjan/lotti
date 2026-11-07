@@ -385,6 +385,93 @@ Each pause tick also measures the relay's poll bound on real hardware. It is rep
 
 **Cost of the guard on hardware [I].** A 12 s session writes about 600 exchanges, about 8.7 KiB of body. Each session also pays about 12–16 s outside the relay: the banner, the ROM entry, the 55,752-B case flash hash and the relay load, then the cleanup. That puts a full `recover` at about 425 sessions, **about 3–3.5 h**, and the 1 MiB soak at about 120 sessions, about 50 min. It is slow but every step is checked. A relay without the stall would bring `recover` back to about 70 min in one session.
 
+#### The ~30 s clock that survives case resets
+
+The timing across five stalls fits one clock: time since the case's own 1.2.57 app last ran for more than a moment. Brief banner boots do not reset it. This analysis looked for an external chip that the app services and the ROM and relay do not. It was done on t3-worker from the pinned image (SHA-256 `773b6d4c…`), Capstone, Unicorn and the vendor datasheet. Nothing touched hardware. Tags: [C] checked in the code, [I] inferred, [D] datasheet.
+
+**Verdict: the case has an external watchdog, a YHMICROS YHM4005, and the app arms it at every boot. Only the app feeds it.** It is the strongest candidate for the stalls. Its configured timeout is 20 s nominal, though, a little short of the observed 26.6–31.0 s (see "What does not fit yet").
+
+**The chips and their buses [C].** The case has no hardware I2C. There is no I2C1/2/3 base literal, and every chip is bit-banged on GPIO.
+
+| Chip (log name) | Bus and pins | Address | Identity check in the self-check |
+| --- | --- | --- | --- |
+| PMIC ("pmic") | I2C-like bit-bang on GPIOB: SCL = PB3, SDA = PB4 (`0x0800A550`/`0x0800A574`, pin order chosen by flag `0x20000114` = 0) | 8-bit `0x70`/`0x71`, so 7-bit `0x38` (read `0x0800292C`, write `0x08002A00`) | Reg `0x14` must read `0x14`. It is a marker the firmware writes, not a silicon ID. 0 means "pmic in shipmode". Any other value means "reset pmic register...": `0x080035F0` writes `0x13`=`0x90`, `0x16`=0, `0x19`=2, `0x17`=`0x28`, `0x18`=1, `0x1A`=0, `0x1B`=1, then `0x14`=`0x14`. |
+| "2217" | the same PB3/PB4 bus | 8-bit `0xC8`/`0xC9`, so 7-bit `0x64` (`0x080028B4`, `0x080029A4`) | Reg 0 must read `0xA0`. It has an interrupt ("2217 int"), whose handler reads PMIC regs `0x10`/`0x11`. |
+| YHM2510 (pogo switch) | YHMICROS "ACMD" single-wire on PA3 (`0x0800A19A`/`0x0800A24A`; transactions `0x08000310`, `0x080004C0`, `0x08000610`) | device byte `0x42` (read), `0x02` (fuse read) | Reg 0 must read `0x81`; reg `0xA4` gives adjVal. |
+| YHM4005 (watchdog) | ACMD single-wire on **PB2** (`0x0800A188`/`0x0800A224`; read `0x08000420` via `0x08008FA8`, write `0x0800056C` via `0x08009004`) | device byte `0x5A` | Reg 0, high nibble must be 9. |
+
+- The earlier note that the bridge's YHM restore is a "stock I2C write `0x08009108`" should read: an ACMD single-wire write to the 2510 on PA3.
+- The PMIC's part number is still unknown. Its regs `0x10`–`0x1B` include boost enable (reg `0x15`: `0x09` on, `0x08` off, `0x08002C30`) and a ship mode. The banner's `d8 4c 00 90 14 08 00 28` matches what the firmware writes (`0x13`=`0x90`, `0x14`=`0x14`, `0x15`=`0x08`, `0x17`=`0x28`). No public register map for it, or for the "2217", was found. Neither chip has a watchdog write anywhere in the image [C].
+
+**How the app arms the watchdog [C].** `0x08002C8E(en)` is the only writer:
+
+- With `en` = 1 it writes 4005 reg 5 = `0x3B`, then reg 4 = `0x07`.
+- With `en` = 0 it writes reg 4 = 0. Callers: standby (`0x08000B82`, `0x08007294`, `0x08007340`, `0x08007E70`), ship-mode failure in the self-check (`0x0800315C`), and console command `0xD0` ("%s watchdog 4005").
+- With `en` = 1, the only caller is the boot self-check: `0x08003278`, right after the 4005 ID check at `0x08003260`.
+
+Decoded with the datasheet [D]:
+
+- Reg 4 (CTRL) = `0x07` sets EN_DOG (enable), RST_DOG (clear the timer now) and **EN_WDI: any falling edge on the ACMD pin feeds the dog**.
+- Reg 5 (TIMER) = `0x3B` sets TIME_OUT[6:3] = 7, which is **tTOUT = 20 s** (±10%; the YHM4005C variant multiplies every time by 1.25, giving 25 s). It also sets RSTPL_TIME[2:0] = 3, a **500 ms reset pulse**.
+- Reg 6 is never written [C], so RST keeps its defaults: push-pull, active low [D].
+- The part powers up disabled and stays enabled until written. If no feed comes, it pulses RST at the end of every TIME_OUT slot.
+
+**How the app feeds it [C].** The feed is in `pwrManagerTask` (entry `0x08007201`, created at `0x080069EC`):
+
+- Each loop it increments a counter at `0x20000884`, which starts at 0. When `counter % 5 == 0` (`0x08007220`) and the flag at `0x200000BE` is set, it calls `0x08002CB8` → `0x0800A270`. The flag is 1 in the decompressed `.data`; console command `0xDF` ("%s dog feed") toggles it.
+- `0x0800A270` drives PB2 as a push-pull output (init struct at `0x20000014`: pin mask 4, output, no pull, very high speed). It sets PB2 high for about 0.1 ms, low for about 4.4 ms (41 × a 350-iteration delay loop), then high again [C; the µs values are an estimate at 16 MHz, I].
+- The loop ends with `osDelay(1000)` (`0x08007EDA`). The tick is 1 kHz: SysTick LOAD = SystemCoreClock / 1000 − 1 at `0x0800C078`, with SystemCoreClock = 16 MHz. So **one feed every 5 loops, about every 5 s**, plus the loop body's own time.
+- The first feed comes on the task's first loop. The arming in the self-check also clears the timer (RST_DOG). There is no other periodic action toward any chip: no timer ISR, and no charger re-write that looks like a kick.
+
+**What happens in the ROM and the relay [C + I].**
+
+- Neither the ROM nor the relay touches PB2. After NRST, PB2 is back in its reset state (analog), so no falling edge comes, and the 4005, which runs on its own supply and is not reset with the MCU, keeps counting [I].
+- After tTOUT it pulses RST for 500 ms. SRAM survives a pin reset. The case comes back up in the ROM because the tool holds DTR. That matches the record exactly: intact relay record, case silent [I]. Where RST is wired is not visible in code. MCU NRST is the reading that fits.
+- Because EN_DOG stays set, the 4005 would keep resetting the case every ~20.5 s while it sits in the ROM.
+
+**Why brief boots do not reset the clock [C].**
+
+- `case_banner` (`wisp_case/transport.py`) stops reading as soon as it has seen the `****** B200` banner and `Power up...`, and `enter_rom` holds reset again right after.
+- But `main` prints `Power up...` (`0x0800A6BA`) **before** it calls the self-check `0x08002FC8` (`0x0800A6C6`).
+- The self-check runs the 2217 ID, the PMIC check, `HAL_Delay(10)`, the 2510 ID, then the 4005 ID and arming, then `HAL_Delay(125)` (`0x080032BC`). Only after that come the PMIC reset and `osKernelStart`.
+- So a banner-only boot is cut tens of milliseconds after `Power up...`. That is before the first pwrManagerTask feed, and probably before the arming write at `0x08003278` [I: it depends on the host's close/reopen latency].
+- The data says brief boots do not reset the clock. That means the arming write, which sets RST_DOG and would reset the timer [D], did not run in them either. A full-listen capture (`probe-reset`) shows the whole self-check. A banner-only capture should end before `4005 self check done.`
+
+**What does not fit yet [I].**
+
+- The stall should come at the last feed + 20 s ± 2 s, plus up to 0.5 s of reset pulse. The last feed falls 0–5 s before the app is stopped. So the 4005 predicts a stall **15–22.5 s** after the app stopped (or 17.5–27.5 s for a YHM4005C).
+- Observed: 26.6–31.0 s. The spread of 4.4 s matches the 5 s feed period well, but the offset is 5–9 s longer than the 20 s grade allows.
+- Possible reasons:
+  - The fitted reference point is earlier than the true last feed.
+  - Detection lag: idle `G2TX` ticks are 12 s apart.
+  - The part is a variant with a longer table.
+  - The 4005 is not the cause.
+- That leaves the hypothesis strong, not proven. The test below decides it.
+
+**What a fix needs.**
+
+1. **Relay-side feed (the real fix) [C + D].** While the relay runs, drive a falling edge on PB2 at least every 10 s (every 5 s, as the app does). That needs EN_WDI = 1, which the app has already set. Copy `0x0800A270` with plain register writes:
+   - `RCC_IOPENR` (`0x40021034`) |= bit 1 (GPIOB clock);
+   - `GPIOB_MODER` (`0x50000400`): bits 5:4 = `01` (output);
+   - `GPIOB_BSRR` (`0x50000418`) = `0x00000004` (high), wait about 0.1 ms;
+   - `GPIOB_BSRR` = `0x00040000` (low), wait about 4.4 ms, then `0x00000004` (high).
+
+   This removes the session-time limit. It is a change to the pinned relay, so it needs the same review and pinning as any relay change. A one-time ACMD write of 4005 reg 4 = 0 (the app's own standby path) would disable the dog instead. But it means porting the parity single-wire protocol into the relay, which is more code for the same effect.
+2. **Host-side, between sessions, through the ROM's Write Memory [I, not recommended].** AN3155's Write Memory only accepts RAM, flash and option-byte addresses, so peripheral registers cannot be poked directly. The host could load a small SRAM stub, Go to it (pulse PB2 as above), and have it reset back into the ROM. That costs a ROM re-sync, and it is a new code path that does nothing the relay change would not.
+3. **Host-side, letting the app run before each session (no relay change).**
+   - Before `enter_rom`, keep the app running until the console shows `4005 self check done.` That line comes after the arming write, which clears the timer (RST_DOG) [C + D]. Safer still, give it about 1.5 s after `Power up...`. The first pwrManagerTask feed follows within a few hundred ms [I].
+   - From that point, a session must end within tTOUT_min = 18 s. ROM entry, the 55,752-B hash and the relay load take at least about 7 s.
+   - **So keep the relay part ≤ 10 s** under the datasheet grade. The current 12 s default is only safe if the observed ≥ 26.6 s is the true margin.
+   - The `case_banner` used by `start()` would need to wait for that line instead of `Power up...`. That is a tool change, not done here.
+
+**Cheapest read-only test that decides it [I].**
+
+- Boot the app fully, past `4005 self check done.`, then enter the ROM and load nothing. Send `GET` (`0x00 0xFF`) every 1 s and log when it stops being ACKed. After a reset, the ROM needs a new `0x7F` sync.
+- If the 4005 is the cause, the ACKs stop about 20 s (or 25 s) after the self-check line. Re-syncing with `0x7F` then works again, and the next silence comes about 20.5 s (25.5 s) later.
+- No relay and no temple traffic are involved, and nothing is written.
+
+Sources: the YHM4005 product page, <http://www.yhmicros.com/productw.asp?id=136>, and the datasheet it links (V1.0, Dec 2024, `pdfjs/web/202697105331182.pdf` on that host, register map §5.1.4); STM32 AN3155 (Write Memory address check).
+
 ### Step by step for Jan (Mac, left temple first)
 
 Setup, once: on the Mac, in the repo, `git pull`, `pnpm nx run wisp-ota:build`, then `node packages/wisp-ota/dist/cli.js fetch 2.3.2.14` and `… fetch 2.4.0.24` (both SHA-256 checked into `.wisp-cache/stock/`). `uv` provides pyserial and bleak per command. Find the left temple's BLE identifier with the Even app closed, for example `uv run --with bleak==0.22.3 python -c "import asyncio, bleak; [print(d.address, d.name) for d in asyncio.run(bleak.BleakScanner.discover(10))]"`: its name ends `_L_xxxxxx` (on macOS the identifier is a UUID).
