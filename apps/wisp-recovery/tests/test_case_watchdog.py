@@ -278,7 +278,7 @@ class RealRelayWatchdog(unittest.TestCase):
 
     def test_every_wait_loop_feeds(self):
         """Each of the four poll hooks calls feed_tick, given time to: the host thinking 3 s before
-        each frame, a HELO 3 s after the reset waveform. (fed_delay, 23 ms long: next test.)"""
+        each write, a HELO 3 s after the reset waveform. (fed_delay, 23 ms long: next test.)"""
         import time
 
         mram = temple()

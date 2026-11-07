@@ -713,7 +713,7 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 | `link-soak --bytes 65536`, 17.5 ms per exchange, one session | stops at exchange #1,133, the 4005 firing 20.00 s after the relay started (hardware F1: #1,111) | passes: 4,113 exchanges, 73 s, CRC matches, no reset |
 | `recover --max-session-s 0`, 110,000 B, 17.5 ms per exchange | | passes in one session: 7,397 exchanges, 131 s; body, vectors last, final CRC |
 | the 4005's next reset lands in the cleanup's ROM session | the cleanup's first ROM session is cut, the second (fresh NRST) reads the record and zeroes the SRAM; the case ends on its app | |
-| every wait loop, given time (host thinks 3 s per frame, `HELO` 3 s late) | | all four poll hooks call `feed_tick`; the 25 ms `fed_delay`, run alone with the flag set, feeds and returns cleanly |
+| every wait loop, given time (host thinks 3 s per write, `HELO` 3 s late) | | all four poll hooks call `feed_tick`; the 25 ms `fed_delay`, run alone with the flag set, feeds and returns cleanly |
 
 `relay_model.RelayModel` has the same watchdog (`watchdog_s`, `feeds_watchdog`). Without the feed, one 64 KiB soak session stops 20 s in. With it, the soak passes in one session of more than 60 s. The session-guard tests keep the old relay (`--case-profile observed-33`), where the guard is what keeps a session alive.
 

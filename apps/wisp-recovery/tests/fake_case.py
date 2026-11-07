@@ -33,7 +33,7 @@ Emulated time and the case's YHM4005 watchdog (recovery.md, "Long relay sessions
   case (SRAM kept, the ROM again because DTR is released) and does so again every
   `wdt_timeout_s` while nothing feeds it. A banner boot does not feed it (hardware, F1b).
   `wdt_feeds` and `wdt_resets` record when; `pb2_edges` every level change.
-- `host_think_s` adds emulated time each time the relay finds no host byte waiting, and
+- `host_think_s` adds emulated time once per host write, when the relay reads its first byte, and
   `helo_delay_s` delays the temple's HELO, so every wait loop of the relay gets time to feed.
   `feed_callers` records where the -feed relay's feed_tick was called from.
 - `forbidden_writes` lists any write to the case flash or its FLASH registers (there must be none).
@@ -157,10 +157,11 @@ class FakeCase:
         # Emulated time, the YHM4005 on PB2, TIM6 (see the module docstring).
         self.clock_s = 0.0
         self.exchange_s, self.poll_step_s = exchange_s, poll_step_s
-        # The temple's HELO this long after the reset waveform; this much emulated time each time the
-        # relay finds no host byte waiting (the host thinking, or USB latency).
+        # The temple's HELO this long after the reset waveform; this much emulated time per host
+        # write (the host thinking, or USB latency).
         self.helo_delay_s, self.host_think_s = helo_delay_s, host_think_s
         self.pending_rx = None  # (due time, bytes) for the temple's delayed HELO
+        self.host_writes = self.host_writes_seen = 0
         self.feed_callers: list[int] = []  # return address of every call of the -feed relay's feed_tick
         self.wdt_timeout_s = wdt_timeout_s
         self.wdt_last_feed = 0.0
@@ -314,6 +315,7 @@ class FakeCase:
                 pass
         elif self.mode == "bridge":
             with self.cond:
+                self.host_writes += 1
                 self.host_in.extend(data)
                 self.cond.notify_all()
 
@@ -505,14 +507,16 @@ class FakeCase:
                 with self.cond:
                     pc = c.reg_read(UC_ARM_REG_PC)
                     if any(lo <= pc < hi for lo, hi in HOST_READ_POLLS):
-                        if not self.host_in and self.host_think_s and advance(c, self.host_think_s):
-                            return  # the watchdog reset the case meanwhile
                         self.cond.wait_for(lambda: self.host_in or self.stop, timeout=10)
                     flags = 0xC0 | (0x20 if self.host_in else 0)
                 c.mem_write(address, struct.pack("<I", flags))
             elif address == 0x40013824:
                 with self.cond:
                     c.mem_write(address, struct.pack("<I", self.host_in.popleft()))
+                    think = self.host_think_s and self.host_writes > self.host_writes_seen
+                    self.host_writes_seen = self.host_writes
+                if think:  # the first byte of a host write: the host thought that long before it
+                    advance(c, self.host_think_s)
             elif address == 0x4000481C:
                 c.mem_write(address, struct.pack("<I", 0x20 if self.temple_rx else 0))
             elif address == 0x40004824:
