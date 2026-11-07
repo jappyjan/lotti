@@ -5,11 +5,16 @@ stock main image at 0x438000 (plus the bytes already there for the 16-byte tail 
 
 The write order (body first, its CRC, then the 16 vector bytes, then the full CRC) and the
 writer program are drdaeman's (tools/g2patch/recovery.py, src/examples/recover.c, MIT).
+
+`AppWriter` splits that write over as many held sessions as a session-time budget needs: each
+session CRC-checks the body written so far before it adds a part, and the vectors are written only
+after a CRC of the whole body, in a session that verified it.
 """
 
 from __future__ import annotations
 
 import struct
+import time
 import zlib
 
 from . import image, loader, pins
@@ -33,7 +38,7 @@ class TempleReset(SessionError):
 
 
 class Session:
-    def __init__(self, link, log=print):
+    def __init__(self, link, log=print, clock=None):
         self.link = link
         self.log = log
         self.client: loader.Client | None = None
@@ -42,10 +47,20 @@ class Session:
         self.step = "claim"  # what the session was doing, for the error report
         self.position: dict = {}  # the running write or read: target, bytes sent, bytes verified
         self.cleanup_errors: list[str] = []
+        recent = getattr(link, "recent", None)
+        self.clock = clock or (recent.clock if recent is not None else time.monotonic)
+        self.started: float | None = None
+
+    def elapsed(self) -> float:
+        """Seconds since the relay started (the case left its own firmware for our SRAM code), or
+        since the session started on a link without a case."""
+        return self.clock() - self.started if self.started is not None else 0.0
 
     # --- claim and release [drdaeman link.py claim/continue_boot] ---
     def __enter__(self):
+        self.started = self.clock()
         beacon = self.link.start()
+        self.started = getattr(self.link, "relay_started", None) or self.started
         challenge = loader.decode_hello(beacon)
         self.log(f"HELO from the patched loader (challenge {challenge:#010x})")
         response = self.link.exchange(loader.hold(challenge))
@@ -127,6 +142,23 @@ class Session:
         if result or len(data) != length:
             raise SessionError(f"memory read at {address:#x} failed or returned {len(data)} of {length} bytes")
         return data
+
+    def idle_until(self, seconds: float) -> list[float]:
+        """Keep the case relay running without temple traffic until `seconds` after it started:
+        empty G2TX frames, each answered by the relay after its own poll bound (status 2, no
+        temple frame). Read-only; the held loader just keeps waiting. Returns each one's time."""
+        ticks = []
+        while self.elapsed() < seconds:
+            self.step = f"idle pause: {self.elapsed():.1f} of {seconds:g} s since the relay started"
+            status, frame, took = self.link.idle()
+            ticks.append(round(took, 3))
+            if frame[:12] == loader.hello(0)[:12]:
+                self.released = True
+                raise TempleReset(f"temple rebooted during the idle pause (HELO {frame.hex()})")
+            if status != 2 or frame:
+                raise SessionError(f"unexpected answer to an empty G2TX: status {status}, frame {frame.hex()}")
+            self.log(f"idle: relay answered after {took:.1f} s (t = {self.elapsed():.1f} s since the relay started)")
+        return ticks
 
     def bootloader_crc(self) -> int:
         return self.checksum(pins.BOOT_BASE, pins.PATCHED_BOOTLOADER_BYTES)
@@ -210,34 +242,137 @@ class Session:
             raise SessionError(f"MRAM write/readback failed at {address:#x}: writer returned {result:#x}")
 
     def write_app(self, stock: bytes, progress=None) -> dict:
-        """Write the pinned stock main image at 0x438000: body, CRC, vectors, CRC."""
+        """Write the pinned stock main image at 0x438000 in this one session: body, CRC, vectors,
+        CRC. (`AppWriter` with a budget splits the same write over several sessions.)"""
+        writer = AppWriter(stock, log=self.log)
+        writer.run(self, progress=progress)
+        return writer.result
+
+
+class AppWriter:
+    """recover's write of the pinned stock main image, over one or more held sessions.
+
+    Every session that continues the write first CRC-checks the body written so far against the
+    image (the resume check); a mismatch stops before anything else is written. The body goes
+    in parts at 0x438010+; the 16 vector bytes at 0x438000 are written only once the whole body
+    has been CRC-checked in the same session, and never in any part. Interrupted at any point,
+    the vectors in MRAM are the old ones, so the bootloader never jumps into a partial image
+    through new vectors.
+
+    `run(session)` does one session's share and returns True when the image is complete. With
+    `budget` (seconds since the relay started), it sizes the part to end inside the budget and
+    leaves the vectors to a fresh session; without it, it writes everything in one go.
+    """
+
+    FIRST_RATE = 1.5e-3  # s per body byte before any part was measured (hardware: ~1.2 ms)
+    FIRST_PART = 4096  # bytes, until a rate is measured
+    RESERVE = 1.5  # s kept for the part's CRC, the release and the relay exit
+
+    def __init__(self, stock: bytes, budget: float | None = None, resume_at: int = 0, log=print):
         if image.sha(stock) != pins.STOCK_MAIN_SHA256:
             raise RefusedError("recover only writes the pinned stock 2.4.0.24 main image")
-        size = pins.RECOVER_END - pins.RECOVER_BASE
-        tail_at = pins.RECOVER_BASE + size - 16
-        self.step = "read the image tail unit"
-        tail = self.dump(tail_at, 16)  # keep whatever follows the image inside its last unit
-        keep = len(stock) - (size - 16)
-        target = stock + tail[keep:]
-        self.step = "CRC of the app region before"
-        before = self.checksum(pins.RECOVER_BASE, size)
-        self.log(f"app region CRC-32 before: {before:08x} (stock {zlib.crc32(target):08x})")
-        self.step = "RAM API v2 check"
-        api = image.program("recover")
-        self.client.upload(api)  # length 0 = API check only, programs nothing
-        result, output = self.client.execute()
+        self.stock = stock
+        self.budget = budget
+        self.log = log
+        self.size = pins.RECOVER_END - pins.RECOVER_BASE
+        self.body_base = pins.RECOVER_BASE + 16
+        self.body_len = self.size - 16
+        if resume_at % 16 or not 0 <= resume_at <= self.body_len:
+            raise RefusedError(f"--resume-at must be a multiple of 16 in [0, {self.body_len}]")
+        self.done = resume_at  # body bytes written and CRC-verified (by this run or, with
+        self.resumed_at = resume_at  # --resume-at, by an earlier one: checked before any write)
+        self.target: bytes | None = None
+        self.rate = self.FIRST_RATE
+        self.measured = False
+        self.sessions = 0
+        self.result: dict = {}
+
+    def _prepare(self, s: Session) -> None:
+        s.step = "read the image tail unit"
+        tail = s.dump(pins.RECOVER_BASE + self.size - 16, 16)  # keep what follows the image in its last unit
+        keep = len(self.stock) - (self.size - 16)
+        self.target = self.stock + tail[keep:]
+        s.step = "CRC of the app region before"
+        before = s.checksum(pins.RECOVER_BASE, self.size)
+        self.result["crc_before"] = f"{before:08x}"
+        self.log(f"app region CRC-32 before: {before:08x} (stock {zlib.crc32(self.target):08x})")
+        s.step = "RAM API v2 check"
+        s.client.upload(image.program("recover"))  # length 0 = API check only, programs nothing
+        result, output = s.client.execute()
         if result or output:
             raise SessionError("the loader lacks RAM API v2 (recv); nothing written")
-        self.step = "write the app body (vectors not yet written)"
-        self._write(pins.RECOVER_BASE + 16, target[16:], progress)
-        self.step = "CRC of the app body"
-        body = self.checksum(pins.RECOVER_BASE + 16, size - 16)
-        if body != zlib.crc32(target[16:]):
-            raise SessionError("app body CRC mismatch; the vector table was NOT committed")
-        self.step = "write the 16 vector bytes"
-        self._write(pins.RECOVER_BASE, target[:16])
-        self.step = "final CRC"
-        final = self.checksum(pins.RECOVER_BASE, size)
+
+    def _body_crc(self, s: Session, length: int) -> int:
+        return s.checksum(self.body_base, length)
+
+    def _part(self, s: Session) -> int:
+        remaining = self.body_len - self.done
+        if self.budget is None:
+            return remaining
+        room = self.budget - s.elapsed() - self.RESERVE
+        n = int(room / self.rate) // BLOCK * BLOCK
+        if not self.measured:
+            n = min(n, self.FIRST_PART)
+        n = min(n, remaining)
+        if n < min(BLOCK, remaining):
+            raise SessionError(f"the session's checks used {s.elapsed():.1f} s of the {self.budget:g} s budget; "
+                               f"no room for a part (raise --max-session-s); nothing written in this session")
+        return n
+
+    def run(self, s: Session, progress=None) -> bool:
+        self.sessions += 1
+        if self.target is None:
+            self._prepare(s)
+        target = self.target
+        if self.done:
+            s.step = f"resume check: CRC of the body written so far ({self.done} bytes)"
+            s.position = {"verified_body": self.done}
+            crc = self._body_crc(s, self.done)
+            want = zlib.crc32(target[16 : 16 + self.done])
+            if crc != want:
+                raise SessionError(f"resume check failed: body [{self.body_base:#x}, +{self.done}) CRC {crc:08x} != "
+                                   f"image {want:08x}; nothing written in this session, vectors untouched")
+            self.log(f"resume check: {self.done} body bytes already in MRAM match the image ({crc:08x})")
+        if self.done < self.body_len:
+            n = self._part(s)
+            at = self.done
+            s.step = "write the app body (vectors not yet written)"
+            started = s.clock()
+
+            def offset(count: int) -> None:
+                if progress:
+                    progress(at + count)
+
+            s._write(self.body_base + at, target[16 + at : 16 + at + n], offset)
+            took = s.clock() - started
+            if n >= BLOCK and took > 0:  # size later parts by the slowest rate seen so far
+                self.rate = max(self.rate, took / n) if self.measured else took / n
+                self.measured = True
+            if at == 0 and n == self.body_len:
+                s.step = "CRC of the app body"
+                if self._body_crc(s, n) != zlib.crc32(target[16:]):
+                    raise SessionError("app body CRC mismatch; the vector table was NOT committed")
+                self.done = n
+                if self.budget is not None:
+                    return False  # vectors in a fresh session, after its own whole-body check
+            else:
+                s.step = f"CRC of the part just written [{self.body_base + at:#x}, +{n})"
+                crc = s.checksum(self.body_base + at, n)
+                if crc != zlib.crc32(target[16 + at : 16 + at + n]):
+                    raise SessionError(f"part CRC mismatch at {self.body_base + at:#x}+{n}; vectors NOT written")
+                self.done = at + n
+                self.log(f"part verified: body {self.done}/{self.body_len} bytes")
+                if self.budget is not None or self.done < self.body_len:
+                    return False  # the vectors wait for a session that CRC-checks the whole body first
+                s.step = "CRC of the app body"
+                if self._body_crc(s, self.body_len) != zlib.crc32(target[16:]):
+                    raise SessionError("app body CRC mismatch; the vector table was NOT committed")
+        # Here the whole body was CRC-checked in this session (the resume check or the step above).
+        s.step = "write the 16 vector bytes"
+        s._write(pins.RECOVER_BASE, target[:16])
+        s.step = "final CRC"
+        final = s.checksum(pins.RECOVER_BASE, self.size)
         if final != zlib.crc32(target):
             raise SessionError("final app CRC mismatch")
-        return {"crc_before": f"{before:08x}", "crc_after": f"{final:08x}", "bytes": size}
+        self.result.update({"crc_after": f"{final:08x}", "bytes": self.size})
+        return True

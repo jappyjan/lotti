@@ -9,6 +9,10 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   link-soak           read-only: stream N bytes of the app region out through the loader (dump), as
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
+
+Case relay sessions stall on hardware after about 20 s or 1,000-4,000 exchanges (recovery.md,
+"Long relay sessions"). `recover` therefore splits its write into sessions of at most
+--max-session-s seconds after the relay starts, resuming each by CRC; `link-soak` can do the same.
 """
 
 from __future__ import annotations
@@ -24,9 +28,12 @@ from pathlib import Path
 
 from . import image, pins
 from .links import CaseRelayLink, SocketLink
-from .session import BLOCK, Session, SessionError
+from .session import BLOCK, AppWriter, Session, SessionError
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
+# The left temple's relay sessions stopped 19.5-22.2 s after the relay started (link-soak) and
+# about 20 s and 80 s in (recover); short sessions always passed. recovery.md, "Long relay sessions".
+DEFAULT_MAX_SESSION_S = 12.0
 
 
 def plan_text(side: str, patched: bytes) -> str:
@@ -197,17 +204,46 @@ def short_frames(recent: list[dict], n: int = 6) -> list[str]:
     return out
 
 
-def with_session(args, name: str, body) -> int:
+def stall_summary(diagnostics: dict) -> dict | None:
+    """Where the first failed exchange of a session happened, in seconds since the relay started
+    (the frames' `t` minus `relay_started_t`): what decides between a wall-time and a per-exchange
+    cause of a stall."""
+    failed = next((e for e in diagnostics.get("recent", []) if e.get("error")), None)
+    if failed is None:
+        return None
+    out = {"exchange": failed["n"], "t": failed["t"]}
+    if diagnostics.get("relay_started_t") is not None:
+        out["since_relay_start_s"] = round(failed["t"] - diagnostics["relay_started_t"], 3)
+    return out
+
+
+def run_sessions(args, name: str, step, on_stop=None) -> int:
+    """Run `step(session, patched, index) -> (finished, fields)` in held loader sessions, one
+    after the other, until it says finished (most commands need one). Every session claims the
+    loader, checks the bootloader CRC and releases it, with every gate of a single session. One
+    report: the fields, each session's length, and for a session that stopped, the error that
+    stopped it (not whatever the cleanup ran into), its step and position, the cleanup failures
+    and its last frames. `on_stop(report)` adds to the report of a stopped run."""
     patched = image.build_patched_bootloader()
-    report: dict = {"side": args.side, "command": name}
+    report: dict = {"side": args.side, "command": name, "sessions": []}
     code = 1
     link = session = None
     try:
-        link = make_link(args)
-        session = Session(link)
-        with session:
-            session.require_patched_bootloader(patched)
-            report.update(body(session, patched) or {})
+        index = 0
+        while True:
+            link = make_link(args)
+            session = Session(link)
+            entry: dict = {"index": index}
+            report["sessions"].append(entry)
+            with session:
+                session.require_patched_bootloader(patched)
+                finished, fields = step(session, patched, index)
+                report.update(fields or {})
+                entry["relay_seconds"] = round(session.elapsed(), 1)  # before the release
+            entry["exchanges"] = getattr(getattr(link, "recent", None), "count", None)
+            if finished:
+                break
+            index += 1
         report["success"] = True
         code = 0
     except BaseException as error:  # noqa: BLE001 - reported
@@ -221,15 +257,27 @@ def with_session(args, name: str, body) -> int:
             print(f"  while: {session.step} {session.position or ''}", file=sys.stderr)
             for failure in session.cleanup_errors:
                 print(f"  cleanup also failed: {failure}", file=sys.stderr)
+        if on_stop:
+            on_stop(report)
     finally:
         if link is not None and hasattr(link, "diagnostics"):
             report["link"] = link.diagnostics()
+            stall = stall_summary(report["link"])
+            if stall:
+                report["stall"] = stall
             if not report.get("success"):
+                if stall and "since_relay_start_s" in stall:
+                    print(f"  first failed exchange: #{stall['exchange']}, {stall['since_relay_start_s']} s "
+                          f"after the relay started", file=sys.stderr)
                 print("  last frames (> host, < temple):", file=sys.stderr)
                 for line in short_frames(report["link"]["recent"]):
                     print(f"    {line}", file=sys.stderr)
     print(f"report: {save(report, f'w18-{name}-{args.side}')}")
     return code
+
+
+def with_session(args, name: str, body) -> int:
+    return run_sessions(args, name, lambda session, patched, index: (True, body(session, patched)))
 
 
 def cmd_hello(args) -> int:
@@ -252,38 +300,96 @@ def cmd_info(args) -> int:
     return with_session(args, "info-dump", body)
 
 
+class StreamCheck:
+    """link-soak's read: [0x438000, +length) streamed out with `dump` and checked against the
+    temple's CRC of the same bytes, in one session or, with a budget, in parts that each end
+    inside it (every part CRC-checked in its own session)."""
+
+    FIRST_RATE, FIRST_PART, RESERVE = 1.5e-3, 4096, 1.5  # as AppWriter
+
+    def __init__(self, length: int, budget: float | None = None):
+        self.length, self.budget = length, budget
+        self.data = bytearray()
+        self.rate, self.measured = self.FIRST_RATE, False
+        self.seconds = 0.0
+        self.exchanges = 0
+
+    def _part(self, session) -> int:
+        remaining = self.length - len(self.data)
+        if self.budget is None:
+            return remaining
+        n = int((self.budget - session.elapsed() - self.RESERVE) / self.rate) // 16 * 16
+        n = min(n if self.measured else min(n, self.FIRST_PART), remaining)
+        if n < 16:
+            raise SessionError(f"the session's checks used {session.elapsed():.1f} s of the {self.budget:g} s budget; "
+                               "no room for a part (raise --max-session-s)")
+        return n
+
+    def run(self, session, progress=None) -> bool:
+        at = len(self.data)
+        n = self._part(session)
+        address = pins.RECOVER_BASE + at
+        whole = at == 0 and n == self.length
+        session.step = f"stream {n} bytes out (dump)" if whole else f"stream bytes [{at}, {at + n}) of {self.length} out (dump)"
+        session.position = {"target": f"{address:#x}+{n}", "streamed_before": at}
+        count0 = session.link.recent.count
+        started = session.clock()
+        part = session.dump(address, n, (lambda c: progress(at + c)) if progress else None)
+        took = session.clock() - started
+        self.seconds += took
+        self.exchanges += session.link.recent.count - count0
+        if n >= 256 and took > 0:  # size later parts by the slowest rate seen so far
+            self.rate = max(self.rate, took / n) if self.measured else took / n
+            self.measured = True
+        session.step = "CRC of the same range"
+        crc = session.checksum(address, n)
+        if crc != zlib.crc32(part):
+            raise SessionError(f"streamed bytes CRC {zlib.crc32(part):08x} != temple CRC {crc:08x} at {address:#x}+{n}")
+        self.data += part
+        return len(self.data) == self.length
+
+
 def cmd_soak(args) -> int:
     length = args.bytes
     if not 16 <= length <= pins.RECOVER_END - pins.RECOVER_BASE or length % 16:
         print(f"REFUSED: --bytes must be a multiple of 16 in [16, {pins.RECOVER_END - pins.RECOVER_BASE}]",
               file=sys.stderr)
         return 2
+    budget = args.max_session_s or None
+    if budget is not None and args.idle_s:
+        print("REFUSED: --idle-s is a single-session experiment; leave out --max-session-s", file=sys.stderr)
+        return 2
+    reader = StreamCheck(length, budget)
+    last = [0]
 
-    def body(session, patched):
-        start = time.monotonic()
-        last = [0]
+    def progress(count):
+        if count - last[0] >= 64 * 1024 or count == length:
+            last[0] = count
+            print(f"{count}/{length} bytes read ({reader.exchanges} stream exchanges so far)", flush=True)
 
-        def progress(count):
-            if count - last[0] >= 64 * 1024 or count == length:
-                last[0] = count
-                rate = count / max(time.monotonic() - start, 1e-3)
-                print(f"{count}/{length} bytes read ({rate / 1024:.2f} KiB/s, "
-                      f"{session.link.recent.count} exchanges)", flush=True)
+    def step(session, patched, index):
+        fields = {}
+        if index == 0 and args.idle_s:
+            print(f"idle pause: no temple traffic until {args.idle_s:g} s after the relay started", flush=True)
+            fields["idle_ticks_s"] = session.idle_until(args.idle_s)
+            fields["idle_until_s"] = round(session.elapsed(), 1)
+        finished = reader.run(session, progress)
+        if budget is not None:
+            print(f"session {index}: {len(reader.data)}/{length} bytes streamed and CRC-checked "
+                  f"({session.elapsed():.1f} s since the relay started)", flush=True)
+        if not finished:
+            return False, fields
+        crc = zlib.crc32(reader.data)
+        ms = 1000 * reader.seconds / max(reader.exchanges, 1)
+        print(f"OK: {length} bytes streamed and matched the temple's CRC ({crc:08x}) in {reader.seconds:.0f} s, "
+              f"{reader.exchanges} exchanges, {ms:.1f} ms each, {index + 1} session(s); releasing boot")
+        return True, {**fields, "bytes": length, "crc32": f"{crc:08x}", "seconds": round(reader.seconds, 1),
+                      "exchanges": reader.exchanges, "ms_per_exchange": round(ms, 2), "max_session_s": budget}
 
-        session.step = f"stream {length} bytes out (dump)"
-        session.position = {"target": f"{pins.RECOVER_BASE:#x}+{length}"}
-        data = session.dump(pins.RECOVER_BASE, length, progress)
-        seconds = time.monotonic() - start
-        session.step = "CRC of the same range"
-        crc = session.checksum(pins.RECOVER_BASE, length)
-        if crc != zlib.crc32(data):
-            raise SessionError(f"streamed bytes CRC {zlib.crc32(data):08x} != temple CRC {crc:08x}")
-        exchanges = session.link.recent.count
-        print(f"OK: {length} bytes streamed and matched the temple's CRC ({crc:08x}) in {seconds:.0f} s, "
-              f"{exchanges} exchanges, {1000 * seconds / max(exchanges, 1):.1f} ms each; releasing boot")
-        return {"bytes": length, "crc32": f"{crc:08x}", "seconds": round(seconds, 1), "exchanges": exchanges}
+    def on_stop(report):
+        report["streamed_and_checked"] = len(reader.data)
 
-    return with_session(args, "link-soak", body)
+    return run_sessions(args, "link-soak", step, on_stop)
 
 
 def cmd_recover(args) -> int:
@@ -296,26 +402,52 @@ def cmd_recover(args) -> int:
     if image.sha(stock) != pins.STOCK_MAIN_SHA256:
         print("REFUSED: --image is not the pinned stock 2.4.0.24 main app (bundle or raw image)", file=sys.stderr)
         return 2
+    budget = args.max_session_s or None
+    try:
+        writer = AppWriter(stock, budget=budget, resume_at=args.resume_at)
+    except SessionError as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return 2
+    start = time.monotonic()
+    first = [True]  # the first verified block shows at once that streaming works
 
-    def body(session, patched):
+    def progress(count):
+        if first[0] or count % (64 * 1024) == 0 or count >= writer.body_len:
+            first[0] = False
+            rate = (count - writer.resumed_at) / max(time.monotonic() - start, 1e-3)
+            print(f"{count}/{writer.body_len} body bytes written and read back ({rate / 1024:.1f} KiB/s)", flush=True)
+
+    def step(session, patched, index):
         flag = session.flag()
-        print(f"update flag {flag:#010x}")
+        if index == 0:
+            print(f"update flag {flag:#010x}")
         if flag == 0x55555555 and not args.allow_pending_flag:
             raise SystemExit("REFUSED: the update flag is set; the bootloader would install the staged OTA "
                              "file after release. Pass --allow-pending-flag if that is intended.")
-        start = time.monotonic()
-        first = BLOCK  # the first verified block shows at once that streaming works
+        finished = writer.run(session, progress)
+        if budget is not None:
+            print(f"session {index}: body {writer.done}/{writer.body_len} bytes written and CRC-checked "
+                  f"({session.elapsed():.1f} s since the relay started)", flush=True)
+        fields = {"flag": f"{flag:#010x}", "body_verified": writer.done, "max_session_s": budget,
+                  "resumed_at": writer.resumed_at}
+        if not finished:
+            return False, fields
+        result = writer.result
+        print(f"OK: stock {pins.STOCK_MAIN_VERSION} main app written and verified ({result['crc_after']}) in "
+              f"{writer.sessions} session(s); releasing boot")
+        return True, {**fields, **result, "seconds": round(time.monotonic() - start, 1), "sessions_used": writer.sessions}
 
-        def progress(count):
-            if count == first or count % (64 * 1024) == 0 or count >= len(stock) - 16:
-                rate = count / max(time.monotonic() - start, 1e-3)
-                print(f"{count}/{len(stock)} bytes written and read back ({rate / 1024:.1f} KiB/s)", flush=True)
+    def on_stop(report):
+        report["body_verified"] = writer.done
+        report["vectors_written"] = bool(writer.result.get("crc_after"))
+        if writer.done and not report["vectors_written"]:
+            hint = (f"w18.py recover --side {args.side} --image {args.image} --resume-at {writer.done}"
+                    + (f" --max-session-s {budget:g}" if budget else " --max-session-s 0"))
+            report["resume_with"] = hint
+            print(f"  {writer.done} body bytes are written and CRC-verified; the vectors are not written. "
+                  f"To continue later (it CRC-checks those bytes first): {hint}", file=sys.stderr)
 
-        result = session.write_app(stock, progress)
-        print(f"OK: stock {pins.STOCK_MAIN_VERSION} main app written and verified ({result['crc_after']}); releasing boot")
-        return {"flag": f"{flag:#010x}", **result, "seconds": round(time.monotonic() - start, 1)}
-
-    return with_session(args, "recover", body)
+    return run_sessions(args, "recover", step, on_stop)
 
 
 def main(argv=None) -> int:
@@ -344,10 +476,23 @@ def main(argv=None) -> int:
     common(sp)
     sp.add_argument("--bytes", type=lambda v: int(v, 0), default=1 << 20,
                     help="bytes of the app region to stream (default 1 MiB, about 65,536 exchanges)")
+    sp.add_argument("--max-session-s", type=float, default=0.0,
+                    help="split the stream into sessions that end within this many seconds after the relay "
+                         "starts (default 0: one session)")
+    sp.add_argument("--idle-s", type=float, default=0.0,
+                    help="experiment: before streaming, keep the relay running without temple traffic (empty "
+                         "G2TX) until this many seconds after it started; read-only")
     sp = sub.add_parser("recover", help="write the pinned stock main app through the loader")
     common(sp)
     sp.add_argument("--image", required=True, help="the 2.4.0.24 bundle (.wisp-cache/stock/g2-2.4.0.24.bin) or its raw main image")
     sp.add_argument("--allow-pending-flag", action="store_true")
+    sp.add_argument("--max-session-s", type=float, default=DEFAULT_MAX_SESSION_S,
+                    help=f"end every session within this many seconds after the relay starts; the write "
+                         f"continues in the next session after a CRC check of what is written (default "
+                         f"{DEFAULT_MAX_SESSION_S:g}; 0: one session)")
+    sp.add_argument("--resume-at", type=lambda v: int(v, 0), default=0,
+                    help="body bytes an earlier recover run wrote and verified (it prints the value); "
+                         "they are CRC-checked against the image before anything is written")
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
             "info-dump": cmd_info, "link-soak": cmd_soak, "recover": cmd_recover}[a.command](a)

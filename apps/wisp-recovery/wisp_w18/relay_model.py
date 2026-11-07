@@ -15,6 +15,12 @@ Python loader (tests/fake_temple.FakeLoaderLink) or Renode's real loader (links.
 `hang_when(frame) -> bool` models the hardware failure of step F: the case stops for good while
 it hands that host frame to the temple. Nothing answers after that, not even G2EX, and the
 record stays in its "bridge running" state, as the record read back on 2026-11-06 shows.
+
+Time, for the session-time guard: with a `clock` (tests.fake_temple.FakeClock or anything with
+advance()), every exchange advances it by `exchange_s` (17.5 ms, as measured on hardware on
+2026-11-06) and every empty G2TX by `idle_s` (the relay's poll bound). `hang_after_s` stops the
+case that many seconds after the relay started (a wall-time cause), `hang_after_exchanges` after
+that many temple exchanges (a per-exchange cause). Either way the stop looks like step F's.
 """
 
 from __future__ import annotations
@@ -31,9 +37,15 @@ YHM_SELECTED = {0: bytes.fromhex("81100ca6af03c10333ff"), 1: bytes.fromhex("8110
 
 
 class RelayModel:
-    def __init__(self, temple, hang_when=None):
+    def __init__(self, temple, hang_when=None, clock=None, exchange_s=0.0175, idle_s=12.0,
+                 hang_after_s=None, hang_after_exchanges=None):
         self.temple = temple
         self.hang_when = hang_when
+        self.clock = clock
+        self.exchange_s, self.idle_s = exchange_s, idle_s
+        self.hang_after_s, self.hang_after_exchanges = hang_after_s, hang_after_exchanges
+        self.t0 = clock() if clock else 0.0  # Go: the relay starts with its banner
+        self.idles = 0
         self.timeout = 6.0
         self.is_open = True
         self.state = "rq"
@@ -123,15 +135,17 @@ class RelayModel:
                     return
                 status = 0
                 reply = b""
+                if self._dies(frame):
+                    self.state = "hung"
+                    return
                 if n:
-                    if self.hang_when is not None and self.hang_when(frame):
-                        self.state = "hung"
-                        return
                     self.sent += 1
                     reply = self.temple.exchange(frame)
                     self._word(10, n)
                 elif hasattr(self.temple, "next_frame"):
                     reply = self.temple.next_frame()
+                else:
+                    self.idles += 1
                 if not (len(reply) >= 4 and reply[:3] == b"\x5a\xa5\xff" and reply[3] in (8, 16, 24, 27)
                         and len(reply) == reply[3] + 5):
                     reply, status = b"", 2
@@ -141,6 +155,16 @@ class RelayModel:
                 self.outbox += console + bytes((sum(console) & 255,))
             else:
                 return
+
+    def _dies(self, frame: bytes) -> bool:
+        """Advance the clock by this exchange; True if the case stops during it."""
+        if frame and self.hang_when is not None and self.hang_when(frame):
+            return True
+        if self.clock is not None:
+            self.clock.advance(self.exchange_s if frame else self.idle_s)
+            if self.hang_after_s is not None and self.clock() - self.t0 >= self.hang_after_s:
+                return True
+        return bool(frame) and self.hang_after_exchanges is not None and self.sent >= self.hang_after_exchanges
 
     def _exit(self, status: int, restore: bool = True) -> None:
         """Back in the bridge: restore the route, record, G2RS, then the bridge resets the case."""

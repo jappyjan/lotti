@@ -151,6 +151,19 @@ class _Cut(Exception):
     pass
 
 
+class FakeClock:
+    """Virtual seconds for the session-time guard: the relay model advances it per exchange."""
+
+    def __init__(self, now: float = 1000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class CuttingLink(FakeLoaderLink):
     """A power cut during a write: the next reply is the HELO of the next boot."""
 
