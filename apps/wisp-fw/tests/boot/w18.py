@@ -23,6 +23,13 @@ Cases (end states):
                 between sessions, the vectors go last; stock boots
   install-*     the post-cut MRAM states of the stock app's bootloader copy (4 KiB chunks, lowest
                 first, as reverse-engineered from 2.4.0.24): k of 38 chunks new, the rest old
+  temple-wdt-*  the temple's nPM1300 watchdog (renode/models/WispPmicWdt.cs on IOM7), armed at the
+                start as the stock app leaves it, with a period scaled to Renode's virtual time
+                (PMIC_PERIOD_S): `-unfed` runs drdaeman's programs and is power-cycled mid-session
+                (a HELO instead of a reply); `-fed` runs the same work with the temple feed
+                (feed.bin, dump_fed.bin) and survives; `recover-fed` writes the dead temple in one
+                session with recover_fed.bin under the same armed watchdog. Each checks that every
+                PMIC write during the session is the kick 07 04 01
 """
 import argparse
 import hashlib
@@ -47,6 +54,11 @@ from wisp_w18.relay_model import RelayModel
 from wisp_w18.session import AppWriter, Session
 
 FLAG = 0x7FE000
+# The temple watchdog cases. Renode runs a loader exchange in about 12 us of virtual time (the
+# pacing shim), not the hardware's 17.5 ms, so a 30.72 s watchdog would need millions of exchanges.
+# The model's period is scaled down instead; the programs kick every 1024 RTOS ticks (one virtual
+# second), so 2.5 s leaves room for a whole-app checksum (about 1.1 s virtual) between kicks.
+PMIC_PERIOD_S = 2.5
 JUMP_RE = re.compile(r"(just jump to app|APP jumpaddr app)\(0x438000\)")
 HELO_PREFIX = "5aa5ff100001030c48454c4f"
 
@@ -71,12 +83,20 @@ class Run:
         repl, n = re.subn(r"uart2: Wisp\.WispUartIdle @ sysbus 0x4003B000",
                           "uart2: Wisp.WispCaseLink @ sysbus 0x4003B000", repl)
         assert n == 1, "rung-3 platform changed: uart2 line not found"
+        # IOM7 (the PMIC's bus) through WispPmicWdt: the same g2emu IOM behind it, plus the
+        # nPM1300 watchdog, which only acts when a case arms it.
+        repl, n = re.subn(r"iom: G2emu\.G2Iom @ sysbus 0x40050000\n    size: 0x8000",
+                          "iom: G2emu.G2Iom @ sysbus 0x40050000\n    size: 0x7000\n\n"
+                          "pmicwdt: Wisp.WispPmicWdt @ sysbus 0x40057000", repl)
+        assert n == 1, "rung-3 platform changed: iom line not found"
         # INFO0 (0x42000000), INFOC (0x400C2000) and CRYPTO (0x400C0000) fall into the rung-3
         # platform's plain periph_hi memory: zeros unless a case writes synthetic contents.
         (self.dir / "w18.repl").write_text(repl)
         resc = (APP_DIR / "renode/boot.resc").read_text().replace("$ORIGIN/", f"@{APP_DIR}/renode/")
         resc = resc.replace(f"include @{APP_DIR}/renode/models/WispUartIdle.cs",
                             f"include @{APP_DIR}/renode/models/WispUartIdle.cs\ninclude @{APP_DIR}/renode/models/WispCaseLink.cs")
+        resc = resc.replace(f"include @{APP_DIR}/renode/models/WispProbe.cs",
+                            f"include @{APP_DIR}/renode/models/WispProbe.cs\ninclude @{APP_DIR}/renode/models/WispPmicWdt.cs")
         resc = re.sub(r"machine LoadPlatformDescription .*", f"machine LoadPlatformDescription @{self.dir / 'w18.repl'}", resc)
         (self.dir / "w18.resc").write_text(resc)
         self.r = Renode(self.dir, free_port())
@@ -144,10 +164,17 @@ class Run:
         jumps = [m.end() for m in JUMP_RE.finditer(text)]
         return bool(jumps) and STOCK_MARK in text[jumps[-1]:]
 
+    def step(self, seconds: float = 1.0) -> None:
+        """RunFor, then the nPM1300 watchdog's power cycle if it fired during it (WispPmicWdt)."""
+        self.r.cmd(f'emulation RunFor "{seconds}"')
+        if self.r.cmd("pmicwdt PowerCyclePending").strip() == "True":
+            self.r.cmd("pmicwdt AckPowerCycle")
+            self.r.cmd("rstgen PowerCut")
+
     def run_until(self, done, budget: float, step: float = 0.5) -> float:
         t = 0.0
         while t < budget and not done():
-            self.r.cmd(f'emulation RunFor "{step}"')
+            self.step(step)
             t += step
         return t
 
@@ -211,7 +238,7 @@ class Harness:
             run.close()
 
     def session_case(self, name, app, body, check, setup=None, budget=60.0, bootloader=None,
-                     session_budget=120.0, relay=False):
+                     session_budget=120.0, relay=False, temple_feed=False):
         run = Run(self.work, name, bootloader or self.patched, app)
         log = []
         try:
@@ -219,14 +246,14 @@ class Harness:
                 setup(run)
 
             def host(link):
-                with Session(link, log=log.append) as s:
+                with Session(link, log=log.append, temple_feed=temple_feed) as s:
                     s.require_patched_bootloader(self.patched)
                     return body(s)
             t0 = time.time()
             thread, result = run.attach(host, relay=relay)
             t = 0.0
             while thread.is_alive():
-                run.r.cmd('emulation RunFor "1"')
+                run.step(1)
                 t += 1
                 if t > session_budget:
                     regs = {r: run.r.cmd(f"cpu GetRegisterUnsafe {i}") for i, r in ((15, "pc"), (14, "lr"), (13, "sp"))}
@@ -415,6 +442,89 @@ class Harness:
         finally:
             run.close()
 
+    # --- the temple's nPM1300 watchdog ---
+    @staticmethod
+    def pmic(run) -> dict:
+        def number(command):
+            return int(run.r.cmd(f"pmicwdt {command}").split()[0], 0)
+        log = run.r.cmd("pmicwdt PmicLog")
+        (run.dir / "pmic.log").write_text(log + "\n")
+        return {"kicks": number("Kicks"), "expiries": number("Expiries"), "log": log}
+
+    @staticmethod
+    def leading_kicks(log: str) -> tuple[int, list[str]]:
+        """How many PMIC writes are kicks before the first other write, and every distinct write.
+        The session comes first; only after its release does the stock app boot and write the PMIC
+        itself, so a session that writes nothing but kicks has all its kicks in that leading run."""
+        writes = [line.split(" ms write ")[1].strip() for line in log.splitlines() if " ms write " in line]
+        n = 0
+        while n < len(writes) and writes[n] == "07 04 01":
+            n += 1
+        return n, sorted(set(writes))
+
+    def temple_wdt(self, fed: bool):
+        """The same work with and without the feed, under an armed (scaled) PMIC watchdog: three
+        checksums of the app region (about 1.1 s virtual each) and a 1 MiB dump."""
+        name = "temple-wdt-fed" if fed else "temple-wdt-unfed"
+        marks = {}
+
+        def setup(run):
+            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+
+        def body(s):
+            crcs = [s.checksum(pins.APP_BASE, len(self.app)) for _ in range(3)]
+            data = s.dump(pins.APP_BASE, 1 << 20)
+            marks["feeds"] = s.feeds
+            return {"crcs": crcs, "dump_ok": data == self.app[: 1 << 20]}
+
+        def check(run, result):
+            p = self.pmic(run)
+            v = result.get("value")
+            want = __import__("zlib").crc32(self.app)
+            leading, writes = self.leading_kicks(p["log"])
+            if fed:
+                ok = (bool(v) and v["crcs"] == [want] * 3 and v["dump_ok"] and p["expiries"] == 0
+                      and leading >= marks.get("feeds", 99) + 1 and run.stock_running())
+                return ok, (f"{leading} kicks in the session, nothing else written to the PMIC ({marks.get('feeds')} "
+                            f"by feed.bin, the rest by dump_fed.bin); no power cycle; CRCs and dump right; stock app "
+                            f"running (its own PMIC writes after the release: {len(writes)} distinct)"
+                            if ok else f"{result} leading={leading} {p}")
+            error = result.get("error")
+            ok = (error is not None and "temple rebooted" in repr(error) and p["expiries"] == 1
+                  and leading == 0 and run.stock_running())
+            return ok, (f"power-cycled by the PMIC watchdog mid-session ({error!r:.60}), no kick, stock app "
+                        "running after the reboot" if ok else f"{result} {p}")
+
+        self.session_case(name, self.app, body, check, setup=setup, temple_feed=fed, session_budget=600)
+
+    def recover_fed(self):
+        """recover in one session with recover_fed.bin, on a dead temple, under the armed watchdog."""
+        def setup(run):
+            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+
+        def body(s):
+            t0 = time.time()
+            result = s.write_app(self.app)
+            result["host_s"] = round(time.time() - t0, 1)
+            result["feeds"] = s.feeds
+            return result
+
+        def check(run, result):
+            p = self.pmic(run)
+            mram = run.mram()
+            app_ok = mram[0x38000:0x38000 + len(self.app)] == self.app
+            boot_ok = mram[0x10000:0x10000 + len(self.patched)] == self.patched
+            v = result.get("value")
+            leading, _writes = self.leading_kicks(p["log"])
+            ok = (bool(v) and app_ok and boot_ok and p["expiries"] == 0 and leading >= v["feeds"] + 2
+                  and run.stock_running())
+            return ok, (f"stock 2.4.0.24 written in one session ({v['bytes']} B, CRC {v['crc_after']}), "
+                        f"{leading} kicks and nothing else to the PMIC in the session ({v['feeds']} by feed.bin), no "
+                        f"power cycle, bootloader unchanged, stock app running" if ok else
+                        f"app_ok={app_ok} boot_ok={boot_ok} {result} leading={leading} {p}")
+
+        self.session_case("recover-fed", None, body, check, setup=setup, temple_feed=True, session_budget=900)
+
     def install_states(self, old: bytes, label: str, ks):
         """Post-cut MRAM states of the stock app's bootloader copy (chunks of 4 KiB, ascending)."""
         for k in ks:
@@ -443,7 +553,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
-                                                   "recover-relay", "recover-cut", "recover-split", "install"])
+                                                   "recover-relay", "recover-cut", "recover-split", "temple-wdt",
+                                                   "recover-fed", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -467,6 +578,11 @@ def main() -> int:
         h.recover("recover-cut-40pct", cut_fraction=0.4)
     if "recover-split" in only:
         h.recover_split()
+    if "temple-wdt" in only:
+        h.temple_wdt(fed=False)
+        h.temple_wdt(fed=True)
+    if "recover-fed" in only:
+        h.recover_fed()
     if "install" in only:
         ks = [int(k) for k in a.install_chunks.split(",")]
         if "2.4.0.24" in a.install_old:

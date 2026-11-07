@@ -3,7 +3,13 @@
 fake MRAM, and a stand-in for the stock app's BLE OTA service. No hardware, no emulator.
 
 The RAM programs are recognised by their pinned SHA-256 and run as Python equivalents of
-drdaeman's checksum.c, dump.c and recover.c."""
+drdaeman's checksum.c, dump.c and recover.c, and of ours: feed.c, dump_fed.c and recover_fed.c
+(tests/test_temple_watchdog.py checks the real binaries against the same behaviour under Unicorn).
+
+With a `FakePmicWatchdog`, the temple has the nPM1300 watchdog the stock app leaves running: the
+relay's reset restarts the loader but not the PMIC, and when the watchdog has not been kicked for
+30.72 s of the shared virtual clock, the PMIC power-cycles the temple and its next frame is a HELO
+(recovery.md, "The temple's watchdog")."""
 
 from __future__ import annotations
 
@@ -36,11 +42,58 @@ class FakeMram:
         self.mem[addr - 0x400000 : addr - 0x400000 + len(data)] = data
 
 
+class FakePmicWatchdog:
+    """The temple's nPM1300 watchdog on a virtual clock (anything callable with an `advance`,
+    such as FakeClock; the relay model advances it per exchange).
+
+    `relay_reset()` is the case relay's reset of the temple: when the stock app ran before it
+    (`app_runs`), the watchdog is armed and was last kicked `app_kick_age` s earlier (the app kicks
+    every second). The PMIC keeps counting through the reset. `expired()` is checked before every
+    exchange: once `period` s pass without a kick, the PMIC power-cycles the temple, which also
+    stops the watchdog until the app arms it again. `kick_status` makes every kick fail with that
+    pmic_kick.h code: 0x50010 is a NAK (feed.bin reports it; the long programs retry it), 0x107 a
+    refused power-up (the long programs stop: dump_fed with 2, recover_fed with 6)."""
+
+    def __init__(self, clock, period: float = pins.PMIC_WATCHDOG_S, app_runs: bool = True,
+                 app_kick_age: float = 0.5, kick_status: int = 0):
+        self.clock, self.period = clock, period
+        self.app_runs, self.app_kick_age, self.kick_status = app_runs, app_kick_age, kick_status
+        self.armed = False
+        self.last_kick = clock()
+        self.kicks: list[float] = []  # clock time of every kick by a RAM program
+        self.power_cycles: list[float] = []  # clock time of every reset by the watchdog
+
+    def relay_reset(self) -> None:
+        if self.app_runs:
+            self.armed = True
+            self.last_kick = self.clock() - self.app_kick_age
+
+    def kick(self) -> int:
+        if self.kick_status:
+            return self.kick_status
+        self.kicks.append(self.clock())
+        self.last_kick = self.clock()
+        return 0
+
+    def expired(self) -> bool:
+        if self.armed and self.clock() - self.last_kick >= self.period:
+            self.armed = False
+            self.power_cycles.append(self.clock())
+            return True
+        return False
+
+
 class FakeLoaderLink:
     """Implements the link interface (start/exchange/close) on top of a fake loader."""
 
-    def __init__(self, mram: FakeMram, challenge: int = 0x1234, cut_after_writes: int | None = None):
+    KICK_EVERY_S = 1024 / 1024  # pmic_kick.h PK_EVERY: 1024 RTOS ticks
+
+    def __init__(self, mram: FakeMram, challenge: int = 0x1234, cut_after_writes: int | None = None,
+                 pmic: FakePmicWatchdog | None = None):
         self.mram = mram
+        self.pmic = pmic
+        if pmic is not None:  # an idle G2TX can then carry the HELO of a power-cycled temple
+            self.next_frame = self._next_frame
         self.challenge = challenge
         self.held = False
         self.code = None
@@ -50,7 +103,21 @@ class FakeLoaderLink:
         self.cut_after_writes = cut_after_writes
 
     def start(self) -> bytes:
+        if self.pmic is not None:
+            self.pmic.relay_reset()
         return loader.hello(self.challenge)
+
+    def _power_cycled(self) -> bool:
+        """The PMIC's watchdog reset the temple: the loader boots again and says HELO."""
+        if self.pmic is None or not self.pmic.expired():
+            return False
+        self.held = False
+        self.code = self.pending = None
+        self.challenge += 1
+        return True
+
+    def _next_frame(self) -> bytes:
+        return loader.hello(self.challenge) if self._power_cycled() else b""
 
     def close(self) -> None:
         self.closed = True
@@ -60,6 +127,8 @@ class FakeLoaderLink:
 
     def exchange(self, frame: bytes) -> bytes:
         self.sent.append(frame)
+        if self._power_cycled():
+            return loader.hello(self.challenge)
         if not self.held:
             assert frame == loader.hold(self.challenge), "expected HOLD"
             self.held = True
@@ -124,7 +193,35 @@ class FakeLoaderLink:
                 yield "out", block[j : j + 16]
         return 0
 
-    def _prog_recover(self, addr, n):
+    def _kick_due(self, state: dict) -> bool:
+        """pmic_kick_due(): kick when a second has passed since the program's last kick; True when
+        the kick could not power IOM7 (0x10, 0x1nn), after which the long programs stop."""
+        if self.pmic is None:
+            return False
+        now = self.pmic.clock()
+        if state.get("last") is None or now - state["last"] >= self.KICK_EVERY_S:
+            state["last"] = now
+            status = self.pmic.kick()
+            return status == 0x10 or status >> 8 == 1
+        return False
+
+    def _prog_feed(self, _a0, _a1):
+        return self.pmic.kick() if self.pmic is not None else 0
+        yield  # unreachable: makes this a generator
+
+    def _prog_dump_fed(self, addr, n):
+        data = self.mram.read(addr, n)
+        kicks: dict = {}
+        for i in range(0, n, 16):
+            if self._kick_due(kicks):
+                return 2
+            yield "out", data[i : i + 16]
+        return 0
+
+    def _prog_recover_fed(self, addr, n):
+        return (yield from self._prog_recover(addr, n, kicks={}))
+
+    def _prog_recover(self, addr, n, kicks=None):
         if not n:
             return 0
         done = 0
@@ -132,6 +229,8 @@ class FakeLoaderLink:
             size = min(256, n - done)
             buf = b""
             while len(buf) < size:
+                if kicks is not None and self._kick_due(kicks):
+                    return 6
                 chunk = yield "in", min(16, size - len(buf))
                 if not chunk:
                     return 5
@@ -143,6 +242,8 @@ class FakeLoaderLink:
                 raise _Cut()
             done += size
             progress = struct.pack("<I", done)
+            if kicks is not None and self._kick_due(kicks):
+                return 6
             yield "out", progress
         return 0
 

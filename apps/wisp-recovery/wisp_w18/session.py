@@ -9,6 +9,12 @@ writer program are drdaeman's (tools/g2patch/recovery.py, src/examples/recover.c
 `AppWriter` splits that write over as many held sessions as a session-time budget needs: each
 session CRC-checks the body written so far before it adds a part, and the vectors are written only
 after a CRC of the whole body, in a session that verified it.
+
+With `temple_feed`, the session keeps the temple's nPM1300 watchdog fed (recovery.md, "The
+temple's watchdog"): once the bootloader's CRC has been checked, `feed.bin` kicks it, again before
+every program that does not kick it itself (`checksum`), and the streams use `dump_fed` and
+`recover_fed`, which kick it at most once a second while they run. Without it, the PMIC resets the
+temple about 30 s after the stock app's last kick, so a session must end before that.
 """
 
 from __future__ import annotations
@@ -38,9 +44,13 @@ class TempleReset(SessionError):
 
 
 class Session:
-    def __init__(self, link, log=print, clock=None):
+    def __init__(self, link, log=print, clock=None, temple_feed=False):
         self.link = link
         self.log = log
+        self.temple_feed = temple_feed
+        self.bootloader_verified = False  # the feeding programs call into it: only after its CRC
+        self.feeds = 0  # feed.bin runs in this session
+        self.temple_reset_s: float | None = None  # when a HELO came mid-session, s since the relay start
         self.client: loader.Client | None = None
         self.claimed = False
         self.released = False
@@ -86,6 +96,7 @@ class Session:
         reply = self.link.exchange(frame)
         if reply[:12] == loader.hello(0)[:12]:
             self.released = True
+            self.temple_reset_s = round(self.elapsed(), 3)
             raise TempleReset(f"temple rebooted mid-session (HELO {reply.hex()})")
         return reply
 
@@ -125,8 +136,30 @@ class Session:
             raise SessionError("cleanup failed: " + "; ".join(self.cleanup_errors)) from failures[0]
         return False
 
+    # --- the temple's watchdog ---
+    @property
+    def feeding(self) -> bool:
+        return self.temple_feed and self.bootloader_verified
+
+    def feed(self) -> None:
+        """One kick of the temple's nPM1300 watchdog (feed.bin). A failed kick stops the session:
+        the watchdog would reset the temple within 30 s, so nothing more is started."""
+        if not self.bootloader_verified:
+            raise RefusedError("feed.bin calls into the bootloader; its CRC must be checked first")
+        step, self.step = self.step, "feed the temple watchdog"
+        self.client.upload(image.program("feed"))
+        result, data = self.client.execute()
+        self.feeds += 1
+        if result or data:
+            raise SessionError(f"temple watchdog feed failed: feed.bin status {result:#x} (pmic_kick.h codes); "
+                               "nothing more runs in this session. Without the feed (--no-temple-feed) a session "
+                               "must end within about 25 s of the relay start (--max-session-s 20)")
+        self.step = step
+
     # --- read-only primitives ---
     def checksum(self, address: int, length: int) -> int:
+        if self.feeding:
+            self.feed()
         self.client.upload(image.program("checksum"), arg0=address, arg1=length)
         result, data = self.client.execute()
         if data:
@@ -134,7 +167,7 @@ class Session:
         return result
 
     def dump(self, address: int, length: int, progress=None) -> bytes:
-        self.client.upload(image.program("dump"), arg0=address, arg1=length)
+        self.client.upload(image.program("dump_fed" if self.feeding else "dump"), arg0=address, arg1=length)
         received = 0
 
         def counted(chunk: bytes) -> None:
@@ -144,6 +177,9 @@ class Session:
                 progress(received)
 
         result, data = self.client.execute(counted if progress else None)
+        if result == 2 and self.feeding:
+            raise SessionError(f"temple watchdog feed failed during the read at {address:#x} (dump_fed.bin "
+                               f"result 2: IOM7 could not be powered for a kick); stopped after {received} bytes")
         if result or len(data) != length:
             raise SessionError(f"memory read at {address:#x} failed or returned {len(data)} of {length} bytes")
         return data
@@ -154,11 +190,14 @@ class Session:
         temple frame). Read-only; the held loader just keeps waiting. Returns each one's time."""
         ticks = []
         while self.elapsed() < seconds:
+            if self.feeding:  # an empty G2TX keeps the temple silent for the relay's poll bound
+                self.feed()
             self.step = f"idle pause: {self.elapsed():.1f} of {seconds:g} s since the relay started"
             status, frame, took = self.link.idle()
             ticks.append(round(took, 3))
             if frame[:12] == loader.hello(0)[:12]:
                 self.released = True
+                self.temple_reset_s = round(self.elapsed(), 3)
                 raise TempleReset(f"temple rebooted during the idle pause (HELO {frame.hex()})")
             if status != 2 or frame:
                 raise SessionError(f"unexpected answer to an empty G2TX: status {status}, frame {frame.hex()}")
@@ -174,6 +213,9 @@ class Session:
         self.log(f"bootloader region CRC-32 {crc:08x} (pinned image {want:08x})")
         if crc != want:
             raise SessionError("the bootloader in MRAM is not the pinned patched image; nothing written")
+        self.bootloader_verified = True
+        if self.temple_feed:
+            self.feed()  # the first kick, and the proof that the feed works before anything long runs
 
     def flag(self) -> int:
         return struct.unpack("<I", self.dump(FLAG, 4))[0]
@@ -218,7 +260,7 @@ class Session:
         if not pins.RECOVER_BASE <= address < end <= pins.RECOVER_END:
             raise RefusedError(f"write [{address:#x}, {end:#x}) is outside the stock main-app region")
         self.position = {"target": f"{address:#x}+{len(data)}", "sent": 0, "verified": 0}
-        self.client.upload(image.program("recover"), arg0=address, arg1=len(data))
+        self.client.upload(image.program(self.writer), arg0=address, arg1=len(data))
         count = 0
 
         def checked(chunk: bytes) -> None:
@@ -243,8 +285,17 @@ class Session:
             return chunk
 
         result, _output = self.client.execute(checked, source=source)
+        if result == 6 and self.writer == "recover_fed":
+            raise SessionError(f"temple watchdog feed failed during the write at {address:#x} (recover_fed.bin "
+                               f"result 6: IOM7 could not be powered for a kick); stopped cleanly after "
+                               f"{count} verified bytes, vectors not written")
         if result or count != len(data) or at != len(data):
             raise SessionError(f"MRAM write/readback failed at {address:#x}: writer returned {result:#x}")
+
+    @property
+    def writer(self) -> str:
+        """The MRAM writer: recover.bin, or recover_fed.bin while the temple watchdog is fed."""
+        return "recover_fed" if self.feeding else "recover"
 
     def write_app(self, stock: bytes, progress=None) -> dict:
         """Write the pinned stock main image at 0x438000 in this one session: body, CRC, vectors,
@@ -302,7 +353,7 @@ class AppWriter:
         self.result["crc_before"] = f"{before:08x}"
         self.log(f"app region CRC-32 before: {before:08x} (stock {zlib.crc32(self.target):08x})")
         s.step = "RAM API v2 check"
-        s.client.upload(image.program("recover"))  # length 0 = API check only, programs nothing
+        s.client.upload(image.program(s.writer))  # length 0 = API check only, programs nothing
         result, output = s.client.execute()
         if result or output:
             raise SessionError("the loader lacks RAM API v2 (recv); nothing written")
