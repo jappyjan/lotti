@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fake_temple import FakeClock, FakeLoaderLink
 from test_w18 import FAKE_PATCHED, SmallStock, fake_stock, temple
 from wisp_case import pins as case_pins
+from wisp_case.rom import RomError
 from wisp_w18 import cli, image, links, loader, pins, relay_model, session
 
 try:
@@ -262,6 +263,61 @@ class RecoverGuard(unittest.TestCase):
 
 
 @unittest.skipUnless(fc, "install unicorn to run the relay under emulation")
+class StubLink:
+    """A link whose start or HOLD fails, recording the cleanup the session runs."""
+
+    def __init__(self, start_error=None, okay=True):
+        self.start_error, self.okay = start_error, okay
+        self.sent: list[bytes] = []
+        self.closed = 0
+
+    def start(self) -> bytes:
+        if self.start_error:
+            raise self.start_error
+        return loader.hello(0x1234)
+
+    def exchange(self, frame: bytes) -> bytes:
+        self.sent.append(frame)
+        if frame == loader.cont():
+            return loader.released()
+        return b"\0" * 32  # not a valid OKAY
+
+    def close(self) -> None:
+        self.closed += 1
+
+
+class StartFailureCleanup(unittest.TestCase):
+    """F1b session 1 (2026-11-07): the relay start failed inside Session.__enter__, so __exit__
+    never ran and the case was left in the relay. Failures while entering clean up too."""
+
+    def test_link_start_failure_closes_the_link(self):
+        link = StubLink(start_error=RomError("timeout reading UART registers: got 13 of 16 bytes"))
+        held = session.Session(link, log=lambda _line: None)
+        with self.assertRaises(RomError):
+            with held:
+                self.fail("the body must not run")
+        self.assertEqual(link.closed, 1)
+        self.assertEqual(link.sent, [])  # nothing sent: never claimed, no CONTINUE
+
+    def test_close_failure_after_start_failure_keeps_the_original_error(self):
+        link = StubLink(start_error=RomError("start"))
+        link.close = mock.Mock(side_effect=links.LinkError("route restoration not verified"))
+        held = session.Session(link, log=lambda _line: None)
+        with self.assertRaises(RomError) as caught:
+            held.__enter__()
+        self.assertIn("route restoration not verified", held.cleanup_errors[0])
+        self.assertTrue(any("cleanup after this error" in note for note in caught.exception.__notes__))
+
+    def test_bad_okay_releases_once_then_closes(self):
+        link = StubLink()
+        held = session.Session(link, log=lambda _line: None)
+        with self.assertRaises(loader.LoaderError):
+            held.__enter__()
+        self.assertEqual(link.sent.count(loader.cont()), 1)
+        self.assertTrue(held.released)
+        self.assertEqual(link.closed, 1)
+
+
 class RealRelayIdle(unittest.TestCase):
     def test_empty_g2tx_is_answered_with_status_2_and_the_session_goes_on(self):
         case = fc.FakeCase(case_pins.CASE_IMAGE_LENGTH, yhm=fc.IDLE_YHM)
