@@ -58,24 +58,29 @@ class Session:
 
     # --- claim and release [drdaeman link.py claim/continue_boot] ---
     def __enter__(self):
+        """Start the link and claim the loader. If anything here fails, `__exit__` never runs, so
+        the same cleanup runs before the error propagates: a case whose relay start or claim
+        failed is still put back in its own firmware."""
+        try:
+            self._claim()
+        except BaseException as error:
+            self.__exit__(type(error), error, error.__traceback__)
+            raise
+        return self
+
+    def _claim(self) -> None:
         self.started = self.clock()
         beacon = self.link.start()
         self.started = getattr(self.link, "relay_started", None) or self.started
         challenge = loader.decode_hello(beacon)
         self.log(f"HELO from the patched loader (challenge {challenge:#010x})")
         response = self.link.exchange(loader.hold(challenge))
-        try:
-            loader.check_okay(response, challenge)
-        except loader.LoaderError:
-            # HOLD may have taken effect even though its acknowledgement is invalid.
-            self.claimed = True
-            self.release()
-            raise
+        # HOLD may have taken effect even though its acknowledgement is invalid: release then.
         self.claimed = True
+        loader.check_okay(response, challenge)
         self.client = loader.Client(self._exchange)
         self.step = "held: read-only checks"
         self.log("boot held (OKAY verified)")
-        return self
 
     def _exchange(self, frame: bytes) -> bytes:
         reply = self.link.exchange(frame)
