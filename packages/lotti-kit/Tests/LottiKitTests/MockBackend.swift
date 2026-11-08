@@ -150,7 +150,7 @@ enum Fixtures {
                        now: @escaping @Sendable () -> Date = { Date() },
                        start: Bool = true) -> BackendClient {
         let client = BackendClient(transport: backend, toolbox: Toolbox(tools), configuration: config, policy: policy,
-                                   toolTimeout: toolTimeout, requestTimeout: .seconds(2), firstFrameTimeout: firstFrameTimeout,
+                                   toolTimeout: toolTimeout, requestTimeout: .seconds(30), firstFrameTimeout: firstFrameTimeout,
                                    now: now)
         if start { client.start() }
         return client

@@ -99,7 +99,9 @@ struct WispOtaEngineTests {
         let (first, progress, _) = try await send(rung1.bytes)
         #expect(first == .success(version: "2.2.6.19", restartNotified: true))
         #expect(progress.contains { $0.state == "file" && $0.bytesAcked == $0.totalBytes })
-        try await Task.sleep(for: .milliseconds(150))  // the fake resets 20 ms after NOTIFY
+        // The fake resets 20 ms after NOTIFY, installs, and drops the link: only one arm may be
+        // open at a time, so wait until that reset has closed the left session.
+        try await eventually { fake.state(.left)?.resets == 1 && fake.openArms.isEmpty }
         #expect(fake.state(.left)?.installed.name == "staged image")
         // Status comes from the right arm, which reports both temples.
         let session = try await fake.open(.right)
@@ -108,9 +110,10 @@ struct WispOtaEngineTests {
 
         let back = try engine.prepareStockBack(stock: stock)
         fake.register(crc32c: back.info.mainCrc32c, version: "2.2.6.10")
+        let resets = fake.state(.left)?.resets ?? 0
         let (second, _, _) = try await send(back.bytes)
         #expect(second == .success(version: "2.2.6.10", restartNotified: true))
-        try await Task.sleep(for: .milliseconds(150))
+        try await eventually { (fake.state(.left)?.resets ?? 0) > resets && fake.openArms.isEmpty }
         let again = try await fake.open(.right)
         #expect(try await again.readStatus().leftVersion == "2.2.6.10")
         again.close()

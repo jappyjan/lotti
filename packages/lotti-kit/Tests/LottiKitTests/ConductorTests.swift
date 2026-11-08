@@ -15,9 +15,14 @@ struct ConductorTests {
         conductor = Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date(), events: [], weather: Weather(temperature: 12, condition: "cloudy"))),
-            inboxSummary: InboxSummary(german: false),
-            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200)))
+            inboxSummary: InboxSummary(german: false), timing: Self.timing())
+    }
+
+    /// Timers that don't run out while a test waits: on a loaded runner the main actor can stall
+    /// for longer than a short one, and then a screen goes dark (or a transcript is given up on)
+    /// before the test sees it. A test about a timer running out shortens that one itself.
+    static func timing(remote: Duration = .seconds(30)) -> Conductor.Timing {
+        .init(idle: .seconds(30), done: .seconds(30), answer: .seconds(30), finalTranscript: .seconds(30), remote: remote)
     }
 
     func press(_ gesture: InputEvent.Gesture) { conductor.handle(InputEvent(gesture, from: .ring)) }
@@ -54,8 +59,9 @@ struct ConductorTests {
     }
 
     @Test func touchedTodayViewGoesDarkWhenIdle() async throws {
+        conductor.timing.idle = .milliseconds(300)
         press(.doubleTap)
-        try await eventually(timeout: 2) { conductor.mode == .off }
+        try await eventually { conductor.mode == .off }
     }
 
     @Test func railOpensWeatherAndDoubleTapGoesBack() async throws {
@@ -97,9 +103,10 @@ struct ConductorTests {
     }
 
     @Test func aStuckModelTimesOutWithTryAgain() async throws {
+        conductor.timing.answer = .milliseconds(200)
         brain.delay = .seconds(5)
         conductor.ask("Hi")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Sorry, I got stuck on that." }
+        try await eventually { conductor.screen?.text == "Sorry, I got stuck on that." }
         #expect(conductor.screen?.rail?.current?.action == .ask("Hi"))
     }
 
@@ -112,12 +119,11 @@ struct ConductorTests {
 
     // MARK: Backend and offline
 
-    func conductorWithRemote(_ remote: FakeRemote, tools: [any PhoneTool] = []) -> Conductor {
+    func conductorWithRemote(_ remote: FakeRemote, tools: [any PhoneTool] = [], quiet: Duration = .seconds(30)) -> Conductor {
         Conductor(
             link: link, brain: brain, remote: remote, toolbox: Toolbox(tools), speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: false),
-            timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200),
-                          finalTranscript: .milliseconds(200), remote: .milliseconds(400)))
+            timing: Self.timing(remote: quiet))
     }
 
     @Test func questionsGoToTheBackendAndSoDoTheirFollowUps() async throws {
@@ -180,36 +186,40 @@ struct ConductorTests {
     @Test func whenTheBackendGoesQuietItSaysSo() async throws {
         let remote = FakeRemote()
         remote.delay = .seconds(5)
-        let conductor = conductorWithRemote(remote)
+        let conductor = conductorWithRemote(remote, quiet: .milliseconds(400))
         conductor.ask("Tell me a joke")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Lotti Brain is taking too long." }
+        try await eventually { conductor.screen?.text == "Lotti Brain is taking too long." }
         #expect(conductor.screen?.rail?.current?.action == .ask("Tell me a joke"))
     }
 
     @Test func whenTheBackendKeepsWorkingThePhoneWaits() async throws {
         let remote = FakeRemote()
-        remote.delay = .milliseconds(500)
+        // Longer than the quiet limit, so only the pulses keep it alive. They come 20 times as
+        // often as the limit, so a stalled runner would need a 1 s stall to cut it off.
+        remote.delay = .milliseconds(1500)
         remote.progressEvery = .milliseconds(50)
         remote.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
-        let conductor = conductorWithRemote(remote)
+        let conductor = conductorWithRemote(remote, quiet: .seconds(1))
         conductor.ask("Tell me a joke")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
+        try await eventually { conductor.screen?.text == "Why did the raccoon cross the road?" }
     }
 
     @Test func backendTrafficAloneKeepsThePhoneWaiting() async throws {
         let remote = FakeRemote()
-        remote.delay = .milliseconds(500)
+        // Longer than the quiet limit, so only the pulses keep it alive. They come 20 times as
+        // often as the limit, so a stalled runner would need a 1 s stall to cut it off.
+        remote.delay = .milliseconds(1500)
         remote.activityEvery = .milliseconds(50)
         remote.answers = ["Tell me a joke": Answer(sentence: "Why did the raccoon cross the road?")]
-        let conductor = conductorWithRemote(remote)
+        let conductor = conductorWithRemote(remote, quiet: .seconds(1))
         conductor.ask("Tell me a joke")
-        try await eventually(timeout: 2) { conductor.screen?.text == "Why did the raccoon cross the road?" }
+        try await eventually { conductor.screen?.text == "Why did the raccoon cross the road?" }
     }
 
     @Test func showsWhatTheBackendIsDoing() async throws {
         let remote = FakeRemote()
         remote.statuses = ["Suche Mails"]
-        remote.delay = .milliseconds(200)
+        remote.delay = .seconds(30)  // still working while the test looks: the status line stays up
         let conductor = conductorWithRemote(remote)
         conductor.ask("Plan my week")
         try await eventually { conductor.screen?.text == "Suche Mails…" }
@@ -292,7 +302,19 @@ struct ConductorTests {
         try await eventually { link.microphoneOn }
         press(.longPressEnd)
         try await eventually { conductor.screen?.text == "Sorry, I didn't catch that." }
-        try await eventually(timeout: 2) { conductor.mode == .off }
+        #expect(conductor.mode == .done)
+    }
+
+    @Test func theSorryLineGoesDarkAfterTheDoneTimeout() async throws {
+        conductor.timing.done = .milliseconds(100)
+        press(.doubleTap)
+        press(.longPress)
+        try await eventually { link.microphoneOn }
+        press(.longPressEnd)
+        #expect(conductor.mode == .working)
+        // Only the done line's timer turns it off from here (the idle one is 30 s).
+        try await eventually { conductor.mode == .off }
+        try await eventually { link.frames.last == .dark }
     }
 
     @Test func fallsBackToThePhoneMicrophone() async throws {
@@ -333,12 +355,13 @@ struct ConductorTests {
     func conductorWithTimers(_ timers: FakeTimers) -> Conductor {
         Conductor(link: link, brain: brain, timers: timers, speech: speech,
                   today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: false),
-                  timing: .init(idle: .milliseconds(300), done: .milliseconds(100), answer: .milliseconds(200)))
+                  timing: Self.timing())
     }
 
     @Test func aRingingTimerLightsUpTheGlassesAndTapStopsIt() async throws {
         let timers = FakeTimers()
         let conductor = conductorWithTimers(timers)
+        conductor.timing.idle = .milliseconds(300)
         let running = Task { await conductor.run() }
         defer { running.cancel() }
         try await eventually { timers.watching }

@@ -16,17 +16,20 @@ struct ConductorWakeTests {
         conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic, classifier: classifier)
     }
 
+    /// Screen, answer and transcript timers are long: on a loaded runner the main actor can stall
+    /// for longer than a short one, and then e.g. a hold gives up on its transcript before the
+    /// recognizer's result is read. The wake endpointer counts samples, not time.
     static func makeConductor(
         link: FakeGlassesLink, brain: FakeBrain, speech: any SpeechRecognizer, phoneMic: FakeMicrophone,
-        classifier: FakeClassifier?, watchdog: Duration = .seconds(30), idle: Duration = .seconds(5),
-        done: Duration = .milliseconds(100), answer: Duration = .milliseconds(200),
+        classifier: FakeClassifier?, watchdog: Duration = .seconds(30), idle: Duration = .seconds(30),
+        done: Duration = .seconds(30), answer: Duration = .seconds(30),
         confirm: Duration = .seconds(5)
     ) -> Conductor {
         Conductor(
             link: link, brain: brain, speech: speech, phoneMicrophone: phoneMic,
             today: FixedToday(info: TodayInfo(now: Date())),
             timing: .init(idle: idle, done: done, answer: answer,
-                          finalTranscript: .milliseconds(200), wakeConfirm: confirm,
+                          finalTranscript: .seconds(30), wakeConfirm: confirm,
                           wakeSilence: .milliseconds(100), wakeNoCommand: .milliseconds(200), wakeCap: .seconds(1),
                           micWatchdog: watchdog, micRetry: .milliseconds(20), micRetryMax: .milliseconds(100)),
             wakeDetector: classifier.map { WakeWordDetector(classifier: $0) })
@@ -236,7 +239,7 @@ struct ConductorWakeTests {
         press(.doubleTap)
         #expect(conductor.mode == .off)
         hush(10)
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntilHeard()  // the quiet that would have ended the command was read
         #expect(brain.asked.isEmpty)
         #expect(conductor.mode == .off)
         // The shared mic stays on and the next "Hey Lotti" works.
@@ -272,7 +275,9 @@ struct ConductorWakeTests {
         #expect(conductor.mode == .off)
         #expect(link.frames.count == frames)
         #expect(conductor.wakeState == .listening)
-        // And it hears the next one.
+        // And it hears the next one. The short window was for the rejection; this one is
+        // confirmed, so it gets a window a stalled runner can't run out.
+        conductor.timing.wakeConfirm = .seconds(30)
         speech.script = [Transcript("Hey Lotti, hi")]
         hush(40)
         sayHeyLotti()
@@ -346,10 +351,11 @@ struct ConductorWakeTests {
         press(.doubleTap)
         press(.longPress)
         press(.longPressEnd)
-        try await Task.sleep(for: .milliseconds(20))
-        press(.longPress)  // again, while the first start is still pending
+        try await eventually { link.microphoneAttempts == 1 }  // the first start is under way
+        press(.longPress)  // again, while the first start is (normally) still pending
         try await eventually { link.microphoneOn }
-        try await Task.sleep(for: .milliseconds(50))
+        // The second hold has its subscription (the first, cancelled one never sets the source).
+        try await eventually { conductor.microphoneSource == "glasses" }
         press(.longPressEnd)
         try await eventually { !link.microphoneOn }
     }

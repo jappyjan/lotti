@@ -114,7 +114,8 @@ public final class Conductor {
     @ObservationIgnored private let todayProvider: any TodayProvider
     @ObservationIgnored private let composer: TodayComposer
     @ObservationIgnored private var renderer: ScreenRenderer
-    @ObservationIgnored let timing: Timing
+    /// Settable inside the module so a test can shorten the one timer it is about.
+    @ObservationIgnored var timing: Timing
     @ObservationIgnored private let now: @Sendable () -> Date
 
     @ObservationIgnored var backStack: [Screen] = []
@@ -144,7 +145,7 @@ public final class Conductor {
     /// A catch-up brief that came while the glasses were off your face, shown when you put them on.
     @ObservationIgnored private var heldCatchup: (catchup: Catchup, received: Date)?
     /// The latest brief, kept so the today view can offer it as "Catch-up" for `catchupChoiceMaxAge`.
-    @ObservationIgnored private var lastCatchup: (catchup: Catchup, received: Date)?
+    @ObservationIgnored private(set) var lastCatchup: (catchup: Catchup, received: Date)?
     static let catchupChoiceMaxAge: TimeInterval = 12 * 3600
     /// A held brief older than this is dropped instead of shown.
     static let heldCatchupMaxAge: TimeInterval = 2 * 3600

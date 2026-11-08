@@ -135,11 +135,13 @@ struct BackendClientTests {
             guard frame["type"]?.string == "ask" else { return MockBackend.defaultReply(frame) }
             return [#"{"type":"status","id":"\#(frame["id"]!.string!)","text":"Denke nach …"}"#]
         }
-        let client = Fixtures.client(backend, firstFrameTimeout: .milliseconds(100))
+        // The mock answers the ask with the status line at once; the limit leaves a stalled
+        // runner a second to deliver it.
+        let client = Fixtures.client(backend, firstFrameTimeout: .seconds(1))
         try await eventually { client.isReachable }
         let task = Task { try await client.ask("Hi") }
         try await eventually { !backend.received(type: "ask").isEmpty }
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(1500))  // past the first-frame limit: the status line kept it alive
         #expect(client.isReachable && backend.connectCount == 1)
         let id = backend.received(type: "ask")[0]["id"]!.string!
         backend.send(#"{"type":"answer","id":"\#(id)","conversationId":"c1","text":"Spät, aber da.","followUps":[],"actions":[]}"#)
