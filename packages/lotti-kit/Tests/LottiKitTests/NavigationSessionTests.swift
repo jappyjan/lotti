@@ -46,8 +46,7 @@ struct NavigationSessionTests {
         let (stream, feed) = AsyncStream<CLLocation>.makeStream()
         let session = makeSession(link)
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        await Task.yield()
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { commands(link).contains(G2Navigation.cmdBasicInfo) }
         #expect(commands(link).contains(G2Navigation.cmdStart))
         #expect(commands(link).contains(G2Navigation.cmdBasicInfo))  // the placeholder card
         #expect(link.displaySuspended)
@@ -115,10 +114,12 @@ struct NavigationSessionTests {
             return route(from: location.coordinate)
         }
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }  // setRoute is ignored before
         session.setRoute(route())
         feed.yield(fix(52.53, 13.40))  // ~1 km off route
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) {
+            replanned != nil && commands(link).contains(G2Navigation.cmdRecalculating) && session.phase == .navigating
+        }
         #expect(replanned?.mode == .walking)
         #expect(commands(link).contains(G2Navigation.cmdRecalculating))
         #expect(session.phase == .navigating)
@@ -133,9 +134,9 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.onEnd = { ended = $0 }
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }
         session.failPlanning("No place called Mauerpark found near Jan.")
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { commands(link).contains(G2Navigation.cmdErrorInfo) }
         #expect(ended == .stopped)
         #expect(commands(link).contains(G2Navigation.cmdErrorInfo))
         #expect(!link.displaySuspended)
@@ -148,9 +149,9 @@ struct NavigationSessionTests {
         let (stream, feed) = AsyncStream<CLLocation>.makeStream()
         let session = makeSession(link)
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { session.phase == .navigating }
         session.stop()
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { commands(link).contains(G2Navigation.cmdStop) }
         #expect(commands(link).contains(G2Navigation.cmdStop))
         #expect(session.phase == .stopped)
         #expect(!link.displaySuspended)
@@ -166,7 +167,7 @@ struct NavigationSessionTests {
         let session = makeSession(link)
         session.onEnd = { ended = $0 }
         let task = Task { await session.start(locations: stream, destination: "Mauerpark", mode: .walking) }
-        try? await Task.sleep(for: .milliseconds(50))
+        try? await eventually(timeout: 5) { ended != nil }
         #expect(ended == .stopped)
         #expect(!link.displaySuspended)
         feed.finish()
@@ -196,6 +197,20 @@ struct NavigationSessionTests {
         }
     }
 
+    /// How many mini maps went out: on the arrow view (with the small `FakeMapProvider` map, one
+    /// message each) that's how many frames are complete.
+    private func miniMaps(_ link: FakeGlassesLink) -> Int {
+        frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count
+    }
+
+    /// The real cards (after the placeholder) that went out.
+    private func cards(_ link: FakeGlassesLink) -> Int {
+        frames(link).filter { $0.cmd == G2Navigation.cmdBasicInfo }.count - 1
+    }
+
+    /// Starts a session, sets the route and feeds one fix; returns once that fix's frame (card
+    /// and mini map) is out. A fix fed while a frame is still being pushed is folded into one
+    /// follow-up frame, so tests wait for each frame instead of sleeping.
     private func startRouted(_ link: FakeGlassesLink, _ session: NavigationSession) async
         -> (Task<Void, Never>, AsyncStream<CLLocation>.Continuation) {
         let (stream, feed) = AsyncStream<CLLocation>.makeStream()
@@ -203,7 +218,7 @@ struct NavigationSessionTests {
         try? await eventually(timeout: 5) { session.phase == .navigating }
         session.setRoute(route())
         feed.yield(fix(52.5203, 13.40))  // a location fix, so there's something to map
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { miniMaps(link) >= 1 }
         return (task, feed)
     }
 
@@ -232,10 +247,11 @@ struct NavigationSessionTests {
         let session = makeSession(link, map: FakeMapProvider())
         session.frameInterval = .zero
         let (task, feed) = await startRouted(link, session)
+        // One fix at a time: fixes arriving during a push collapse into one frame.
         feed.yield(fix(52.5204, 13.40))
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { miniMaps(link) == 2 }
         feed.yield(fix(52.5205, 13.40))
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { miniMaps(link) == 3 }
 
         // basicInfoIndex (field 10) runs 0, 1, 2… with each frame, even on the same step;
         // the placeholder card before the route carries none.
@@ -260,8 +276,9 @@ struct NavigationSessionTests {
         #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMaxMap }.count == 1)
 
         // Standing still: frames keep coming, the full map isn't resent.
+        let cardsBefore = cards(link)
         feed.yield(fix(52.5203, 13.40))
-        try? await Task.sleep(for: .milliseconds(100))
+        try? await eventually(timeout: 5) { cards(link) > cardsBefore }
         #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMaxMap }.count == 1)
 
         // Back to the arrow view: the mini map again.
@@ -269,6 +286,8 @@ struct NavigationSessionTests {
         link.sendNavEvent(.viewChanged(view: 1))
         try? await eventually(timeout: 5) { frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count > before }
         #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMiniMap }.count > before)
+        // The standing-still frame finished before this one started: it sent no full map either.
+        #expect(frames(link).filter { $0.cmd == G2Navigation.cmdMaxMap }.count == 1)
 
         feed.finish()
         await task.value
@@ -280,10 +299,10 @@ struct NavigationSessionTests {
         let session = makeSession(link, map: FakeMapProvider())
         session.frameInterval = .zero
         let (task, feed) = await startRouted(link, session)
+        // Events are handled in order: the frame the view event pushes comes after the compass.
         link.sendNavEvent(.compassChanged(value: 235))
-        try? await Task.sleep(for: .milliseconds(50))
-        feed.yield(fix(52.5204, 13.40))
-        try? await Task.sleep(for: .milliseconds(100))
+        link.sendNavEvent(.viewChanged(view: 1))
+        try? await eventually(timeout: 5) { miniMaps(link) == 2 }
 
         let mini = frames(link).last { $0.cmd == G2Navigation.cmdMiniMap }
         #expect(mini.map { ProtoReader.varintFields($0.sub)[5] } == 0)
