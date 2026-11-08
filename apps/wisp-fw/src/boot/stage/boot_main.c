@@ -426,6 +426,21 @@ static int report(void *ctx, uint8_t *out)
 #define WINDOW_AFTER (32768u / 10u)      /* 100 ms after an answer */
 #define WINDOW_MAX   32768u              /* 1 s in all */
 #define WINDOW_GAP   (32768u / 50u)      /* 20 ms gap drops a partial request */
+#define WINDOW_POLLS 2000000u            /* hard cap on polls, whatever the clock says */
+
+/* The crystal is used only if STCFG selects it and the counter moves (a frozen STIMER would
+ * otherwise hold the window open for ever, with the watchdog fed). */
+static int stimer_counts(void)
+{
+	uint32_t t0 = wisp_stimer_now();
+
+	for (uint32_t i = 0; i < 200000u; i++) {
+		if (wisp_stimer_now() != t0) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 /* The boot-report window on the case UART: only BOOTREP is answered (wisp_case_proto.c with no
  * status callback); everything else is ignored, so the loader's and the app's protocols see
@@ -436,7 +451,7 @@ static void report_window(void)
 	static uint8_t out[WISP_CASE_MAX_FRAME];
 	static const struct wisp_case_ops ops = {.boot_report = report};
 	static const struct wisp_case_version ver;
-	const int xt = st.stimer_clksel == 3u;
+	const int xt = st.stimer_clksel == 3u && stimer_counts();
 	uint32_t start, now, until, last = 0;
 
 	st.uart_result = (uint8_t)(boot_uart_init() != 0);
@@ -451,7 +466,7 @@ static void report_window(void)
 		int ch;
 
 		now = (xt ? wisp_stimer_now() : i >> 5) - start; /* no crystal: ~32 polls a tick [I] */
-		if (now >= until || now >= WINDOW_MAX) {
+		if (now >= until || now >= WINDOW_MAX || i >= WINDOW_POLLS) {
 			break;
 		}
 		hw_wdt_feed();

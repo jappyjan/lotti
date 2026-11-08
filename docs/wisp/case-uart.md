@@ -45,7 +45,7 @@ reply:    5A A5 FF L  57 53 50  op|80  status  data..  s   zero-padded to L = 8,
 | `03` | RESET | 25 bytes: `52 53 45 54` (`"RSET"`), 12 zero bytes | none; ~50 ms after the reply the app resets (`sys_reboot`, cold; stage-0: SWPOR). The patched loader's `HELO` is the next frame on the line, then Wisp Boot and the app boot again |
 | `04` | BOOTREP | 9 bytes, no args | 22 bytes: the [boot report](#the-boot-report-op-04) (why the previous boot ended, how far it got); 32-byte reply. Status 1 from an app that predates it (native-0), 3 if the app finds no valid Wisp Boot block |
 
-Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes in version 1, native-0's Wisp Boot, 36 READs; 692 bytes in version 2, 41 READs), and for stage-0 only **3** = its clock measurements (48 bytes) and **4** = this boot's diagnostics record (64 bytes). An unknown block gets status 2. Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus blocks 1 and 2 is about 0.8 s.
+Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes in version 1, native-0's Wisp Boot, 36 READs; 692 bytes in version 2, 41 READs), and for stage-0 only **3** = its clock measurements (52 bytes) and **4** = this boot's diagnostics record (64 bytes). An unknown block gets status 2. Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus blocks 1 and 2 is about 0.8 s.
 
 The marker keeps these apart from the loader's requests (`HOLD`, `CONT`, … carry their own four-character marker, and `HOLD` an HMAC). A Wisp request that reaches the loader during its boot window is not one of its commands; a loader request that reaches the app is ignored.
 
@@ -72,7 +72,7 @@ IDENT reply (0.1.2, kind 0, stage 5, 3,987 mV, bt -5):
 rung4.md, "W24 result and analysis", D1 and D2. native-0 rebooted every 10.4 s on W24 and said nothing; the boot report is built so that **every boot of a reboot loop says why the previous boot ended and how far it got**, whether or not the app ever runs.
 
 - **The record (D1).** A 64-byte record at `0x20370000`, the first bytes of Wisp Boot's RAM, which no reset handler copies or zeroes (`src/boot/wisp_diag.h`). Wisp Boot reads the previous boot's record first thing, keeps a copy in its status block (`prev`), then starts a fresh one: magic `"WDAG"`, a boot counter, `RSTGEN.STAT` (the Apollo's reset cause, `0x4000885C`), the STIMER at its start, the last breadcrumb (stage code and its time) and, if a fault handler ran, the fault (PC, LR, xPSR, CFSR, HFSR, BFAR, MMFAR, EXC_RETURN), sealed by a CRC-32. Wisp Boot and stage-0 leave breadcrumbs in it (codes in `wisp_diag.h`; names in `case_uart.py` `DIAG_STAGES`); both fault handlers record the fault and then reset (SWPOR). Whether SRAM survives a watchdog reset or an SWPOR on this chip is open; the magic and the CRC tell (flag `prev-valid`).
-- **Wisp Boot's window (D2).** Right after it arms the watchdog, kicks the PMIC watchdog and starts the record, Wisp Boot sets up UART2 itself (the patched loader's own values) and answers **only** BOOTREP: IDENT, READ, RESET and stock's version query get no answer from it, so neither the loader's nor the app's protocol sees anything from Wisp Boot. The window stays open about 300 ms with no request, 100 ms after the last answer, and never more than 1 s, timed by the STIMER on the 32 kHz crystal; the watchdog is fed while it is open.
+- **Wisp Boot's window (D2).** Right after it arms the watchdog, kicks the PMIC watchdog and starts the record, Wisp Boot sets up UART2 itself (the patched loader's own values) and answers **only** BOOTREP: IDENT, READ, RESET and stock's version query get no answer from it, so neither the loader's nor the app's protocol sees anything from Wisp Boot. The window stays open about 300 ms with no request, 100 ms after the last answer, and never more than 1 s, timed by the STIMER on the 32 kHz crystal if it is selected and counting (else by a poll count), and capped at 2,000,000 polls whatever the clock says; the watchdog is fed while it is open. Wisp Boot writes GPIO PADKEY `0x73` around its pad writes, as the bootloader does.
 - **The app** answers BOOTREP too (stage-0 does; native-0's codec answers status 1), built from Wisp Boot's status block, so a host that misses the window still gets it.
 - **The host** (`boot-watch --protocol wisp`): at every boot, from `CONT` or after each loader `HELO`, the boot report on every exchange with no pause (about 17.5 ms apart) until one answers or 200 exchanges passed, then IDENT and the blocks as before. Every boot report of the watch is kept and printed (`boot_reports`).
 
@@ -155,14 +155,14 @@ Rule 6's case-session threshold for a native temple (battery ≥ 3,900 mV, [safe
 
 ## stage-0's blocks 3 and 4
 
-**Block 3, the clock measurements** (version 1, 48 bytes; `case_uart.py decode_clock`). stage-0 times 16 watchdog ticks (1,024 LFRC cycles at Wisp Boot's LFRC/64) edge to edge against the STIMER (the 32 kHz crystal) and SysTick (the core clock), without feeding the watchdog in between, 2 s after it started and every 15 s after that.
+**Block 3, the clock measurements** (version 1, 52 bytes; `case_uart.py decode_clock`). stage-0 times 16 watchdog ticks (1,024 LFRC cycles at Wisp Boot's LFRC/64) edge to edge against the STIMER (the 32 kHz crystal) and SysTick (the core clock), without feeding the watchdog in between, 2 s after it started and every 15 s after that. Every change of the watchdog's COUNT is one tick, whichever way it counts (the header does not say; the block records what it saw), and the first change after the feed is skipped (100 ms settle).
 
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | u8 | version = 1 |
 | 1 | u8 | timebase: 1 = the STIMER on the crystal, 2 = SysTick at an assumed 96 MHz (the crystal did not count) |
 | 2 | u8 | measurements done (saturating) |
-| 3 | u8 | the last one: 0 ok, 1 the watchdog's COUNT never moved, 2 16 ticks took over 3 s, 3 not yet |
+| 3 | u8 | the last one: 0 ok, 1 the watchdog's COUNT never moved, 2 16 ticks took over 3 s, 3 not yet, 4 implausible (LFRC outside 500–2,000 Hz) |
 | 4 | u32 | STIMER STCFG as found |
 | 8 | u32 | the watchdog's CFG (Wisp Boot's, locked) |
 | 12 | u32 | STIMER ticks across 2^22 core cycles at start (0 = the STIMER does not count) |
@@ -174,6 +174,8 @@ Rule 6's case-session threshold for a native temple (battery ≥ 3,900 mV, [safe
 | 36 | u32 | the lowest LFRC so far, mHz |
 | 40 | u32 | the highest, mHz |
 | 44 | u32 | the last PMIC kick's result code (`boot_pmic.h`) |
+| 48 | u8 | which way COUNT moved: 1 down, 2 up, 3 both, 0 not seen |
+| 49 | u8[3] | reserved, 0 |
 
 In Renode the LFRC is modelled at 900 Hz and the STIMER's crystal at 32,000 Hz (Renode's Apollo4 model), so the block reads about 922 Hz there.
 

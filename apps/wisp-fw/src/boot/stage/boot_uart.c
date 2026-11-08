@@ -9,6 +9,7 @@
 
 #define UART2(o) REG(0x4003B000u + (o))
 #define GPIO_PINCFG(n) REG(0x40010000u + 4u * (n))
+#define GPIO_PADKEY    REG(0x40010400u) /* 0x73 unlocks the PINCFG registers */
 
 enum {
 	DR = 0x00u,
@@ -32,6 +33,9 @@ enum {
 
 int boot_uart_init(void)
 {
+	if ((PWRCTRL_DEVPWREN & PWR_UART2) && (UART2(CR) & 1u)) {
+		boot_uart_flush(); /* the loader's last reply may still be leaving */
+	}
 	PWRCTRL_DEVPWREN |= PWR_UART2;
 	for (uint32_t n = 0; !(PWRCTRL_DEVPWRSTATUS & PWR_UART2); n++) {
 		if (n > WAIT) {
@@ -47,8 +51,10 @@ int boot_uart_init(void)
 	UART2(IER) = 0;
 	UART2(IEC) = 0xFFFFFFFFu;
 	UART2(RSR) = 0;
+	GPIO_PADKEY = 0x73u;
 	GPIO_PINCFG(42) = 4u;
 	GPIO_PINCFG(44) = 4u;
+	GPIO_PADKEY = 0;
 	UART2(CR) = 0x319u;
 	return 0;
 }

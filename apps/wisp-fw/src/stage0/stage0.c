@@ -58,6 +58,8 @@
 #define MEASURE_FIRST (2u * SECOND)
 #define MEASURE_EVERY (15u * SECOND)
 #define MEASURE_TICKS 16u /* watchdog ticks per measurement: 16 x 64 = 1,024 LFRC cycles */
+#define MEASURE_SETTLE (XT_HZ / 10u) /* after the feed, before the first edge counts */
+#define DRAIN_MAX 64u  /* received bytes handled per pass before the watchdogs get their turn */
 
 /* ---- time: the STIMER (crystal) if it runs, else SysTick at an assumed clock ---------------- */
 
@@ -90,11 +92,13 @@ static uint32_t reset_cause, feeds, kicks, kick_errors, kick_last;
 
 /* Block 3: the clock measurements (layout in case-uart.md, decoder case_uart.py decode_clock). */
 #define CLOCK_VERSION 1u
-#define CLOCK_SIZE    48u
+#define CLOCK_SIZE    52u
 static struct {
 	uint8_t timebase;      /* 1 = STIMER crystal, 2 = SysTick at an assumed 96 MHz */
 	uint8_t count;         /* measurements done (saturating) */
-	uint8_t result;        /* last: 0 ok, 1 COUNT never moved, 2 too slow, 3 not yet */
+	uint8_t result;        /* last: 0 ok, 1 COUNT never moved, 2 too slow, 3 not yet,
+				* 4 implausible (LFRC outside 500-2000 Hz) */
+	uint8_t direction;     /* how COUNT moved: 1 down, 2 up, 3 both, 0 not seen (not assumed) */
 	uint32_t stcfg;        /* STIMER STCFG as found */
 	uint32_t wdt_cfg;      /* the watchdog's CFG (Wisp Boot's, locked) */
 	uint32_t stimer_probe; /* STTMR ticks across 2^22 core cycles at start */
@@ -128,6 +132,7 @@ static void clock_encode(void)
 	wisp_diag_put32(b + 36, clk.lfrc_min);
 	wisp_diag_put32(b + 40, clk.lfrc_max);
 	wisp_diag_put32(b + 44, kick_last);
+	b[48] = clk.direction;
 }
 
 /* ---- watchdogs ------------------------------------------------------------------------------- */
@@ -158,8 +163,11 @@ static uint32_t wdt_divider(uint32_t cfg)
 }
 
 /* ---- the LFRC measurement: 16 watchdog ticks, edge to edge, without a feed in between --------- */
+/* Every change of COUNT is one tick, whichever way it counts (the header does not say; ticks come
+ * at about 14 Hz, so the loop sees each one). The first change after the feed is not used: the
+ * restart may land between ticks. */
 
-static enum { M_IDLE, M_SYNC, M_RUN } m_state;
+static enum { M_IDLE, M_SETTLE, M_SYNC, M_RUN } m_state;
 static uint32_t m_next = MEASURE_FIRST, m_deadline, m_t0, m_ticks, m_count;
 static uint64_t m_cy0;
 
@@ -182,11 +190,17 @@ static void measure_step(uint32_t t)
 		if ((int32_t)(t - m_next) < 0) {
 			return;
 		}
-		feed(); /* a whole watchdog period (about 9 s) ahead; the window takes about 1.1 s */
-		m_count = WDT_COUNT & 0xFFu;
-		m_deadline = t + SECOND / 2u;
-		m_state = M_SYNC;
+		feed(); /* a whole watchdog period (about 9 s) ahead; the window takes about 1.3 s */
+		m_deadline = t + MEASURE_SETTLE;
+		m_state = M_SETTLE;
 		wisp_diag_mark(WISP_DIAG_S0_MEASURE);
+		return;
+	case M_SETTLE:
+		if ((int32_t)(t - m_deadline) >= 0) {
+			m_count = WDT_COUNT & 0xFFu;
+			m_deadline = t + SECOND / 2u;
+			m_state = M_SYNC;
+		}
 		return;
 	case M_SYNC:
 		c = WDT_COUNT & 0xFFu;
@@ -204,7 +218,8 @@ static void measure_step(uint32_t t)
 	case M_RUN:
 		c = WDT_COUNT & 0xFFu;
 		if (c != m_count) {
-			m_ticks += (m_count - c) & 0xFFu;
+			clk.direction |= c < m_count ? 1u : 2u;
+			m_ticks++;
 			m_count = c;
 			if (m_ticks >= MEASURE_TICKS) {
 				uint32_t dt = (xt ? wisp_stimer_now() : t) - m_t0;
@@ -224,7 +239,7 @@ static void measure_step(uint32_t t)
 				if (clk.lfrc_mhz > clk.lfrc_max) {
 					clk.lfrc_max = clk.lfrc_mhz;
 				}
-				measure_done(0, t);
+				measure_done(clk.lfrc_mhz < 500000u || clk.lfrc_mhz > 2000000u ? 4 : 0, t);
 			}
 		} else if ((int32_t)(t - m_deadline) >= 0) {
 			measure_done(2, t);
@@ -354,7 +369,8 @@ static _Noreturn void stage0_main(void)
 						 .extra_block = extra_block};
 	static const struct wisp_case_version ver = {STAGE0_MAJOR, STAGE0_MINOR, STAGE0_PATCH,
 						     STAGE0_KIND, 0};
-	uint32_t last_feed, last_kick, last_byte = 0, s0;
+	uint32_t last_feed, last_kick, last_byte = 0, s0, drained = 0;
+	bool uart_ok;
 
 	/* SysTick as a free-running cycle counter, no interrupt (PendSV/SysTick pends cleared). */
 	SYST_CSR = 0;
@@ -370,7 +386,8 @@ static _Noreturn void stage0_main(void)
 	clk.stcfg = REG(WISP_STIMER_STCFG);
 	clk.wdt_cfg = WDT_CFG;
 
-	if (boot_uart_init() == 0) {
+	uart_ok = boot_uart_init() == 0;
+	if (uart_ok) {
 		wisp_diag_mark(WISP_DIAG_S0_UART);
 	}
 
@@ -393,7 +410,9 @@ static _Noreturn void stage0_main(void)
 
 	for (;;) {
 		uint32_t t = now();
-		int ch = boot_uart_getc();
+		/* No UART: nothing to poll (an unpowered FR could read "data ready" for ever). A steady
+		 * stream of bytes gets DRAIN_MAX per pass, then the watchdogs are served. */
+		int ch = uart_ok && drained < DRAIN_MAX ? boot_uart_getc() : -1;
 
 		if (ch == -2) {
 			wisp_case_rx_init(&rx);
@@ -413,8 +432,10 @@ static _Noreturn void stage0_main(void)
 				boot_uart_flush();
 				reset_now();
 			}
+			drained++;
 			continue; /* drain the receive FIFO first */
 		}
+		drained = 0;
 		if (m_state == M_IDLE && t - last_feed >= SECOND) {
 			feed();
 			last_feed = t;

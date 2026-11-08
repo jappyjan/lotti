@@ -142,10 +142,12 @@ REPORT_FLAGS = {0x01: "prev-valid", 0x02: "prev-fault", 0x04: "kick-ok", 0x08: "
 DIAG_MAGIC = 0x47414457  # "WDAG"
 DIAG_FMT = "<IHHIIIHHIIIIIIIIII"
 DIAG_SIZE = struct.calcsize(DIAG_FMT)  # 64
-CLOCK_FMT = "<BBBBIIIIIIIIIII"
-CLOCK_SIZE = struct.calcsize(CLOCK_FMT)  # 48
+CLOCK_FMT = "<BBBBIIIIIIIIIIIB3x"
+CLOCK_SIZE = struct.calcsize(CLOCK_FMT)  # 52
 TIMEBASES = {1: "stimer-xt", 2: "systick-assumed-96MHz"}
-CLOCK_RESULTS = {0: "ok", 1: "watchdog COUNT never moved", 2: "16 ticks took over 3 s", 3: "not measured yet"}
+CLOCK_RESULTS = {0: "ok", 1: "watchdog COUNT never moved", 2: "16 ticks took over 3 s", 3: "not measured yet",
+                 4: "implausible: LFRC outside 500-2000 Hz"}
+COUNT_DIRECTIONS = {0: "not seen", 1: "down", 2: "up", 3: "both"}
 
 
 def bootrep_request() -> bytes:
@@ -188,9 +190,9 @@ def decode_diag_record(b: bytes, check: bool = True) -> dict:
 
 
 def decode_clock(b: bytes) -> dict:
-    """stage-0's clock block (READ block 3, version 1, 48 bytes)."""
+    """stage-0's clock block (READ block 3, version 1, 52 bytes)."""
     (version, timebase, count, result, stcfg, wdt_cfg, probe, xt_ticks, core_cycles, lfrc_mhz, core_hz, wdt_ms,
-     lfrc_min, lfrc_max, kick_last) = struct.unpack(CLOCK_FMT, b[:CLOCK_SIZE])
+     lfrc_min, lfrc_max, kick_last, direction) = struct.unpack(CLOCK_FMT, b[:CLOCK_SIZE])
     if version != 1:
         raise ValueError(f"clock block version {version}")
     return {"timebase": TIMEBASES.get(timebase, timebase), "measurements": count,
@@ -198,7 +200,8 @@ def decode_clock(b: bytes) -> dict:
             "wdt_cfg": wdt_cfg, "wdt_resval": (wdt_cfg >> 8) & 0xFF, "wdt_clksel": (wdt_cfg >> 24) & 7,
             "stimer_probe_ticks": probe, "window_xt_ticks": xt_ticks, "window_core_cycles": core_cycles,
             "lfrc_hz": lfrc_mhz / 1000, "core_hz": core_hz, "wdt_period_ms": wdt_ms,
-            "lfrc_hz_min": lfrc_min / 1000, "lfrc_hz_max": lfrc_max / 1000, "pmic_kick_last": kick_last}
+            "lfrc_hz_min": lfrc_min / 1000, "lfrc_hz_max": lfrc_max / 1000, "pmic_kick_last": kick_last,
+            "wdt_count_direction": COUNT_DIRECTIONS.get(direction, direction)}
 
 
 # Wisp Boot's status block (apps/wisp-fw/src/boot/wisp_boot_status.h): version 1 is 612 bytes

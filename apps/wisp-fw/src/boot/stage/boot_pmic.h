@@ -12,9 +12,12 @@
  * Register values: what the patched bootloader's own IOM7 HAL (HAL_I2CInit, which works on
  * silicon: every feed.bin kick goes through it) writes, read from a Renode trace of the real
  * bootloader: IOM7 FIFOTHR 0x1010, MI2CCFG 0x3F270, CLKCFG 0x1D0E2301, SUBMODCTRL 0x10 (the I2C
- * submodule on), pads 22/23 PINCFG 0x4200 (function 0 = M7SCL/M7SDA, open drain, pull-up);
- * IOM7 is powered by PWRCTRL DEVPWREN bit 8. The transfer is pmic_kick.h's (the HAL's blocking
- * transfer of a 3-byte write). IOM7 is powered down again afterwards, as the bootloader leaves it.
+ * submodule on), pads 22/23 PINCFG 0x4200 (function 0 = M7SCL/M7SDA, open drain, pull-up),
+ * written between GPIO PADKEY 0x73 and 0 as the bootloader does (the pad registers are locked
+ * otherwise); IOM7 is powered by PWRCTRL DEVPWREN bit 8. If IOM7 is already enabled when this
+ * runs, it is powered off first; its FIFO is reset before the write in any case, and the write
+ * starts only with an empty FIFO, so no byte left by someone else can go out ahead of ours. The
+ * transfer is pmic_kick.h's (the HAL's blocking transfer of a 3-byte write). IOM7 is powered down again afterwards, as the bootloader leaves it.
  * Every wait is bounded; any failure returns nonzero and leaves the watchdog unfed.
  */
 #ifndef WISP_BOOT_PMIC_H
@@ -24,7 +27,8 @@
 
 /* 0 = kicked. 0x1nn: IOM7 did not power up. 0x200: IOM7 busy before the write. 0x300: no FIFO
  * room. 0x400: the write did not finish. 0x5nnnn: the write failed (INTSTAT bits nnnn: 0x10 NAK,
- * 0x200 arbitration lost, ...). Same codes as pmic_kick.h where they overlap. */
+ * 0x200 arbitration lost, ...). Same codes as pmic_kick.h where they overlap; 0x300 also covers
+ * a write FIFO that is not empty after its reset. */
 uint32_t boot_pmic_kick(void);
 
 #endif /* WISP_BOOT_PMIC_H */

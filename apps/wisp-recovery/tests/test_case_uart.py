@@ -142,7 +142,7 @@ class Stage0Hook(unittest.TestCase):
 
     def test_boot_reports_across_reboots_and_stage0_blocks(self):
         clock = struct.pack(c.CLOCK_FMT, 1, 1, 1, 0, 0x103, 0x02008005, 900, 36409, 106_000_000, 900_123,
-                            95_400_000, 9101, 900_123, 900_123, 0)
+                            95_400_000, 9101, 900_123, 900_123, 0, 1)
         rec = bytearray(64)
         struct.pack_into("<IHHIIIHH", rec, 0, c.DIAG_MAGIC, 1, 64, 2, 8, 0, 0x45, 0)
         struct.pack_into("<I", rec, 60, zlib.crc32(bytes(rec[:60])))
@@ -169,6 +169,7 @@ class Stage0Hook(unittest.TestCase):
         self.assertEqual(s["boot_report"]["prev_stage"], "s0-loop")
         self.assertEqual(s["clock"]["lfrc_hz"], 900.123)
         self.assertEqual(s["clock"]["wdt_period_ms"], 9101)
+        self.assertEqual(s["clock"]["wdt_count_direction"], "down")
         self.assertEqual(s["diag"]["boots"], 2)
         # A reboot (the loader's HELO): the boot report again, first; both reports are kept.
         hook.reset()

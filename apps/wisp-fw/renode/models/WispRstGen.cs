@@ -71,7 +71,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             if(cause.StartsWith("watchdog")) return 0x40;      // WDRSTAT
             if(cause.StartsWith("case-reset")) return 0x1;     // EXRSTAT (the reset line)
             if(cause.StartsWith("external")) return 0x1000;    // AIRCRSTAT (SYSRESETREQ)
-            return 0x1;
+            return 0;                                          // unknown: no bit, so no check passes by accident
         }
 
         // CFG.WDREN, read by WispWdt.
