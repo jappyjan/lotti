@@ -26,8 +26,9 @@
 		zephyr,sram = &sram0;
 		zephyr,flash-controller = &flash;
 		zephyr,flash = &flash0;
-		/* 0x438000: where the Even bootloader hands off (docs/wisp/hardware.md). */
-		zephyr,code-partition = &wisp_partition;
+		/* 0x448000: the Wisp app, entered by Wisp Boot. Wisp Boot sits at 0x438000, where the
+		 * Even bootloader hands off (docs/wisp/hardware.md, src/boot/). */
+		zephyr,code-partition = &wisp_app_partition;
 		zephyr,console = &uart1;
 		zephyr,shell-uart = &uart1;
 		zephyr,bt-hci = &bt_hci;
@@ -68,10 +69,16 @@
 			read-only;
 		};
 
-		/* 0x438000–0x7F8000: Wisp Boot + Wisp app. 0x7F8000 is the hard ceiling. */
-		wisp_partition: partition@28000 {
-			label = "wisp";
-			reg = <0x00028000 0x3c0000>;
+		/* 0x438000–0x448000: Wisp Boot (src/boot/, built and checked on its own). */
+		wisp_boot_partition: partition@28000 {
+			label = "wisp-boot";
+			reg = <0x00028000 0x10000>;
+		};
+
+		/* 0x448000–0x7F8000: the Wisp app. 0x7F8000 is the hard ceiling. */
+		wisp_app_partition: partition@38000 {
+			label = "wisp-app";
+			reg = <0x00038000 0x3b0000>;
 		};
 
 		/* 0x7F8000–0x800000: update-flag record (0x7FE000) and NV/bond area. Never written. */
@@ -258,15 +265,15 @@
 				ngpios = <5>;
 			};
 
-			regulators {
+			pmic_regulators: regulators {
 				compatible = "nordic,npm1300-regulator";
 
 				/* Panel core rail: off except while the panel runs (stock). 1.8 V on hw 6
 				 * (A6N-G), 1.1 V on JBD boards (npmx codes 8 / 1, read as 1.0 V + 0.1 V
-				 * steps [I]). The panel driver switches it. */
+				 * steps [I]). No voltage here on purpose (rung4.md G11): the panel overlay
+				 * (boards/panels/) sets it, and hardware images may not power the panel at
+				 * all until W21's PMIC snapshot confirms the code (cmake/hwimage.cmake). */
 				pmic_buck1: BUCK1 {
-					regulator-min-microvolt = <1800000>;
-					regulator-max-microvolt = <1800000>;
 				};
 
 				pmic_buck2: BUCK2 {
@@ -316,8 +323,10 @@
 /*
  * MSPI0: the microLED panel on CE0 (GPIO199, MNCE0_0). Serial: D0 GPIO64, D1 GPIO65, SCK GPIO72;
  * quad 1-1-4 adds D2 GPIO66, D3 GPIO67. Stock: IRQ 20, SPI mode 0. Which panel is fitted follows
- * the board's hw_version strap (6 = A6N-G, DVT3; 5 = JBD4010, DVT2): A6N-G is the default here
- * because DVT3 is the later build [I]; tests/drivers/jbd4010.overlay switches to the JBD panel.
+ * the board's hw_version strap (6 = A6N-G, DVT3; 5 = JBD4010, DVT2). There is no default
+ * (rung4.md G11): every build names its panel with boards/panels/<panel>.overlay, which also sets
+ * BUCK1's voltage; without one the build fails on the binding's required `panel`. Jan's temples
+ * report hardware 5 (JBD4010).
  */
 &mspi0 {
 	/* State 2 is the per-device state the Ambiq MSPI driver applies on a device config. */
@@ -334,16 +343,13 @@
 	uled: panel@0 {
 		compatible = "even,g2-uled";
 		reg = <0>;
-		panel = "a6n-g";
 		mspi-max-frequency = <31250000>;
 		mspi-io-mode = "MSPI_IO_MODE_QUAD_1_1_4";
 		mspi-data-rate = "MSPI_DATA_RATE_SINGLE";
 		mspi-hardware-ce-num = <0>;
 		vdd-supply = <&pmic_buck1>;
 		en-a-gpios = <&gpio128_159 14 GPIO_ACTIVE_HIGH>; /* GPIO142 */
-		en-b-gpios = <&gpio128_159 0 GPIO_ACTIVE_HIGH>;  /* GPIO128 */
-		offset-x = <8>;
-		offset-y = <8>;
+		en-b-gpios = <&gpio128_159 0 GPIO_ACTIVE_HIGH>;  /* GPIO128 (A6N-G) */
 		zephyr,pm-device-runtime-auto;
 	};
 };
@@ -373,6 +379,19 @@
 };
 
 /*
+ * Case link: UART2 (GPIO42 TX -> case PB9, GPIO44 RX <- case PB8), 1 Mbaud 8N1, no flow control,
+ * as stock and drdaeman's loader use it (docs/wisp/recovery.md). The app answers the case-UART
+ * status protocol on it (docs/wisp/case-uart.md, src/case/). Polled: nothing is sent unasked.
+ */
+&uart2 {
+	current-speed = <1000000>;
+	pinctrl-0 = <&uart2_default>;
+	pinctrl-1 = <&uart2_sleep>;
+	pinctrl-names = "default", "sleep";
+	status = "okay";
+};
+
+/*
  * Not described yet: buzzer (GPIO145 = TIMER7 output 0, PWM), inter-temple link (UART0, GPIO0/2,
- * 921600), case link (UART2, GPIO42/44, 1 Mbaud; the case itself is seen as VBUS on the PMIC).
+ * 921600).
  */

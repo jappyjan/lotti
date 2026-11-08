@@ -79,10 +79,12 @@ static int pio(uint8_t op, int send_addr, uint32_t addr, int tx, void *buf, uint
 	return wait_status();
 }
 
+#if !WISP_BOOT_OBSERVE
 static int cmd(uint8_t op)
 {
 	return pio(op, 0, 0, 1, 0, 0);
 }
+#endif
 
 static int wait_ready(void)
 {
@@ -100,7 +102,7 @@ static int wait_ready(void)
 	return -4;
 }
 
-int nor_init(void)
+int nor_init(uint32_t *rdid)
 {
 	uint32_t id = 0;
 
@@ -117,6 +119,7 @@ int nor_init(void)
 	if (pio(0x9F, 0, 0, 0, &id, 3) != 0) {
 		return -10;
 	}
+	*rdid = id & 0xFFFFFFu;
 	if ((id & 0xFFFFFFu) != 0x3925C2u) {
 		hw_log_hex("wisp-boot: NOR id ", id);
 		return -11;
@@ -141,6 +144,7 @@ int nor_read(uint32_t addr, void *buf, uint32_t n)
 	return 0;
 }
 
+#if !WISP_BOOT_OBSERVE
 int nor_prog(uint32_t addr, const void *buf, uint32_t n)
 {
 	if (cmd(0x06) != 0 || pio(0x12, 1, addr, 1, (void *)buf, n) != 0) {
@@ -156,3 +160,4 @@ int nor_erase_4k(uint32_t addr)
 	}
 	return wait_ready();
 }
+#endif /* !WISP_BOOT_OBSERVE */

@@ -6,7 +6,7 @@
 //
 // Register behaviour (PL011 subset the loader and the stock code use): DR (0x00) write = one TX
 // byte, DR read = next RX byte (no error bits); FR (0x18) = TXFE | (RXFE when nothing is queued),
-// never BUSY or TXFF; every other offset is plain storage. No interrupt is ever raised (the loader
+// never BUSY or TXFF; RSR (0x04) = 0, no receive errors; every other offset is plain storage. No interrupt is ever raised (the loader
 // polls with IRQ 17 masked; the stock app copes with an idle UART2, as WispUartIdle shows).
 //
 // The model frames the temple's output: a frame is 5A A5 FF <len> followed by len + 1 bytes (the
@@ -125,6 +125,19 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
         }
 
+        // Harness: queue bytes for the temple to receive, as if the case had sent them (no host
+        // attached). Used for the case-UART status queries (docs/wisp/case-uart.md).
+        public void Inject(string hex)
+        {
+            foreach(var h in hex.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                for(var i = 0; i + 1 < h.Length; i += 2)
+                {
+                    rx.Enqueue(Convert.ToByte(h.Substring(i, 2), 16));
+                }
+            }
+        }
+
         public string FrameLog()
         {
             return string.Join("\n", Frames);
@@ -144,6 +157,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             if(o == 0x18)
             {
                 return rx.Count == 0 ? 0x90u : 0x80u; // TXFE | RXFE, or TXFE only
+            }
+            if(o == 0x04)
+            {
+                return 0; // RSR: no receive errors (a write there is ECR, "clear errors")
             }
             return regs.TryGetValue(o, out var v) ? v : 0;
         }
@@ -246,8 +263,23 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         public byte ReadByte(long o) { return (byte)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 3))); }
         public ushort ReadWord(long o) { return (ushort)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 2))); }
-        public void WriteByte(long o, byte v) { WriteDoubleWord(o & ~3L, v); }
-        public void WriteWord(long o, ushort v) { WriteDoubleWord(o & ~3L, v); }
+        // Narrow writes: DR takes the byte as it is; any other register is updated in place (a
+        // compiler may set CR's TXE/RXE, bits 8-9, with a byte store to 0x31).
+        public void WriteByte(long o, byte v) { WriteNarrow(o, v, 0xFFu); }
+        public void WriteWord(long o, ushort v) { WriteNarrow(o, v, 0xFFFFu); }
+
+        private void WriteNarrow(long o, uint v, uint mask)
+        {
+            var w = o & ~3L;
+            if(w == 0x00)
+            {
+                WriteDoubleWord(0x00, v);
+                return;
+            }
+            var shift = (int)(8 * (o & 3));
+            var old = regs.TryGetValue(w, out var cur) ? cur : 0;
+            regs[w] = (old & ~(mask << shift)) | ((v & mask) << shift);
+        }
 
         private readonly IMachine machine;
         private Dictionary<long, uint> regs;

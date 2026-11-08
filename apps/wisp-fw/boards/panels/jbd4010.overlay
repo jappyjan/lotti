@@ -1,0 +1,18 @@
+/* SPDX-License-Identifier: MIT
+ * wisp_g2 with the JBD4010 panel (stock hw_version 5, DVT2; Jan's temples report hardware 5):
+ * rails BUCK1 1.1 V + LDSW2, GPIO142 and GPIO68, stock offset (12, 10). BUCK1's 1.1 V is npmx code 1
+ * read as 1.0 V + 0.1 V steps [I]: unconfirmed until W21's PMIC snapshot, so emulation builds only
+ * (rung4.md G11; a hardware image that leaves the panel enabled fails cmake/hwimage.cmake). */
+&pmic_buck1 {
+	regulator-min-microvolt = <1100000>;
+	regulator-max-microvolt = <1100000>;
+};
+
+&uled {
+	panel = "jbd4010";
+	vio-supply = <&pmic_ldsw2>;
+	/delete-property/ en-b-gpios;
+	en-c-gpios = <&gpio64_95 4 GPIO_ACTIVE_HIGH>; /* GPIO68 */
+	offset-x = <12>;
+	offset-y = <10>;
+};

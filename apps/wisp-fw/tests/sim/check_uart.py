@@ -20,7 +20,7 @@ FORBIDDEN = ("forcing NVM reflash", "Entering configuration mode", "Erasing NVM 
 def check(text: str, min_beats: int) -> list[str]:
     errors = []
     for needle in ("*** Booting Zephyr OS build", "*** Wisp native ",
-                   "wisp: board wisp_g2, Zephyr ", "image @ 0x438000",
+                   "wisp: board wisp_g2, Zephyr ", "image @ 0x448000",
                    "EM9305 update path compiled out (safety rule 8)",
                    "E: EM9305 active state timeout",
                    "wisp: bluetooth unavailable, running without a link",
@@ -43,8 +43,10 @@ def check(text: str, min_beats: int) -> list[str]:
             errors.append(f"heartbeat #{i + 1} numbered {n}")
             break
         # k_msleep(1000) then print: about 1000 ms apart in virtual time (the first comes after
-        # bt_enable() gave up on the controller and the drivers' bring-up)
-        if i and not (1000 <= t - beats[i - 1][1] <= 1050):
+        # bt_enable() gave up on the controller and the drivers' bring-up). Renode's STIMER model
+        # overshoots sleeps a little more the more often threads wake (the case-UART poll every
+        # 2 ms, the watchdog thread every second): up to about 7 % seen, hence 1100.
+        if i and not (1000 <= t - beats[i - 1][1] <= 1100):
             errors.append(f"heartbeat {n} {t - beats[i - 1][1]} ms after the previous one")
             break
     return errors

@@ -23,9 +23,16 @@
 // clears only the controller registers and the device's volatile state (WEL, 4-byte mode, QE is
 // non-volatile and kept). Monitor: `<name> SaveImage @file`, `<name> LoadImage @file`.
 // Counters for the harness: Programs, Erases, Reads (bytes).
+//
+// Code window (rung 4, observe-only Wisp Boot): `<name> WatchCode <lo> <hi>` records every NOR
+// command issued while the CPU's PC lies in [lo, hi) (Wisp Boot's MRAM slot): `WatchedLog` lists
+// them ("op addr pc"), `WatchedWrites` counts those that are not RDID/RDSR/RDCR or a read.
+// `RdidInWindow "c8 60 19"` makes RDID answer other bytes inside the window only (a different NOR
+// part as Wisp Boot would see it, while the bootloader keeps its MX25U25643G).
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals.Bus;
@@ -316,9 +323,59 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         // ---- the NOR device ----------------------------------------------------------------------
 
+        public ulong WatchedWrites { get; private set; }
+
+        public void WatchCode(ulong lo, ulong hi)
+        {
+            watchLo = lo;
+            watchHi = hi;
+        }
+
+        public void RdidInWindow(string hex)
+        {
+            rdidWindow = hex.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(h => Convert.ToByte(h, 16)).ToArray();
+        }
+
+        public string WatchedLog()
+        {
+            return string.Join("\n", watched);
+        }
+
+        private bool InWindow(out ulong pc)
+        {
+            pc = 0;
+            if(watchHi == 0)
+            {
+                return false;
+            }
+            var cpu = machine.SystemBus.GetCPUs().FirstOrDefault();
+            if(cpu == null)
+            {
+                return false;
+            }
+            pc = cpu.PC.RawValue;
+            return pc >= watchLo && pc < watchHi;
+        }
+
+        private static readonly int[] readOnlyOps = { 0x9F, 0x05, 0x15, 0x03, 0x13, 0x0B, 0x0C, 0x3B, 0x3C, 0x6B, 0x6C, 0xBB, 0xBC, 0xEB, 0xEC };
+
         private void Execute(int op, uint rawAddr, byte[] txData, int rxLen, byte[] rxBuf)
         {
             var a = AddressFor(op, rawAddr);
+            if(op >= 0 && InWindow(out var pc))
+            {
+                watched.Add($"{op:x2} {a:x7} {pc:x8}");
+                if(!readOnlyOps.Contains(op))
+                {
+                    WatchedWrites++;
+                }
+                if(op == 0x9F && rdidWindow != null)
+                {
+                    Fill(rxBuf, rdidWindow);
+                    return;
+                }
+            }
             if(Trace > 0)
             {
                 this.Log(LogLevel.Warning, "NOR op 0x{0:X2} addr 0x{1:X7} tx {2} rx {3}", op, a, txData?.Length ?? 0, rxLen);
@@ -426,6 +483,9 @@ namespace Antmicro.Renode.Peripherals.Wisp
         }
 
         private readonly IMachine machine;
+        private readonly List<string> watched = new List<string>();
+        private ulong watchLo, watchHi;
+        private byte[] rdidWindow;
         private readonly byte[] nor;
         private Dictionary<long, uint> regs;
         private Queue<uint> rx;

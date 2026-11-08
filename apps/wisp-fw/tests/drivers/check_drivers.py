@@ -209,12 +209,17 @@ def check_i2c(variant, run, errors):
     if wrong:
         errors.append(f"pmic: register addresses with an unknown base (byte order?): {wrong[:5]}")
     for need, what in (("040A15", "BUCK2 3.1 V"), ("080C08", "LDSW1 1.8 V"), ("080801", "LDSW1 as LDO"),
-                       ("070401", "watchdog kick"), ("070101", "watchdog stop"),
+                       ("070401", "watchdog kick"),
                        ("040001", "BUCK1 on (panel)"), ("040101", "BUCK1 off (panel)")):
         if need not in pw:
             errors.append(f"pmic: no {what} ({need})")
-    if "070001" in pw:
-        errors.append("pmic: Wisp started the PMIC watchdog timer")
+    # The watchdog stays armed with stock's own writes, in stock's order (rung4.md G27,
+    # recovery.md "The temple's watchdog"), and is never stopped.
+    arm = ["07050A", "0708003C00", "070301", "070001"]
+    if [w for w in pw if w in arm][:4] != arm:
+        errors.append(f"pmic: watchdog not armed with stock's sequence {arm}")
+    if "070101" in pw:
+        errors.append("pmic: Wisp stopped the PMIC watchdog")
     buck1 = "040801" if variant == "jbd4010" else "040808"
     if buck1 not in pw:
         errors.append(f"pmic: BUCK1 voltage {buck1} not programmed ({'1.1' if variant == 'jbd4010' else '1.8'} V)")

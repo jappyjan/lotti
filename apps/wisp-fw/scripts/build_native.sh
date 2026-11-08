@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# wisp-fw:build-native — a whole native image: Wisp Boot padded to 64 KiB + the Wisp app at
+# 0x448000, exactly what install-wisp would write at 0x438000 (docs/wisp/rung4.md §2, §3).
+#
+#   scripts/build_native.sh native-0
+#
+# native-0: the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no UART1 log)
+# and the app with images/native-0/ (panel off, PMIC observed only: cmake/hwimage.cmake). Every gate
+# runs on its part: Wisp Boot (check_image, rule 8, no MRAM write), the app (check_image --part app,
+# rule 8, no MRAM write, all in its build), the combined image (layout, both vector tables, Wisp
+# Boot's slot byte for byte) and wisp-ota's own rule-3 checks (pack-main). Nothing is pinned here:
+# pinning is W23, after review.
+#
+# Output in .wisp-cache/build/<image>/: <image>.bin, <image>.evenota, manifest.json (SHA-256 of the
+# image, both ELFs and maps, Wisp Boot's binary and its 64 KiB slot), boot/ and app/ build dirs.
+source "$(dirname "$0")/lib.sh"
+wisp_devshell "$@"
+wisp_require_setup
+
+image="${1:?usage: build_native.sh native-0}"
+case "$image" in
+native-0)
+	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
+	;;
+*)
+	echo "wisp-fw: unknown native image '$image' (known: native-0)" >&2
+	exit 1
+	;;
+esac
+cfg="$APP_DIR/images/$image"
+out="$CACHE_DIR/build/$image"
+ota="$REPO_ROOT/packages/wisp-ota/dist/cli.js"
+[[ -f "$ota" ]] || {
+	echo "wisp-fw: build wisp-ota first: pnpm nx run wisp-ota:build" >&2
+	exit 1
+}
+mkdir -p "$out"
+
+echo "=== $image: Wisp Boot (${boot_args[*]})"
+rm -rf "$out/boot"
+WISP_BOOT_BUILD_DIR="$out/boot" "$APP_DIR/scripts/build_boot.sh" "${boot_args[@]}"
+
+echo "=== $image: app"
+rm -rf "$out/app" # from scratch: a cached configure would miss a changed overlay or .conf
+WISP_PANEL=none WISP_BUILD_DIR="$out/app" "$APP_DIR/scripts/build.sh" \
+	"-DEXTRA_CONF_FILE=$cfg/$image.conf" "-DEXTRA_DTC_OVERLAY_FILE=$cfg/$image.overlay" \
+	>"$out/app-build.log" 2>&1 || {
+	tail -n 40 "$out/app-build.log" >&2
+	echo "FAIL: $image app build (log: $out/app-build.log)" >&2
+	exit 1
+}
+grep -E "^(check_|-- Wisp hardware image gate)" "$out/app-build.log"
+grep -q "^-- Wisp hardware image gate: " "$out/app-build.log" || {
+	echo "FAIL: $image was built without the hardware image gate (CONFIG_WISP_HW_IMAGE)" >&2
+	exit 1
+}
+
+echo "=== $image: combine"
+cmake -DBOOT="$out/boot/wisp_boot.bin" -DAPP="$out/app/zephyr/zephyr.bin" -DOUT="$out/$image.bin" \
+	-P "$APP_DIR/tests/boot/app/combine.cmake"
+python3 -I "$APP_DIR/scripts/check_native.py" --image "$out/$image.bin" --boot "$out/boot/wisp_boot.bin" \
+	--app "$out/app/zephyr/zephyr.bin" --manifest "$out/manifest.json" --name "$image" \
+	--file boot_elf="$out/boot/wisp_boot.elf" --file boot_map="$out/boot/wisp_boot.map" \
+	--file app_elf="$out/app/zephyr/zephyr.elf" --file app_map="$out/app/zephyr/zephyr.map" \
+	--app-config "$out/app/zephyr/.config" --boot-elf "$out/boot/wisp_boot.elf" --observe
+
+echo "=== $image: wisp-ota pack-main (its own rule-3 guards)"
+(cd "$REPO_ROOT" && node "$ota" pack-main "$out/$image.bin" --version 0.0.0.0 -o "$out/$image.evenota")
+echo "=== $image: $out/$image.bin"
+cat "$out/manifest.json"

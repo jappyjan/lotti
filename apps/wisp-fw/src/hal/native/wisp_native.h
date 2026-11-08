@@ -6,6 +6,7 @@
 #ifndef WISP_NATIVE_H
 #define WISP_NATIVE_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,5 +24,20 @@ void wisp_native_present(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t
 void wisp_native_frame_done(void *ctx, uint32_t frame);
 
 const struct wisp_flush *wisp_native_flush(void);
+
+/* The watchdog thread (power.c): Wisp Boot's Apollo WDT and the nPM1300's, both every second.
+ * Started first thing in main(); wisp_native_power_init() starts it too. */
+struct wisp_watchdog_stats {
+	uint32_t apollo_feeds;
+	uint32_t pmic_kicks;
+	uint32_t pmic_errors;
+	int8_t pmic_last;  /* the last PMIC write's result (0 or -errno) */
+	bool pmic_armed;   /* stock's arming sequence went through */
+};
+void wisp_native_watchdogs_start(void);
+const struct wisp_watchdog_stats *wisp_native_watchdog_stats(void);
+
+/* Battery voltage and the raw nPM1300 CHARGER STATUS / VBUS STATUS registers. */
+int wisp_native_battery_raw(uint16_t *mv, uint8_t *chg_status, uint8_t *vbus_status);
 
 #endif /* WISP_NATIVE_H */

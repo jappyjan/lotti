@@ -22,7 +22,7 @@
         "setup"
       ],
       "options": {
-        "command": "apps/wisp-fw/scripts/build.sh"
+        "command": "WISP_PANEL=jbd4010 apps/wisp-fw/scripts/build.sh"
       },
       "cache": false
     },
@@ -70,6 +70,22 @@
       },
       "cache": false
     },
+    "build-native": {
+      "executor": "nx:run-commands",
+      "dependsOn": [
+        "setup",
+        {
+          "projects": [
+            "wisp-ota"
+          ],
+          "target": "build"
+        }
+      ],
+      "options": {
+        "command": "apps/wisp-fw/scripts/build_native.sh native-0"
+      },
+      "cache": false
+    },
     "boot-test": {
       "executor": "nx:run-commands",
       "dependsOn": [
@@ -91,7 +107,16 @@
       "options": {
         "command": "apps/wisp-fw/scripts/w18_test.sh"
       },
-      "cache": false
+      "cache": false,
+      "dependsOn": [
+        "setup",
+        {
+          "projects": [
+            "wisp-ota"
+          ],
+          "target": "build"
+        }
+      ]
     }
   },
   "implicitDependencies": [

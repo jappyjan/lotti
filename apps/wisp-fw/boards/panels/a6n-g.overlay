@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: MIT
+ * wisp_g2 with the Hongshi A6N-G panel (stock hw_version 6, DVT3): BUCK1 1.8 V (npmx code 8, read
+ * as 1.0 V + 0.1 V steps [I]), GPIO142 and GPIO128, stock offset (8, 8). Emulation builds only
+ * until W21's PMIC snapshot confirms BUCK1's code (rung4.md G11). */
+&pmic_buck1 {
+	regulator-min-microvolt = <1800000>;
+	regulator-max-microvolt = <1800000>;
+};
+
+&uled {
+	panel = "a6n-g";
+	offset-x = <8>;
+	offset-y = <8>;
+};

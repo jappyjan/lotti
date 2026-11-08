@@ -21,6 +21,8 @@
 // way. An Apollo510 reset leaves the watchdog as it is: the PMIC is a separate chip. Writes that arm or reconfigure the timer (07 00, 07 01, 07 05, 07 08..0A) are
 // logged, not acted on, so the stock app's own PMIC set-up after a release cannot reset the run.
 //
+// SUBMODCTRL reads its submodule types as on silicon (WispIomTypes.cs explains why).
+//
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
 // PmicLog (one line per PMIC write).
 using System;
@@ -85,9 +87,13 @@ namespace Antmicro.Renode.Peripherals.Wisp
             offsetHi = 0;
         }
 
-        public byte ReadByte(long offset) { return iom.ReadByte(offset); }
-        public ushort ReadWord(long offset) { return iom.ReadWord(offset); }
-        public uint ReadDoubleWord(long offset) { return iom.ReadDoubleWord(offset); }
+        public byte ReadByte(long offset) { return (byte)(ReadDoubleWord(offset & ~3L) >> (int)(8 * (offset & 3))); }
+        public ushort ReadWord(long offset) { return (ushort)(ReadDoubleWord(offset & ~3L) >> (int)(8 * (offset & 2))); }
+        public uint ReadDoubleWord(long offset)
+        {
+            var v = iom.ReadDoubleWord(offset);
+            return (offset & 0xFFF) == 0x11C ? (v & ~0xEEu) | (1u << 5) : v; // SUBMODCTRL types
+        }
         public void WriteByte(long offset, byte value) { Observe(offset, value, 1); iom.WriteByte(offset, value); }
         public void WriteWord(long offset, ushort value) { Observe(offset, value, 2); iom.WriteWord(offset, value); }
         public void WriteDoubleWord(long offset, uint value) { Observe(offset, value, 4); iom.WriteDoubleWord(offset, value); }

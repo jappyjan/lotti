@@ -5,8 +5,13 @@
  * heartbeat.
  *
  * The drivers start suspended (panel unpowered, IMU rail off, ALS shut down); nothing is powered
- * until the core asks for it. The link (src/ble/, src/link/) carries a wisp-core session. Wisp
- * Boot (src/boot/) is not wired in; the image entry is Zephyr's reset vector at 0x438000.
+ * until the core asks for it. The link (src/ble/, src/link/) carries a wisp-core session.
+ *
+ * The app is linked at 0x448000 and entered by Wisp Boot (src/boot/, at 0x438000). First thing in
+ * main() the watchdog thread starts (src/hal/native/power.c: Wisp Boot's Apollo WDT and the
+ * nPM1300's, every second), then the case-UART status (src/case/), before anything that can block;
+ * Wisp Boot's status block is printed once. A BLE session that completed HELLO confirms the boot
+ * through Wisp Boot's services table (src/boot_link.c).
  *
  * CONFIG_WISP_DRIVER_SELFTEST (scripts/drivers_test.sh only): after bring-up, compose test frames
  * with wisp-core's compositor, send them through the flush path to the panel, read each sensor
@@ -21,7 +26,17 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/version.h>
 
+#include "app_status.h"
 #include "app_version.h"
+#if defined(CONFIG_BOARD_WISP_G2)
+#include <zephyr/init.h>
+#include <soc.h>
+
+#include "boot_link.h"
+#endif
+#if defined(CONFIG_WISP_CASE_UART)
+int wisp_case_start(void);
+#endif
 #if defined(CONFIG_WISP_NATIVE_HAL)
 #include "wisp_hal.h"
 #include "wisp_native.h"
@@ -49,6 +64,45 @@
 #define WISP_FW_GIT_REV "unknown"
 #endif
 
+struct wisp_app_status wisp_app_status = {
+	.bt_result = 0x7FFF, /* WISP_CASE_BT_NOT_STARTED */
+	.confirm_result = 0x7FFF,
+};
+
+#if defined(CONFIG_BOARD_WISP_G2)
+/* The Apollo510's reset cause, as the app finds it (the bootloader and Wisp Boot leave it). */
+static int capture_reset_cause(void)
+{
+	wisp_app_status.reset_cause = RSTGEN->STAT;
+	return 0;
+}
+SYS_INIT(capture_reset_cause, PRE_KERNEL_1, 1);
+
+static void print_boot_status(void)
+{
+	const struct wisp_boot_status *b = wisp_boot_link_status();
+	static const char *const actions[] = {"run-app", "rescue", "run-app-degraded"};
+
+	if (!b) {
+		printk("wisp: Wisp Boot %s, no status block\n",
+		       wisp_boot_link_present() ? "present" : "absent");
+		return;
+	}
+	printk("wisp: Wisp Boot%s: NOR %06x (%d), mount %d, record %d, staging %s %08x (%u B), "
+	       "rescue.bin %s (%u B), firmware files %u%s, action %s, would %s (reason %u)\n",
+	       (b->build & WISP_BOOT_BUILD_OBSERVE) ? " observe-only" : "", (unsigned)b->nor_id,
+	       (int)b->nor_result, (int)b->mount_result, (int)b->record_result,
+	       b->staging_present ? "yes" : "no", (unsigned)b->staging_id, (unsigned)b->staging_size,
+	       b->rescue_ok ? "ok" : "not ok", (unsigned)b->rescue_size, b->inv_count,
+	       b->inv_truncated ? "+" : "", b->action < 3 ? actions[b->action] : "?",
+	       b->would_action < 3 ? actions[b->would_action] : "?", b->reason);
+	for (unsigned int i = 0; i < b->inv_count && i < WISP_BOOT_INV_MAX; i++) {
+		printk("wisp: firmware/%.32s %u B crc %08x (%d)\n", b->inv[i].name,
+		       (unsigned)b->inv[i].size, (unsigned)b->inv[i].crc, (int)b->inv[i].result);
+	}
+}
+#endif /* CONFIG_BOARD_WISP_G2 */
+
 #if defined(CONFIG_WISP_NATIVE_HAL)
 static void bring_up(void)
 {
@@ -67,7 +121,8 @@ static void bring_up(void)
 
 		printk("wisp: hal %s %s (%d)\n", parts[i].name, err ? "FAILED" : "ok", err);
 	}
-	printk("wisp: sensors present 0x%02x\n", wisp_hal_sensors_present());
+	wisp_app_status.sensors = wisp_hal_sensors_present();
+	printk("wisp: sensors present 0x%02x\n", wisp_app_status.sensors);
 }
 #endif /* CONFIG_WISP_NATIVE_HAL */
 
@@ -185,6 +240,13 @@ static void selftest_sensors(void)
 
 int main(void)
 {
+	wisp_app_status.stage = WISP_APP_STAGE_KERNEL;
+#if defined(CONFIG_WISP_NATIVE_HAL)
+	wisp_native_watchdogs_start();
+#endif
+#if defined(CONFIG_WISP_CASE_UART)
+	(void)wisp_case_start();
+#endif
 	printk("\n*** Wisp native " WISP_FW_VERSION " (" WISP_FW_GIT_REV ") ***\n");
 #if defined(CONFIG_ARCH_POSIX)
 	printk("wisp: board %s, Zephyr %s, Linux process\n", CONFIG_BOARD, KERNEL_VERSION_STRING);
@@ -192,8 +254,12 @@ int main(void)
 	printk("wisp: board %s, Zephyr %s, image @ %p\n", CONFIG_BOARD, KERNEL_VERSION_STRING,
 	       (void *)__rom_region_start);
 #endif
+#if defined(CONFIG_BOARD_WISP_G2)
+	print_boot_status();
+#endif
 #if defined(CONFIG_WISP_NATIVE_HAL)
 	bring_up();
+	wisp_app_status.stage = WISP_APP_STAGE_HAL;
 #endif
 #if defined(CONFIG_WISP_DRIVER_SELFTEST)
 	selftest_display();
@@ -202,9 +268,15 @@ int main(void)
 #endif
 #if defined(CONFIG_WISP_BLE)
 	printk("wisp: bluetooth: EM9305 update path compiled out (safety rule 8)\n");
-	if (wisp_ble_start() == 0) {
+	wisp_app_status.stage = WISP_APP_STAGE_BT_START;
+	int bt = wisp_ble_start();
+
+	wisp_app_status.bt_result = (int16_t)bt;
+	if (bt == 0) {
+		wisp_app_status.stage = WISP_APP_STAGE_BT_UP;
 		printk("wisp: bluetooth up, Wisp GATT service registered\n");
 	} else {
+		wisp_app_status.stage = WISP_APP_STAGE_BT_FAILED;
 		printk("wisp: bluetooth unavailable, running without a link\n");
 	}
 #else

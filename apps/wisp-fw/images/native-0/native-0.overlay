@@ -1,0 +1,43 @@
+/* SPDX-License-Identifier: MIT
+ * native-0 (docs/wisp/rung4.md §2): the first native image. The panel stays unpowered and the
+ * nPM1300 is observed, not configured (G11, G12; cmake/hwimage.cmake checks both).
+ *
+ * Panel: Jan's temples report hardware 5, the JBD4010 (boards/panels/jbd4010.overlay names it),
+ * but the node is disabled: no MSPI0, BUCK1, LDSW2 or panel GPIO is ever touched. The test pattern
+ * moves to native-1, after W21's snapshot gives BUCK1's real code. MSPI0 is disabled too.
+ *
+ * PMIC: Zephyr's MFD, regulator, charger and watchdog drivers are off. Their init would write
+ * SHIP/LPRESET, the GPIO1 mode, BUCK2/LDO1 and the whole charger configuration from this DTS,
+ * values nobody has compared with what stock programmed. src/hal/native/power.c talks to the PMIC
+ * directly instead: stock's watchdog sequence and kicks, one VBAT conversion per battery read,
+ * reads of the charger and VBUS status. */
+&uled {
+	panel = "jbd4010";
+	status = "disabled";
+};
+
+/* The panel's bus too: an enabled MSPI0 would power up and drive CLK/CE/data into the unpowered
+ * panel at boot (mspi_ambiq_ap5.c init, pinctrl default). */
+&mspi0 {
+	status = "disabled";
+};
+
+&pmic {
+	status = "disabled";
+};
+
+&pmic_gpio {
+	status = "disabled";
+};
+
+&pmic_regulators {
+	status = "disabled";
+};
+
+&charger {
+	status = "disabled";
+};
+
+&pmic_wdt {
+	status = "disabled";
+};

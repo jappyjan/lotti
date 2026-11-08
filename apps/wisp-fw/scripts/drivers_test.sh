@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # wisp-fw:drivers-test. Emulation only — nothing here talks to hardware.
 #
-# For each panel variant (A6N-G = the board default, JBD4010 = tests/drivers/jbd4010.overlay):
+# For each panel variant (WISP_PANEL=a6n-g / jbd4010: boards/panels/<panel>.overlay; the board has no
+# default panel):
 #   1. build the image with wisp-core linked and the driver self-test on (main.c)
 #   2. run it in Renode on renode/wisp_g2.repl: MSPI0 = the panel recorder
 #      (models/WispMspiPanel.cs), IOM0..7 = the G2's I2C devices (models/WispIom.cs)
@@ -92,11 +93,10 @@ run_variant() {
 }
 
 conf="$APP_DIR/tests/drivers/selftest.conf"
-run_variant a6ng 1 pass "-DEXTRA_CONF_FILE=$conf"
-run_variant jbd4010 0 pass "-DEXTRA_CONF_FILE=$conf" \
-	"-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/tests/drivers/jbd4010.overlay"
+WISP_PANEL=a6n-g run_variant a6ng 1 pass "-DEXTRA_CONF_FILE=$conf"
+WISP_PANEL=jbd4010 run_variant jbd4010 0 pass "-DEXTRA_CONF_FILE=$conf"
 if [[ "${WISP_DRIVERS_SKIP_NEGATIVE:-}" != 1 ]]; then
-	WISP_DRIVERS_ZEPHYR="$(pristine_zephyr)" run_variant a6ng-unpatched-i2c 1 fail \
+	WISP_PANEL=a6n-g WISP_DRIVERS_ZEPHYR="$(pristine_zephyr)" run_variant a6ng-unpatched-i2c 1 fail \
 		"-DEXTRA_CONF_FILE=$conf;$APP_DIR/tests/drivers/bt_off.conf" -DWISP_PATCHES_TEST_UNPATCHED=ON
 fi
 printf '\n=== wisp-fw drivers test: all passed\n'

@@ -23,7 +23,7 @@ mkdir -p "$run_dir"
 : >"$run_dir/uart1.txt"
 export G2_CAPTURE_OUT="$run_dir"
 
-# Initial SP and reset vector, as the Even bootloader would load them.
+# Initial SP and reset vector, as Wisp Boot hands them over (the app is linked at 0x448000).
 read -r sp pc < <(python3 -c 'import struct,sys; print("0x%08x 0x%08x" % struct.unpack_from("<II", open(sys.argv[1],"rb").read(8)))' "$bin")
 
 # Stream the UART while Renode runs.

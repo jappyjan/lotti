@@ -18,3 +18,7 @@ python3 -I "$APP_DIR/scripts/check_image.py" --elf "$out/wisp_boot.elf" --bin "$
 python3 -I "$APP_DIR/scripts/check_rule8.py" --elf "$out/wisp_boot.elf" --bin "$out/wisp_boot.bin" \
 	--map "$out/wisp_boot.map" --config "$out/no-kconfig.config" \
 	--compile-commands "$out/compile_commands.json" --hal "$WEST_TOP/modules/hal/ambiq"
+if grep -qiE '^WISP_BOOT_OBSERVE:BOOL=(on|1|true|yes|y)$' "$out/CMakeCache.txt"; then
+	python3 -I "$APP_DIR/scripts/check_no_mram_write.py" --elf "$out/wisp_boot.elf" \
+		--bin "$out/wisp_boot.bin" --map "$out/wisp_boot.map"
+fi
