@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 # wisp-fw:test. Emulation and host only — nothing here talks to hardware.
 #
-#   1. Wisp Boot decision logic and the display flush path, host unit tests (gcc + ASan/UBSan);
-#      Wisp Boot build + the image and rule 8 gates on it (the rung-3 fault tests are
+#   1. Wisp Boot decision logic, the display flush path and the case-UART codec (firmware side and
+#      the host side's golden vectors), host unit tests (gcc + ASan/UBSan); both Wisp Boot builds +
+#      the image, rule 8 and (observe-only) no-MRAM-write gates on them (the rung-3 fault tests are
 #      wisp-fw:boot-test; the driver tests in Renode are wisp-fw:drivers-test)
 #   2. the BLE transport adapter (src/link/), host unit tests with a fake GATT target
 #   3. post-build gate unit tests (synthetic images, configs, maps, symbols, units, code)
@@ -19,6 +20,9 @@
 #        d. hal_ambiq without the patch, gate skipped     -> post-build gate (TEST ONLY switch)
 #        e. EM9305 image linked (canary)                  -> post-build gate
 #        f. the canary ELF with symbols stripped          -> byte check alone still rejects it
+#      and the G13 no-MRAM-write gate (rung4.md):
+#        g. am_hal_mram_main_program linked (canary)      -> post-build gate
+#        h. a hardware image with the panel enabled       -> configure-time gate (G11)
 #
 # WISP_TEST_SKIP_NEGATIVE=1 skips step 6 (the full negative builds take about a minute each).
 source "$(dirname "$0")/lib.sh"
@@ -27,19 +31,27 @@ wisp_require_setup
 
 out="$CACHE_DIR/test"
 mkdir -p "$out"
+# wisp_g2 has no default panel (rung4.md G11): the development and emulation builds here name it.
+export WISP_PANEL=jbd4010
 step() { printf '\n=== wisp-fw test: %s\n' "$*"; }
 san=(-std=c11 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fno-sanitize-recover=all)
 core="$REPO_ROOT/packages/wisp-core"
 
-step "1/6 host unit tests (Wisp Boot, display flush)"
+step "1/6 host unit tests (Wisp Boot, display flush, case UART)"
 cc "${san[@]}" -I"$APP_DIR/src/boot" "$APP_DIR/src/boot/wisp_boot.c" "$APP_DIR/tests/boot/test_wisp_boot.c" \
 	-o "$out/test_wisp_boot"
 "$out/test_wisp_boot"
 cc "${san[@]}" -I"$APP_DIR/src/display" "$APP_DIR/src/display/wisp_flush.c" \
 	"$APP_DIR/tests/display/test_flush.c" -o "$out/test_flush"
 "$out/test_flush"
+cc "${san[@]}" -I"$APP_DIR/src/case" "$APP_DIR/src/case/wisp_case_proto.c" \
+	"$APP_DIR/tests/case/test_case_proto.c" -o "$out/test_case_proto"
+"$out/test_case_proto"
+python3 -I "$APP_DIR/tests/case/test_case_uart.py"
 "$APP_DIR/scripts/build_boot.sh" >/dev/null
-echo "ok: Wisp Boot built, check_image + check_rule8 passed"
+WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe-plain" "$APP_DIR/scripts/build_boot.sh" \
+	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF >/dev/null
+echo "ok: both Wisp Boot builds, check_image + check_rule8 (+ check_no_mram_write) passed"
 
 step "2/6 BLE transport adapter host unit tests"
 cc "${san[@]}" -I"$APP_DIR/src/hal" -I"$APP_DIR/src/link" -I"$core/include" \
@@ -100,7 +112,7 @@ expect_fail() {
 		exit 1
 	fi
 	echo "ok: '$name' rejected:"
-	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing" "$log" | sed 's/^/    /' | head -n 8
+	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing|check_no_mram_write: FAILED|^  MRAM|WISP HARDWARE IMAGE GATE|an enabled devicetree node" "$log" | sed 's/^/    /' | head -n 8
 }
 west_build() { # <name> <cmake args...>
 	local name="$1"
@@ -137,7 +149,7 @@ cmake_build() {
 	cmake --build "$dir"
 }
 
-step "6/6 rule 8 negative builds"
+step "6/6 rule 8 and G13 negative builds"
 expect_fail bt "WISP SAFETY RULE 8" \
 	west_build bt "-DEXTRA_CONF_FILE=$APP_DIR/tests/rule8/bt.conf"
 expect_fail hal-unpatched "hal_ambiq-0001-em9305-never-write-nvm.patch is not applied" \
@@ -169,5 +181,16 @@ grep -q "EM9305 firmware bytes found" "$out/neg-stripped.log" || {
 }
 echo "ok: 'canary, stripped' rejected by the byte check:"
 grep "bytes found" "$out/neg-stripped.log" | sed 's/^/    /' | head -n 3
+
+# g, h: rung4.md G13 and G11.
+expect_fail mram-canary "MRAM write symbol linked: am_hal_mram_main_program" \
+	west_build mram-canary -DWISP_MRAM_CANARY=ON
+expect_fail hwimage-panel "WISP HARDWARE IMAGE GATE" \
+	west_build hwimage-panel "-DEXTRA_CONF_FILE=$APP_DIR/images/native-0/native-0.conf"
+# The same gate on the panel alone: native-0 as it is, only the panel node enabled again.
+expect_fail hwimage-panel-only "is EVEN_G2_ULED" \
+	env WISP_PANEL=none "WISP_BUILD_DIR=$CACHE_DIR/build/neg-hwimage-panel-only" "$APP_DIR/scripts/build.sh" \
+	"-DEXTRA_CONF_FILE=$APP_DIR/images/native-0/native-0.conf" \
+	"-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/images/native-0/native-0.overlay;$APP_DIR/tests/hwimage/panel-on.overlay"
 
 step "all passed"

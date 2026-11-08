@@ -2,7 +2,11 @@
 # Wisp Boot: bare metal (no Zephyr), arm-none-eabi-gcc, linked at 0x438000 (stage/boot.ld).
 # Built by scripts/build_boot.sh; outputs wisp_boot.{elf,bin,map} and compile_commands.json,
 # which feed the same image + rule 8 gates as the Zephyr app. With -DWISP_BOOT_TEST_APPS=ON it
-# also builds the rung-3 fault-injection apps (tests/boot/app/) and the combined native images.
+# also builds the rung-3 fault-injection apps (tests/boot/app/) and the combined native images;
+# -DWISP_REAL_APP=<zephyr.bin linked at 0x448000> adds native_real.bin (the real Wisp app behind
+# this Wisp Boot). -DWISP_BOOT_OBSERVE=ON builds the observe-only Wisp Boot (rung4.md native-0:
+# no NOR or MRAM write code, always run-app); -DWISP_BOOT_LOG=OFF drops the UART1 debug log
+# (hardware images).
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
@@ -13,6 +17,9 @@ project(wisp_boot C)
 
 set(LITTLEFS_DIR "" CACHE PATH "littlefs source (west module modules/fs/littlefs)")
 option(WISP_BOOT_TEST_APPS "build the rung-3 fault-injection apps" OFF)
+option(WISP_BOOT_OBSERVE "observe-only build: every write compiled out, always run-app" OFF)
+option(WISP_BOOT_LOG "UART1 debug log" ON)
+set(WISP_REAL_APP "" CACHE FILEPATH "the real Wisp app (zephyr.bin at 0x448000) for native_real.bin")
 if(NOT EXISTS ${LITTLEFS_DIR}/lfs.c)
   message(FATAL_ERROR "LITTLEFS_DIR must point at littlefs (got '${LITTLEFS_DIR}')")
 endif()
@@ -30,6 +37,13 @@ target_include_directories(wisp_boot.elf PRIVATE . stage ${LITTLEFS_DIR})
 target_compile_definitions(wisp_boot.elf PRIVATE LFS_NO_MALLOC LFS_NO_DEBUG LFS_NO_WARN
   LFS_NO_ERROR LFS_NO_ASSERT)
 target_compile_options(wisp_boot.elf PRIVATE ${COMMON_FLAGS})
+if(WISP_BOOT_OBSERVE)
+  # LFS_READONLY: littlefs without any write path (no prog/erase callbacks are set either).
+  target_compile_definitions(wisp_boot.elf PRIVATE WISP_BOOT_OBSERVE=1 LFS_READONLY)
+endif()
+if(NOT WISP_BOOT_LOG)
+  target_compile_definitions(wisp_boot.elf PRIVATE WISP_BOOT_LOG=0)
+endif()
 set_source_files_properties(${LITTLEFS_DIR}/lfs.c ${LITTLEFS_DIR}/lfs_util.c PROPERTIES
   COMPILE_OPTIONS "-Wno-unused-parameter;-Wno-unused-function;-Wno-unused-variable")
 target_link_options(wisp_boot.elf PRIVATE ${CPU_FLAGS} -nostartfiles --specs=nano.specs
@@ -65,5 +79,12 @@ if(WISP_BOOT_TEST_APPS)
             -DOUT=native_erased.bin -P ${APP_DIR}/combine.cmake
     DEPENDS wisp_boot.elf ${APP_DIR}/combine.cmake)
   list(APPEND NATIVE_IMAGES native_erased.bin)
+  if(WISP_REAL_APP)
+    add_custom_command(OUTPUT native_real.bin
+      COMMAND ${CMAKE_COMMAND} -DBOOT=wisp_boot.bin -DAPP=${WISP_REAL_APP}
+              -DOUT=native_real.bin -P ${APP_DIR}/combine.cmake
+      DEPENDS wisp_boot.elf ${WISP_REAL_APP} ${APP_DIR}/combine.cmake)
+    list(APPEND NATIVE_IMAGES native_real.bin)
+  endif()
   add_custom_target(native_images ALL DEPENDS ${NATIVE_IMAGES})
 endif()

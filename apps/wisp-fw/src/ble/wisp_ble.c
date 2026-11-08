@@ -28,7 +28,11 @@
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/ring_buffer.h>
 
+#include "app_status.h"
 #include "app_version.h"
+#if defined(CONFIG_BOARD_WISP_G2)
+#include "boot_link.h"
+#endif
 #include "wisp_ble.h"
 #include "wisp_hal.h"
 #include "wisp_link.h"
@@ -333,9 +337,21 @@ static void log_session(void)
 
 	if (up != sessions_logged) {
 		sessions_logged = up;
+		wisp_app_status.session_up = up;
 		if (up) {
 			LOG_INF("session up: app '%s' (%s)", link.basic.session.peer.app_id,
 				link.basic.session.peer.client_name);
+			wisp_app_status.sessions++;
+#if defined(CONFIG_BOARD_WISP_G2)
+			/* HELLO completed with BLE up: this boot is good (rung4.md G8), once per
+			 * boot. A no-op that only counts the call in the observe-only Wisp Boot
+			 * (native-0). The fallback build's confirm() runs littlefs on this
+			 * thread's stack with interrupts locked: native-1 must move it to a
+			 * thread with a larger stack and test it in rung 3 (rung4.md). */
+			if (wisp_app_status.confirm_calls == 0) {
+				LOG_INF("boot confirm: %d", wisp_boot_link_confirm());
+			}
+#endif
 		} else {
 			LOG_INF("session ended");
 		}

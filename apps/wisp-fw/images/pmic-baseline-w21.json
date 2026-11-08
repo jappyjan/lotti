@@ -1,0 +1,209 @@
+{
+  "what": "nPM1300 configuration registers as stock 2.4.0.24 left them on the left temple (rung4.md W21, G12). Native images may write none of them except with exactly these values; tasks and the watchdog kick are listed separately.",
+  "source": "W21 pmic_read.bin, left temple, 2026-11-08 13:09-13:10 UTC (safety.md hardware log; PR #76; runs/w18-pmic-read-left-20261108T131013Z.json on the Mac). Raw codes; decodes are [I].",
+  "notes": "LDSW1/LDSW2.GPISEL: reported as 'GPISEL 0x00'. Status registers (VOUT_STAT, CHG_STAT, VBUS STATUS, ...) are not configuration and not listed.",
+  "registers": {
+    "0x0201": {
+      "name": "VBUSIN.ILIM",
+      "value": "0x05"
+    },
+    "0x0202": {
+      "name": "VBUSIN.ILIMSTARTUP",
+      "value": "0x01"
+    },
+    "0x0304": {
+      "name": "BCHARGER.ENABLE",
+      "value": "0x01"
+    },
+    "0x0308": {
+      "name": "BCHARGER.ISET_MSB",
+      "value": "0x18"
+    },
+    "0x0309": {
+      "name": "BCHARGER.ISET_LSB",
+      "value": "0x00"
+    },
+    "0x030A": {
+      "name": "BCHARGER.ISET_DISCHG_MSB",
+      "value": "0x9b"
+    },
+    "0x030B": {
+      "name": "BCHARGER.ISET_DISCHG_LSB",
+      "value": "0x00"
+    },
+    "0x030C": {
+      "name": "BCHARGER.VTERM",
+      "value": "0x0d"
+    },
+    "0x030D": {
+      "name": "BCHARGER.VTERM_R",
+      "value": "0x06"
+    },
+    "0x030E": {
+      "name": "BCHARGER.TRICKLE_SEL",
+      "value": "0x00"
+    },
+    "0x030F": {
+      "name": "BCHARGER.ITERM_SEL",
+      "value": "0x00"
+    },
+    "0x0310": {
+      "name": "BCHARGER.NTC_COLD_MSB",
+      "value": "0xc9"
+    },
+    "0x0311": {
+      "name": "BCHARGER.NTC_COLD_LSB",
+      "value": "0x01"
+    },
+    "0x0312": {
+      "name": "BCHARGER.NTC_COOL_MSB",
+      "value": "0xae"
+    },
+    "0x0313": {
+      "name": "BCHARGER.NTC_COOL_LSB",
+      "value": "0x01"
+    },
+    "0x0314": {
+      "name": "BCHARGER.NTC_WARM_MSB",
+      "value": "0x4a"
+    },
+    "0x0315": {
+      "name": "BCHARGER.NTC_WARM_LSB",
+      "value": "0x01"
+    },
+    "0x0316": {
+      "name": "BCHARGER.NTC_HOT_MSB",
+      "value": "0x2e"
+    },
+    "0x0317": {
+      "name": "BCHARGER.NTC_HOT_LSB",
+      "value": "0x03"
+    },
+    "0x0350": {
+      "name": "BCHARGER.VBATLOW_EN",
+      "value": "0x01"
+    },
+    "0x0408": {
+      "name": "BUCK1.VOUT_NORM",
+      "value": "0x01"
+    },
+    "0x0409": {
+      "name": "BUCK1.VOUT_RET",
+      "value": "0x02"
+    },
+    "0x040A": {
+      "name": "BUCK2.VOUT_NORM",
+      "value": "0x15"
+    },
+    "0x040B": {
+      "name": "BUCK2.VOUT_RET",
+      "value": "0x08"
+    },
+    "0x040C": {
+      "name": "BUCK.EN_CTRL",
+      "value": "0x00"
+    },
+    "0x040D": {
+      "name": "BUCK.VRET_CTRL",
+      "value": "0x00"
+    },
+    "0x040E": {
+      "name": "BUCK.PWM_CTRL",
+      "value": "0x00"
+    },
+    "0x040F": {
+      "name": "BUCK.SW_CTRL",
+      "value": "0x03"
+    },
+    "0x0415": {
+      "name": "BUCK.CTRL0",
+      "value": "0x00"
+    },
+    "0x0509": {
+      "name": "ADC.CONFIG",
+      "value": "0x00"
+    },
+    "0x050A": {
+      "name": "ADC.NTCR_SEL",
+      "value": "0x03"
+    },
+    "0x0600": {
+      "name": "GPIO0.MODE",
+      "value": "0x00"
+    },
+    "0x0601": {
+      "name": "GPIO1.MODE",
+      "value": "0x05"
+    },
+    "0x0602": {
+      "name": "GPIO2.MODE",
+      "value": "0x00"
+    },
+    "0x0603": {
+      "name": "GPIO3.MODE",
+      "value": "0x00"
+    },
+    "0x0604": {
+      "name": "GPIO4.MODE",
+      "value": "0x00"
+    },
+    "0x0705": {
+      "name": "TIMER.CONFIG",
+      "value": "0x0a"
+    },
+    "0x0708": {
+      "name": "TIMER.TARGET_HI",
+      "value": "0x00"
+    },
+    "0x0709": {
+      "name": "TIMER.TARGET_MID",
+      "value": "0x3c"
+    },
+    "0x070A": {
+      "name": "TIMER.TARGET_LO",
+      "value": "0x00"
+    },
+    "0x0805": {
+      "name": "LDSW1.GPISEL",
+      "value": "0x00"
+    },
+    "0x0806": {
+      "name": "LDSW2.GPISEL",
+      "value": "0x00"
+    },
+    "0x0807": {
+      "name": "LDSW.CONFIG",
+      "value": "0x30"
+    },
+    "0x0808": {
+      "name": "LDSW1.LDOSEL",
+      "value": "0x01"
+    },
+    "0x0809": {
+      "name": "LDSW2.LDOSEL",
+      "value": "0x00"
+    },
+    "0x080C": {
+      "name": "LDSW1.VOUTSEL",
+      "value": "0x08"
+    },
+    "0x080D": {
+      "name": "LDSW2.VOUTSEL",
+      "value": "0x00"
+    },
+    "0x0B04": {
+      "name": "SHIP.CONFIG",
+      "value": "0x03"
+    },
+    "0x0B06": {
+      "name": "SHIP.LPCONFIG",
+      "value": "0x00"
+    }
+  },
+  "tasks": {
+    "0x0500": "ADC.TASK_VBAT (start one VBAT conversion)",
+    "0x0700": "TIMER.TASK_EN (start the watchdog)",
+    "0x0703": "TIMER.TARGET_STROBE (load the period)",
+    "0x0704": "TIMER.TASK_KICK (kick the watchdog)"
+  }
+}

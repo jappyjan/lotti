@@ -153,16 +153,48 @@ config WISP_NATIVE_HAL
 	bool "Native HAL on the G2 drivers (src/hal/native/)"
 	default y
 	depends on BOARD_WISP_G2
-	depends on WISP_ULED && WISP_G2_TOUCH && WISP_ICM45608 && WISP_OPT3007
+	depends on WISP_G2_TOUCH && WISP_ICM45608 && WISP_OPT3007
 	help
 	  Off on other boards (native_sim for the BLE end-to-end test has no G2 devices).
+	  Without the panel (WISP_ULED off, native-0) the display calls return ENOTSUP.
 
 config WISP_DRIVER_SELFTEST
 	bool "TEST ONLY: exercise the drivers at boot (Renode driver test)"
-	depends on WISP_NATIVE_HAL
+	depends on WISP_NATIVE_HAL && WISP_ULED
 	help
 	  Built only by scripts/drivers_test.sh. Powers the panel, sends a test frame and a
 	  partial update through the flush path, and reads every sensor once.
+
+config WISP_CASE_UART
+	bool "Case-UART status protocol on UART2 (docs/wisp/case-uart.md)"
+	default y
+	depends on WISP_NATIVE_HAL
+	depends on $(dt_nodelabel_enabled,uart2)
+	help
+	  Answers the case's version query and Wisp's status, boot-block and reset requests on
+	  the pogo UART. Polled; it never sends anything unasked.
+
+config WISP_CASE_UART_POLL_MS
+	int "Case-UART receive poll period (ms)"
+	default 2
+	depends on WISP_CASE_UART
+	help
+	  The PL011 FIFO holds 32 bytes; every request is shorter, and the host waits for the
+	  reply before sending the next one.
+
+config WISP_IMAGE_KIND
+	int "Image generation reported over the case UART (0 = native-0)"
+	default 255
+	help
+	  255 = a development build. The native-N image builds set N (images/native-N/).
+
+config WISP_HW_IMAGE
+	bool "This build is a hardware image (gates in cmake/hwimage.cmake)"
+	help
+	  Set only by the hardware image builds (images/native-*/). Fails the configure step
+	  unless the image leaves the panel off and the nPM1300's rails and charger alone
+	  (rung4.md G11, G12) until W21's PMIC snapshot confirms the values, and unless the
+	  test-only switches are off.
 
 endmenu
 

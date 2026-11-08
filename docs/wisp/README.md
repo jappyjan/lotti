@@ -8,6 +8,7 @@ Status: M0 foundation landed (2026-11-06): `wisp-core` (C, 131 golden vectors), 
 - [Safety policy](safety.md) — brick rules and the flashing ladder
 - [Hardware reference](hardware.md) — what's in the glasses, with sources
 - [Recovery](recovery.md) — how a bricked temple comes back: SWD, the case UART, Wisp Boot, and the W18 procedure (patched bootloader installed on both temples, case recovery proven 2026-11-08)
+- [Case UART](case-uart.md) — what a native temple answers on the charging-case link: the relay-shaped status protocol (IDENT, READ, RESET), the boot-watch hook, the unanswered `0x13` poll
 - [Rung 4 plan](rung4.md) — the first native flash: route, first image, pre-qualification, rule 11, forced faults, steps W19–W31 and gaps (proposed)
 - [Host mode](host-mode.md) — running the core inside stock 2.2.6.10 (rung 2): where to hook, the lease, the hook ladder
 

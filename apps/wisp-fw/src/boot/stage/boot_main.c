@@ -12,6 +12,15 @@
  *
  * Anything that fails before the decision (no NOR, no filesystem) runs the app degraded: the
  * app is the only remaining way in. A failed rescue (copy or verify) never writes the flag.
+ *
+ * Every boot also lists /firmware (names, sizes, CRCs) and leaves what it saw in a status block in
+ * its own RAM (wisp_boot_status.h), which the services table points at.
+ *
+ * Observe-only build (WISP_BOOT_OBSERVE=1, rung4.md native-0): the same code with every write
+ * compiled out. littlefs is built LFS_READONLY, the NOR driver has no program or erase, there is
+ * no flag write, the record is read but never written, and the action is always run-app. The
+ * decision is still computed and published as `would_action`, so the first native boot shows
+ * what the fallback build would have done.
  */
 #include <stddef.h>
 #include <string.h>
@@ -22,6 +31,16 @@
 #include "lfs.h"
 #include "wisp_boot.h"
 #include "wisp_boot_layout.h"
+#include "wisp_boot_status.h"
+
+/* ---- status block ------------------------------------------------------------------------ */
+
+static struct wisp_boot_status st;
+
+static void status_seal(void)
+{
+	st.crc = wisp_boot_crc32(0, &st, (uint32_t)__builtin_offsetof(struct wisp_boot_status, crc));
+}
 
 /* ---- littlefs on the NOR, stock geometry ---------------------------------------------------- */
 
@@ -31,6 +50,7 @@ static int bd_read(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, voi
 	return nor_read(WISP_LFS_BASE + b * c->block_size + off, buf, n) ? LFS_ERR_IO : 0;
 }
 
+#if !WISP_BOOT_OBSERVE
 static int bd_prog(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, const void *buf,
 		   lfs_size_t n)
 {
@@ -58,6 +78,7 @@ static int bd_erase(const struct lfs_config *c, lfs_block_t b)
 	hw_wdt_feed();
 	return nor_erase_4k(WISP_LFS_BASE + b * c->block_size) ? LFS_ERR_IO : 0;
 }
+#endif /* !WISP_BOOT_OBSERVE */
 
 static int bd_sync(const struct lfs_config *c)
 {
@@ -72,8 +93,10 @@ static uint8_t chunk[WISP_LFS_CACHE_SIZE];
 
 static const struct lfs_config cfg = {
 	.read = bd_read,
+#if !WISP_BOOT_OBSERVE
 	.prog = bd_prog,
 	.erase = bd_erase,
+#endif
 	.sync = bd_sync,
 	.read_size = WISP_LFS_READ_SIZE,
 	.prog_size = WISP_LFS_PROG_SIZE,
@@ -92,12 +115,22 @@ static int mounted;
 
 static int fs_up(void)
 {
+	uint32_t id = 0;
+
 	if (mounted) {
 		return 0;
 	}
-	if (nor_init() != 0 || lfs_mount(&lfs, &cfg) != 0) {
+	st.nor_result = nor_init(&id);
+	st.nor_id = id;
+	if (st.nor_result != 0) {
 		return -1;
 	}
+	st.stage = WISP_BOOT_STAGE_NOR;
+	st.mount_result = lfs_mount(&lfs, &cfg);
+	if (st.mount_result != 0) {
+		return -1;
+	}
+	st.stage = WISP_BOOT_STAGE_MOUNTED;
 	mounted = 1;
 	return 0;
 }
@@ -118,15 +151,17 @@ static int record_read(struct wisp_boot_record *r)
 {
 	lfs_file_t f;
 	lfs_ssize_t n;
+	int e = open_file(&f, fbuf_a, WISP_PATH_RECORD, LFS_O_RDONLY);
 
-	if (open_file(&f, fbuf_a, WISP_PATH_RECORD, LFS_O_RDONLY) < 0) {
-		return -1;
+	if (e < 0) {
+		return e;
 	}
 	n = lfs_file_read(&lfs, &f, r, sizeof(*r));
 	lfs_file_close(&lfs, &f);
 	return n == (lfs_ssize_t)sizeof(*r) ? 0 : -1;
 }
 
+#if !WISP_BOOT_OBSERVE
 static int record_write(const struct wisp_boot_record *r)
 {
 	lfs_file_t f;
@@ -145,6 +180,7 @@ static int record_write(const struct wisp_boot_record *r)
 	}
 	return lfs_file_close(&lfs, &f); /* commits atomically */
 }
+#endif /* !WISP_BOOT_OBSERVE */
 
 /* ---- images ------------------------------------------------------------------------------ */
 
@@ -163,6 +199,7 @@ static int staging_id(uint32_t *id)
 	if (open_file(&f, fbuf_a, WISP_PATH_STAGING, LFS_O_RDONLY) < 0) {
 		return 0;
 	}
+	st.staging_size = (uint32_t)lfs_file_size(&lfs, &f);
 	n = lfs_file_read(&lfs, &f, pre, sizeof(pre));
 	lfs_file_close(&lfs, &f);
 	if (n != (lfs_ssize_t)sizeof(pre)) {
@@ -173,7 +210,8 @@ static int staging_id(uint32_t *id)
 }
 
 /* Full check of a staged-format main image: header (rule 3) + zlib CRC over [8:size). */
-__attribute__((noinline)) static int image_verify(const char *path, uint8_t *buf, uint32_t *id)
+__attribute__((noinline)) static int image_verify(const char *path, uint8_t *buf, uint32_t *id,
+						  uint32_t *file_size)
 {
 	lfs_file_t f;
 	uint8_t head[WISP_PREAMBLE_SIZE + 8];
@@ -185,6 +223,7 @@ __attribute__((noinline)) static int image_verify(const char *path, uint8_t *buf
 		return 0;
 	}
 	size = lfs_file_size(&lfs, &f);
+	*file_size = size > 0 ? (uint32_t)size : 0;
 	if (size >= (lfs_soff_t)sizeof(head) &&
 	    lfs_file_read(&lfs, &f, head, sizeof(head)) == (lfs_ssize_t)sizeof(head) &&
 	    wisp_boot_image_check(head, le32(head + 32), le32(head + 36), (uint32_t)size) == 0) {
@@ -211,6 +250,63 @@ __attribute__((noinline)) static int image_verify(const char *path, uint8_t *buf
 	return ok;
 }
 
+/* ---- /firmware inventory (read-only) ----------------------------------------------------- */
+
+static void inventory(void)
+{
+	static char path[sizeof(WISP_PATH_FIRMWARE) + 1 + LFS_NAME_MAX + 1];
+	struct lfs_info info;
+	lfs_dir_t dir;
+	int e = lfs_dir_open(&lfs, &dir, WISP_PATH_FIRMWARE);
+
+	st.inv_result = e;
+	if (e < 0) {
+		return;
+	}
+	while (lfs_dir_read(&lfs, &dir, &info) > 0) {
+		struct wisp_boot_inv_entry *ent;
+		size_t len = strlen(info.name);
+		lfs_file_t f;
+
+		if (info.type != LFS_TYPE_REG) {
+			continue;
+		}
+		if (st.inv_count >= WISP_BOOT_INV_MAX) {
+			st.inv_truncated = 1;
+			break;
+		}
+		ent = &st.inv[st.inv_count++];
+		memcpy(ent->name, info.name, len < WISP_BOOT_INV_NAME ? len : WISP_BOOT_INV_NAME);
+		ent->size = info.size;
+		memcpy(path, WISP_PATH_FIRMWARE "/", sizeof(WISP_PATH_FIRMWARE));
+		memcpy(path + sizeof(WISP_PATH_FIRMWARE), info.name, len + 1);
+		e = open_file(&f, fbuf_a, path, LFS_O_RDONLY);
+		if (e < 0) {
+			ent->result = e;
+			continue;
+		}
+		for (;;) {
+			lfs_ssize_t n = lfs_file_read(&lfs, &f, chunk, sizeof(chunk));
+
+			if (n < 0) {
+				ent->result = (int32_t)n;
+				break;
+			}
+			if (n == 0) {
+				break;
+			}
+			ent->crc = wisp_boot_crc32(ent->crc, chunk, (uint32_t)n);
+			hw_wdt_feed();
+		}
+		lfs_file_close(&lfs, &f);
+		if (ent->result == 0 && len >= WISP_BOOT_INV_NAME) {
+			ent->result = 1; /* name cut */
+		}
+	}
+	lfs_dir_close(&lfs, &dir);
+}
+
+#if !WISP_BOOT_OBSERVE
 __attribute__((noinline)) static int rescue_copy(void)
 {
 	lfs_file_t in, out;
@@ -236,27 +332,42 @@ __attribute__((noinline)) static int rescue_copy(void)
 	e = lfs_file_close(&lfs, &out); /* the new staging file becomes visible only here */
 	return n < 0 ? -2 : e;
 }
+#endif /* !WISP_BOOT_OBSERVE */
 
 /* ---- services for the app ---------------------------------------------------------------- */
 
 static int svc_confirm(void)
 {
+#if WISP_BOOT_OBSERVE
+	st.confirm_calls++;
+	st.confirm_result = 0;
+	status_seal();
+	return 0;
+#else
 	struct wisp_boot_record r;
+	int e;
 
 	/* The app may have reconfigured MSPI1 and written the filesystem since boot: bring the
 	 * NOR up again and mount fresh instead of trusting state from boot time. */
 	mounted = 0;
 	if (fs_up() != 0 || record_read(&r) != 0 || !wisp_boot_record_valid(&r)) {
-		return -1;
+		e = -1;
+	} else {
+		wisp_boot_confirm(&r);
+		e = record_write(&r);
 	}
-	wisp_boot_confirm(&r);
-	return record_write(&r);
+	st.confirm_calls++;
+	st.confirm_result = e;
+	status_seal();
+	return e;
+#endif
 }
 
 __attribute__((section(".services"), used)) const struct wisp_boot_services wisp_boot_services = {
 	.magic = WISP_BOOT_SERVICES_MAGIC,
-	.version = 1,
+	.version = WISP_BOOT_SERVICES_VERSION,
 	.confirm = svc_confirm,
+	.status = &st,
 };
 
 /* ---- main --------------------------------------------------------------------------------- */
@@ -276,8 +387,14 @@ static int app_vectors_ok(void)
 	       (pc & ~1u) >= WISP_MAIN_BASE + 8u && (pc & ~1u) < WISP_APP_CEILING;
 }
 
-_Noreturn static void run_app(void)
+_Noreturn static void run_app(enum wisp_boot_action action)
 {
+	st.action = (uint8_t)action;
+	if (st.stage < WISP_BOOT_STAGE_DECIDED) {
+		st.would_action = (uint8_t)action;
+	}
+	st.stage = WISP_BOOT_STAGE_APP;
+	status_seal();
 	if (!app_vectors_ok()) {
 		hw_log("wisp-boot: no runnable app at 0x448000 -> reset\n");
 		hw_reset();
@@ -293,21 +410,45 @@ _Noreturn void wisp_boot_main(void)
 	uint32_t id = 0;
 
 	hw_wdt_arm();
-	hw_log("\nwisp-boot: start\n");
+	st.magic = WISP_BOOT_STATUS_MAGIC;
+	st.version = WISP_BOOT_STATUS_VERSION;
+	st.size = sizeof(st);
+	st.build = (WISP_BOOT_OBSERVE ? WISP_BOOT_BUILD_OBSERVE : 0) |
+		   (WISP_BOOT_LOG ? WISP_BOOT_BUILD_LOG : 0);
+	st.mount_result = 1; /* not attempted */
+	st.record_result = 1;
+	st.inv_result = 1;
+	st.stage = WISP_BOOT_STAGE_START;
+	status_seal();
+	hw_log(WISP_BOOT_OBSERVE ? "\nwisp-boot: start (observe-only)\n" : "\nwisp-boot: start\n");
 
 	if (fs_up() != 0) {
+		hw_log_hex("wisp-boot: NOR id ", st.nor_id);
 		hw_log("wisp-boot: no filesystem -> run-app-degraded\n");
-		run_app();
+		run_app(WISP_BOOT_RUN_APP_DEGRADED);
 	}
-	if (record_read(&stored) == 0) {
+	st.record_result = record_read(&stored);
+	if (st.record_result == 0) {
 		sp = &stored;
+		memcpy(st.record, &stored, sizeof(st.record));
 	}
 	in.staging_present = staging_id(&in.staging_id);
-	in.rescue_ok = image_verify(WISP_PATH_RESCUE, fbuf_b, &in.rescue_id);
+	in.rescue_ok = image_verify(WISP_PATH_RESCUE, fbuf_b, &in.rescue_id, &st.rescue_size);
 	in.rescue_hold = 0; /* TODO(rung 4): PSoC touch hold over I2C5 0x0C */
+	st.staging_present = in.staging_present;
+	st.staging_id = in.staging_present ? in.staging_id : 0;
+	st.rescue_ok = in.rescue_ok;
+	st.rescue_id = in.rescue_id;
+	inventory();
+	st.stage = WISP_BOOT_STAGE_INPUTS;
 
 	d = wisp_boot_decide(sp, &in);
+	st.would_action = (uint8_t)d.action;
+	st.reason = (uint8_t)d.reason;
+	st.stage = WISP_BOOT_STAGE_DECIDED;
+	status_seal();
 	hw_log_hex("wisp-boot: rescue.bin ok ", (uint32_t)in.rescue_ok);
+	hw_log_hex("wisp-boot: firmware files ", st.inv_count);
 	hw_log_hex("wisp-boot: reason ", (uint32_t)d.reason);
 	hw_log_hex("wisp-boot: attempts ", d.record.attempts);
 	hw_log_hex("wisp-boot: rescue tries ", d.record.rescue_tries);
@@ -315,6 +456,12 @@ _Noreturn void wisp_boot_main(void)
 	hw_log(action_names[d.action]);
 	hw_log("\n");
 
+#if WISP_BOOT_OBSERVE
+	/* Observe-only: nothing is written, and the app always runs. */
+	(void)id;
+	hw_log("wisp-boot: observe-only -> run-app\n");
+	run_app(WISP_BOOT_RUN_APP);
+#else
 	if (record_write(&d.record) != 0) {
 		/* The attempt was not counted. Rescue anyway if it was decided; else the app runs
 		 * and the watchdog bounds what it can do. */
@@ -322,7 +469,7 @@ _Noreturn void wisp_boot_main(void)
 	}
 
 	if (d.action != WISP_BOOT_RESCUE) {
-		run_app();
+		run_app(d.action);
 	}
 
 	hw_log("wisp-boot: staging rescue.bin\n");
@@ -330,7 +477,7 @@ _Noreturn void wisp_boot_main(void)
 		hw_log("wisp-boot: copy failed, flag NOT written -> reset\n");
 		hw_reset();
 	}
-	if (!image_verify(WISP_PATH_STAGING, fbuf_a, &id) || id != in.rescue_id) {
+	if (!image_verify(WISP_PATH_STAGING, fbuf_a, &id, &st.staging_size) || id != in.rescue_id) {
 		hw_log("wisp-boot: staged copy does not verify, flag NOT written -> reset\n");
 		hw_reset();
 	}
@@ -341,4 +488,5 @@ _Noreturn void wisp_boot_main(void)
 	}
 	hw_log("wisp-boot: flag set, reset into the Even bootloader\n");
 	hw_reset();
+#endif
 }

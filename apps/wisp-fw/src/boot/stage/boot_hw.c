@@ -28,9 +28,6 @@ void hw_wdt_feed(void)
 
 /* Debug log on UART1, polled. WISP_BOOT_LOG=0 compiles it out (hardware builds until the
  * UART1 power/pin state after the bootloader's hand-off is confirmed on glasses). */
-#ifndef WISP_BOOT_LOG
-#define WISP_BOOT_LOG 1
-#endif
 
 void hw_log(const char *s)
 {
@@ -65,6 +62,7 @@ _Noreturn void hw_reset(void)
 	}
 }
 
+#if !WISP_BOOT_OBSERVE
 /* Boot ROM helper (hal_ambiq am_hal_bootrom_helper.c: nv_program_main2 at 0x0200FF20). */
 typedef int (*nv_program_main2_t)(uint32_t key, uint32_t program, uint32_t src, uint32_t word_off,
 				  uint32_t words);
@@ -96,6 +94,7 @@ int hw_flag_set_install(void)
 	}
 	return 0;
 }
+#endif /* !WISP_BOOT_OBSERVE */
 
 _Noreturn void hw_jump(uint32_t vt)
 {

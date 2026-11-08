@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
-"""Unit tests for the post-build gates (scripts/check_image.py, scripts/check_rule8.py) on
-synthetic inputs. Run by scripts/test.sh."""
+"""Unit tests for the post-build gates (scripts/check_image.py, scripts/check_rule8.py,
+scripts/check_no_mram_write.py, scripts/check_native.py) on synthetic inputs. Run by
+scripts/test.sh."""
 
 import json
 import struct
@@ -11,7 +12,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import check_image as ci  # noqa: E402
+import check_native as cn  # noqa: E402
+import check_no_mram_write as nm  # noqa: E402
 import check_rule8 as r8  # noqa: E402
+import pmic_baseline as pb  # noqa: E402
 import wisp_layout as L  # noqa: E402
 
 
@@ -205,6 +209,113 @@ class CheckRule8(unittest.TestCase):
         sig = bytes(range(64))
         self.assertEqual(r8.check_bytes(b"\0" * 256, [("x", sig)]), [])
         self.assertTrue(r8.check_bytes(b"\0" * 100 + sig + b"\0", [("x", sig)]))
+
+
+
+class CheckAppPart(unittest.TestCase):
+    """--part app: the Wisp app at 0x448000, its SP and RAM below Wisp Boot's (rung4.md G6)."""
+
+    def test_app_base(self):
+        app = image(sp=0x2009_2c18, reset=0x0044_8a69)
+        self.assertEqual(ci.check_vectors(L.WISP_MAIN_BASE, app, L.WISP_MAIN_BASE, L.WISP_BOOT_RAM_BASE), [])
+        self.assertTrue(ci.check_vectors(L.APP_LOAD_ADDR, app, L.WISP_MAIN_BASE, L.WISP_BOOT_RAM_BASE))
+
+    def test_app_sp_in_boot_ram(self):
+        app = image(sp=0x2037_8000, reset=0x0044_8101)
+        self.assertTrue(ci.check_vectors(L.WISP_MAIN_BASE, app, L.WISP_MAIN_BASE, L.WISP_BOOT_RAM_BASE))
+
+    def test_ram_sections(self):
+        self.assertEqual(ci.check_ram([("bss", 0x2008_0000, 0x1000), ("nocache", 0x2020_0000, 0x17_0000)]), [])
+        self.assertTrue(ci.check_ram([("noinit", 0x2036_ff00, 0x200)]))
+        self.assertEqual(ci.check_ram([("text", 0x0044_8000, 0x8000)]), [])
+
+
+class CheckNative(unittest.TestCase):
+    def test_combined(self):
+        boot = image(sp=0x2038_0000, reset=0x0043_8475, size=0x2000)
+        app = image(sp=0x2009_0000, reset=0x0044_9001, size=0x3000)
+        img = boot + b"\xff" * (0x10000 - len(boot)) + app
+        self.assertEqual(cn.check(img, boot, app), [])
+        self.assertTrue(cn.check(img[:-1], boot, app))                       # app cut
+        self.assertTrue(cn.check(boot + b"\0" * (0x10000 - len(boot)) + app, boot, app))  # padding
+        bad_app = image(sp=0x2037_0008, reset=0x0044_9001, size=0x3000)
+        self.assertTrue(cn.check(boot + b"\xff" * (0x10000 - len(boot)) + bad_app, boot, bad_app))
+
+
+class PmicBaseline(unittest.TestCase):
+    def test_native0_writes(self):
+        writes = [bytes.fromhex(h) for h in ("070401", "07050a", "0708003c00", "070301", "070001", "050001", "0510")]
+        self.assertEqual(pb.check(writes), [])
+
+    def test_differences(self):
+        self.assertTrue(pb.check([bytes.fromhex("040808")]))     # BUCK1 to 1.8 V: never
+        self.assertTrue(pb.check([bytes.fromhex("070501")]))     # the watchdog's mode changed
+        self.assertTrue(pb.check([bytes.fromhex("070101")]))     # the watchdog stopped
+        self.assertTrue(pb.check([bytes.fromhex("0B0001")]))     # hibernate
+        self.assertTrue(pb.check([bytes.fromhex("030ACF01")]))   # discharge limit
+        self.assertEqual(pb.check([bytes.fromhex("0408010215")]), [])  # BUCK1 norm/ret, BUCK2: stock's
+        self.assertEqual(len(pb.check([bytes.fromhex("0408010316")])), 2)
+
+    def test_log(self):
+        text = "12 ms write 07 04 01\n7 6B W 040801\nnoise\n"
+        self.assertEqual(pb.parse_log(text), [bytes.fromhex("070401"), bytes.fromhex("040801")])
+
+
+class CheckNativeFacts(unittest.TestCase):
+    def test_app_config(self):
+        good = "CONFIG_WISP_HW_IMAGE=y\nCONFIG_WISP_IMAGE_KIND=0\nCONFIG_DT_HAS_AMBIQ_UART_ENABLED=y\n"
+        self.assertEqual(cn.check_app_config(good), [])
+        self.assertTrue(cn.check_app_config("CONFIG_WISP_IMAGE_KIND=0\n"))
+        self.assertTrue(cn.check_app_config(good.replace("=0", "=255")))
+        self.assertTrue(cn.check_app_config(good + "CONFIG_DT_HAS_NORDIC_NPM1300_CHARGER_ENABLED=y\n"))
+        self.assertTrue(cn.check_app_config(good + "CONFIG_DT_HAS_AMBIQ_MSPI_CONTROLLER_ENABLED=y\n"))
+
+    def test_boot_symbols(self):
+        self.assertEqual(cn.check_boot_symbols(["nor_read", "lfs_file_read", "wisp_boot_main"]), [])
+        for bad in ("nor_prog", "lfs_file_write", "hw_flag_set_install", "rescue_copy.constprop.0"):
+            self.assertTrue(cn.check_boot_symbols([bad]), bad)
+
+
+class CheckNoMramWrite(unittest.TestCase):
+    def test_symbols(self):
+        self.assertEqual(nm.check_symbols(["main", "am_hal_iom_enable", "wisp_boot_link_confirm"]), [])
+        for bad in ("am_hal_mram_main_program", "nv_program_main2", "g_am_hal_bootrom_helper",
+                    "am_hal_bootrom_helper_init", "am_hal_info0_program", "otp_program_info_area",
+                    "flash_ambiq_write", "hw_flag_set_install", "am_hal_mram_main_fill.constprop.0"):
+            self.assertTrue(nm.check_symbols([bad]), bad)
+
+    def test_map(self):
+        text = ("Discarded input sections\n .text 0x0 0x40 lib.a(am_hal_mram.c.obj)\n"
+                "Linker script and memory map\n"
+                " .debug_info   0x00000000  0x100 lib.a(am_hal_mram.c.obj)\n"
+                " .text.am_hal_info1_read\n                0x0045ba44       0x1a lib.a(am_hal_info.c.obj)\n")
+        self.assertEqual(nm.check_map(text), [])
+        bad = text + " .text.am_hal_mram_main_program\n                0x00450000       0x80 lib.a(am_hal_mram.c.obj)\n"
+        self.assertTrue(nm.check_map(bad))
+        bad = text + " .rodata.g_am_hal_bootrom_helper\n                0x00460000       0x20 lib.a(am_hal_bootrom_helper.c.obj)\n"
+        self.assertTrue(nm.check_map(bad))
+
+    def test_config(self):
+        self.assertEqual(nm.check_config("CONFIG_DT_HAS_AMBIQ_FLASH_CONTROLLER_ENABLED=y\nCONFIG_FLASH_BASE_ADDRESS=0x410000\n"), [])
+        self.assertTrue(nm.check_config("CONFIG_FLASH_AMBIQ=y\n"))
+        self.assertTrue(nm.check_config("CONFIG_SOC_FLASH_AMBIQ=y\n"))
+        self.assertTrue(nm.check_config("CONFIG_AMBIQ_MRAM_WRITE=y\n"))
+
+    def test_bytes(self):
+        self.assertEqual(nm.check_bytes(bytes(64)), [])
+        for v in (0x12344321, 0x0200FF21, 0x0200FF0D, 0x0200FF54):
+            self.assertTrue(nm.check_bytes(b"\x01\x02\x03" + struct.pack("<I", v) + b"\0"), hex(v))
+        self.assertEqual(nm.check_bytes(struct.pack("<I", 0x12344321), skip=1), [])
+
+    def test_code(self):
+        good = ("00449000 <f>:\n  449000:\tmovw\tr3, #17185\t@ 0x4321\n  449004:\tmovt\tr3, #4661\t@ 0x1235\n")
+        self.assertEqual(nm.check_code(good), [])
+        bad = ("00449000 <f>:\n  449000:\tmovw\tr3, #17185\t@ 0x4321\n  449004:\tmovt\tr3, #4660\t@ 0x1234\n")
+        self.assertTrue(nm.check_code(bad))
+        helper = ("00449000 <f>:\n  449000:\tmovw\tip, #65313\n  449004:\tmovt\tip, #512\n")
+        self.assertTrue(nm.check_code(helper))
+        split = ("00449000 <f>:\n  449000:\tmovw\tr3, #17185\n00449010 <g>:\n  449010:\tmovt\tr3, #4660\n")
+        self.assertEqual(nm.check_code(split), [])
 
 
 if __name__ == "__main__":

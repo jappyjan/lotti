@@ -27,6 +27,24 @@
 		};
 	};
 
+	/* Case link (UART2): GPIO42 TX, GPIO44 RX (stock pin table, hardware.md). */
+	uart2_default: uart2_default {
+		group1 {
+			pinmux = <UART2TX_P42>;
+		};
+
+		group2 {
+			pinmux = <UART2RX_P44>;
+			input-enable;
+		};
+	};
+
+	uart2_sleep: uart2_sleep {
+		group1 {
+			pinmux = <GPIO_P42>, <GPIO_P44>;
+		};
+	};
+
 	/* EM9305 HCI SPI (IOM6). TODO(G2 pins): the evb's pads, see the bt_hci node. */
 	spi6_default: spi6_default {
 		group1 {

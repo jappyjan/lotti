@@ -6,6 +6,6 @@ CONFIG_SERIAL=y
 CONFIG_ARM_MPU=y
 CONFIG_HW_STACK_PROTECTION=y
 
-# Link at the code partition (0x438000, where the Even bootloader hands off), not at the
-# start of flash0 (0x410000, the Even bootloader itself).
+# Link at the code partition (0x448000, the Wisp app behind Wisp Boot), not at the start of
+# flash0 (0x410000, the Even bootloader itself).
 CONFIG_USE_DT_CODE_PARTITION=y

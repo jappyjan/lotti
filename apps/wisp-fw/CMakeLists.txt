@@ -10,6 +10,25 @@ if(NOT DEFINED BOARD)
   set(BOARD wisp_g2)
 endif()
 
+# --- Panel: no default (docs/wisp/rung4.md G11) ---------------------------------------------
+# Which panel is fitted follows the temple's hw_version strap (5 = JBD4010, 6 = A6N-G), and the
+# two need different rails. Every wisp_g2 build names it: WISP_PANEL=jbd4010 or a6n-g adds
+# boards/panels/<panel>.overlay (which also sets BUCK1's voltage); WISP_PANEL=none is for image
+# overlays that describe the panel themselves (images/native-*/).
+if(NOT DEFINED WISP_PANEL AND DEFINED ENV{WISP_PANEL})
+  set(WISP_PANEL $ENV{WISP_PANEL})
+endif()
+if(BOARD MATCHES "^wisp_g2")
+  if(NOT "${WISP_PANEL}" MATCHES "^(jbd4010|a6n-g|none)$")
+    message(FATAL_ERROR "wisp_g2 has no default panel (rung4.md G11): set WISP_PANEL=jbd4010 or "
+            "a6n-g (boards/panels/), or none when an image overlay names it (got '${WISP_PANEL}')")
+  endif()
+  if(NOT WISP_PANEL STREQUAL "none")
+    set(EXTRA_DTC_OVERLAY_FILE
+        "${CMAKE_CURRENT_LIST_DIR}/boards/panels/${WISP_PANEL}.overlay;${EXTRA_DTC_OVERLAY_FILE}")
+  endif()
+endif()
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(wisp_fw C)
 
@@ -20,6 +39,9 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/rule8.cmake)
 # Wisp's other patches to the fork (I2C header byte order), checked after rule 8 so a rule 8
 # failure is reported first.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/patches.cmake)
+# Hardware images (images/native-*/): no panel power and no PMIC configuration writes until
+# W21's snapshot, no test-only switches (rung4.md G11, G12).
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/hwimage.cmake)
 
 # --- App ----------------------------------------------------------------------------------
 execute_process(
@@ -34,7 +56,15 @@ endif()
 target_sources(app PRIVATE src/main.c src/display/wisp_flush.c)
 target_sources_ifdef(CONFIG_WISP_NATIVE_HAL app PRIVATE src/hal/native/power.c
   src/hal/native/display.c src/hal/native/input.c src/hal/native/sensors.c)
-target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers src/link)
+target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers src/link
+  src/case)
+if(CONFIG_BOARD_WISP_G2)
+  # Wisp Boot's services table and status block (src/boot/); the app links none of its code.
+  target_sources(app PRIVATE src/boot_link.c)
+  target_include_directories(app PRIVATE src/boot src/boot/stage)
+endif()
+target_sources_ifdef(CONFIG_WISP_CASE_UART app PRIVATE src/case/wisp_case.c
+  src/case/wisp_case_proto.c)
 if(CONFIG_WISP_BLE)
   # The Wisp GATT service (Zephyr, transport only) and the transport adapter (portable C,
   # host-tested in tests/link/). Both need wisp-core.
@@ -52,8 +82,8 @@ if(CONFIG_NEWLIB_LIBC AND CONFIG_MBEDTLS)
   target_sources(app PRIVATE src/compat/newlib_fini.c)
 endif()
 
-# Wisp Boot (src/boot/) is a design stub in M0: host-tested by tests/boot, not linked into
-# the image entry. Rung 3 wires it in as the first stage at 0x438000.
+# Wisp Boot (src/boot/) is built on its own (scripts/build_boot.sh) and put in front of this app
+# by scripts/build_native.sh: the app is linked at 0x448000, Wisp Boot owns [0x438000, 0x448000).
 
 # --- Wisp core hook -----------------------------------------------------------------------
 # packages/wisp-core (portable C, owned by its own thread) links in here once it exposes a
@@ -86,11 +116,20 @@ if(WISP_RULE8_CANARY)
     ${ZEPHYR_HAL_AMBIQ_MODULE_DIR}/components/bluetooth)
 endif()
 
+# --- Test-only: MRAM write canary --------------------------------------------------------
+# Links hal_ambiq's MRAM program path so wisp-fw:test can prove check_no_mram_write.py (rung4.md
+# G13) catches it. Never set outside scripts/test.sh.
+option(WISP_MRAM_CANARY "TEST ONLY: link am_hal_mram_main_program to exercise check_no_mram_write.py" OFF)
+if(WISP_MRAM_CANARY)
+  target_sources(app PRIVATE tests/mram/canary.c)
+endif()
+
 # --- Post-build gates ---------------------------------------------------------------------
-# Rule 1+3 (image shape) and rule 8 (no EM9305 image / update path), run after every link as
-# part of the default target. Either failing fails the build, and the stamp is not written, so
+# Rule 1+3 (image shape: the app at 0x448000, its RAM below Wisp Boot's), rule 8 (no EM9305
+# image / update path) and G13 (no MRAM write path), run after every link as part of the
+# default target. Any one failing fails the build, and the stamp is not written, so
 # they rerun on the next build (zephyr.elf itself stays in the build dir for inspection; the
-# nx build target only reports success when both pass).
+# nx build target only reports success when all pass).
 if(NOT CONFIG_BOARD_WISP_G2)
   # native_sim (tests/ble/) is a Linux process: no MRAM image, no EM9305 driver.
   return()
@@ -103,6 +142,7 @@ add_custom_command(
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/scripts/check_image.py
           --elf ${_wisp_zdir}/${KERNEL_ELF_NAME}
           --bin ${_wisp_zdir}/${KERNEL_BIN_NAME}
+          --part app
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/scripts/check_rule8.py
           --elf ${_wisp_zdir}/${KERNEL_ELF_NAME}
           --bin ${_wisp_zdir}/${KERNEL_BIN_NAME}
@@ -113,13 +153,21 @@ add_custom_command(
           --zephyr ${ZEPHYR_BASE}
           --nm ${CMAKE_NM}
           --objdump ${CMAKE_OBJDUMP}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/scripts/check_no_mram_write.py
+          --elf ${_wisp_zdir}/${KERNEL_ELF_NAME}
+          --bin ${_wisp_zdir}/${KERNEL_BIN_NAME}
+          --map ${_wisp_zdir}/${KERNEL_MAP_NAME}
+          --config ${_wisp_zdir}/.config
+          --nm ${CMAKE_NM}
+          --objdump ${CMAKE_OBJDUMP}
   COMMAND ${CMAKE_COMMAND} -E touch ${_wisp_stamp}
   DEPENDS ${logical_target_for_zephyr_elf}
           ${_wisp_zdir}/${KERNEL_ELF_NAME}
           ${_wisp_zdir}/${KERNEL_BIN_NAME}
           ${CMAKE_CURRENT_LIST_DIR}/scripts/check_image.py
           ${CMAKE_CURRENT_LIST_DIR}/scripts/check_rule8.py
+          ${CMAKE_CURRENT_LIST_DIR}/scripts/check_no_mram_write.py
           ${CMAKE_CURRENT_LIST_DIR}/scripts/wisp_layout.py
-  COMMENT "Wisp post-build gates: image layout (rules 1, 3) and EM9305 (rule 8)"
+  COMMENT "Wisp post-build gates: image layout (rules 1, 3), EM9305 (rule 8), no MRAM write (G13)"
   VERBATIM)
 add_custom_target(wisp_checks ALL DEPENDS ${_wisp_stamp})

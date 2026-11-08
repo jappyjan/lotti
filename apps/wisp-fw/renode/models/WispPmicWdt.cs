@@ -29,6 +29,8 @@
 // and FIFOPTR's FIFO1SIZ counts the bytes of the last READ (whole words, as the HAL pops them)
 // down to 0 as FIFOPOP is read, so a program can see an empty or a filled receive FIFO.
 //
+// SUBMODCTRL reads its submodule types as on silicon (WispIomTypes.cs explains why).
+//
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
 // PmicLog (one line per PMIC write).
 using System;
@@ -94,8 +96,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             rxBytes = 0;
         }
 
-        public byte ReadByte(long offset) { return iom.ReadByte(offset); }
-        public ushort ReadWord(long offset) { return iom.ReadWord(offset); }
+        // Byte and halfword reads go through ReadDoubleWord, so FIFOPTR, FIFOPOP and SUBMODCTRL
+        // behave the same at every width.
+        public byte ReadByte(long offset) { return (byte)(ReadDoubleWord(offset & ~3L) >> (int)(8 * (offset & 3))); }
+        public ushort ReadWord(long offset) { return (ushort)(ReadDoubleWord(offset & ~3L) >> (int)(8 * (offset & 2))); }
         public uint ReadDoubleWord(long offset)
         {
             switch(offset & 0xFFF)
@@ -105,6 +109,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
             case 0x108: // FIFOPOP: one word out of the receive FIFO
                 rxBytes = rxBytes >= 4 ? rxBytes - 4 : 0;
                 return iom.ReadDoubleWord(offset);
+            case 0x11C: // SUBMODCTRL: the submodule types, SMOD0 = SPI (0), SMOD1 = I2C (1)
+                return (iom.ReadDoubleWord(offset) & ~0xEEu) | (1u << 5);
             }
             return iom.ReadDoubleWord(offset);
         }

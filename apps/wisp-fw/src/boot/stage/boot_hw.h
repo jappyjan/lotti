@@ -39,6 +39,11 @@
 #define NVIC_ICER(n) REG(0xE000E180u + 4u * (n))
 #define NVIC_ICPR(n) REG(0xE000E280u + 4u * (n))
 
+/* UART1 debug log: on by default (rung 3 reads it); hardware images build with 0. */
+#ifndef WISP_BOOT_LOG
+#define WISP_BOOT_LOG 1
+#endif
+
 void hw_wdt_arm(void);
 void hw_wdt_feed(void);
 void hw_log(const char *s);
@@ -46,7 +51,12 @@ void hw_log_hex(const char *label, uint32_t v);
 _Noreturn void hw_reset(void);
 /* Writes the documented update-flag record {0x55555555, ~0, ~0, ~0} at 0x7FE000 through the
  * boot ROM and reads it back. The only MRAM write in Wisp Boot. Returns 0 on success. */
+#ifndef WISP_BOOT_OBSERVE
+#define WISP_BOOT_OBSERVE 0
+#endif
+#if !WISP_BOOT_OBSERVE /* the observe-only build has no MRAM write code at all */
 int hw_flag_set_install(void);
+#endif
 _Noreturn void hw_jump(uint32_t vector_table);
 
 #endif /* WISP_BOOT_HW_H */

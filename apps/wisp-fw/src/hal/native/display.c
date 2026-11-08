@@ -4,15 +4,21 @@
  * Native display HAL: wisp-core's composed strips -> the panel's frame buffer (wisp_flush) ->
  * dirty rows to the panel at frame end (uled_write_rows). The frame buffer is the panel
  * driver's own (uncached, DMA-able), so there is exactly one copy of the frame.
+ *
+ * Without a panel node (native-0: the panel stays unpowered, rung4.md G11) every call returns
+ * WISP_HAL_ENOTSUP and nothing touches MSPI0, BUCK1, LDSW2 or the panel GPIOs (native-0 also
+ * disables MSPI0 itself).
  */
 #include <zephyr/device.h>
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device_runtime.h>
 
-#include "uled.h"
 #include "wisp_flush.h"
 #include "wisp_hal.h"
 #include "wisp_native.h"
+
+#if defined(CONFIG_WISP_ULED)
+#include "uled.h"
 
 static const struct device *const panel = DEVICE_DT_GET(DT_NODELABEL(uled));
 static struct wisp_flush flush;
@@ -136,3 +142,69 @@ const struct wisp_flush *wisp_native_flush(void)
 {
 	return &flush;
 }
+
+#else /* !CONFIG_WISP_ULED: no panel in this image */
+
+static struct wisp_flush flush;
+
+int wisp_native_display_init(void)
+{
+	return WISP_HAL_ENOTSUP;
+}
+
+int wisp_hal_display_info(struct wisp_display_info *out)
+{
+	out->width = WISP_DISPLAY_WIDTH;
+	out->height = WISP_DISPLAY_HEIGHT;
+	out->bpp = 4;
+	out->has_gpu = false;
+	return 0;
+}
+
+int wisp_hal_display_power(bool on)
+{
+	ARG_UNUSED(on);
+	return WISP_HAL_ENOTSUP;
+}
+
+int wisp_hal_display_brightness(uint8_t level)
+{
+	ARG_UNUSED(level);
+	return WISP_HAL_ENOTSUP;
+}
+
+int wisp_hal_display_write(uint16_t y0, uint16_t rows, const uint8_t *buf, wisp_display_done_cb done,
+			   void *ctx)
+{
+	ARG_UNUSED(y0);
+	ARG_UNUSED(rows);
+	ARG_UNUSED(buf);
+	ARG_UNUSED(done);
+	ARG_UNUSED(ctx);
+	return WISP_HAL_ENOTSUP; /* as the real one on an error: done is not called */
+}
+
+void wisp_native_present(void *ctx, uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint8_t *px,
+			 size_t stride)
+{
+	ARG_UNUSED(ctx);
+	ARG_UNUSED(x);
+	ARG_UNUSED(y);
+	ARG_UNUSED(w);
+	ARG_UNUSED(h);
+	ARG_UNUSED(px);
+	ARG_UNUSED(stride);
+}
+
+void wisp_native_frame_done(void *ctx, uint32_t frame)
+{
+	ARG_UNUSED(ctx);
+	ARG_UNUSED(frame);
+}
+
+const struct wisp_flush *wisp_native_flush(void)
+{
+	return &flush;
+}
+
+#endif /* CONFIG_WISP_ULED */

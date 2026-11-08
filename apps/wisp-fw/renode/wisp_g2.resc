@@ -1,16 +1,18 @@
 :name: wisp_g2 — Wisp native skeleton on the g2emu Apollo510B platform
-:description: Loads the flat Wisp image (zephyr.bin, exactly what wisp-ota would install) at
-:description: 0x438000 and starts it the way the Even bootloader hands off: VTOR = 0x438000,
-:description: MSP = vector[0], PC = vector[1]. The ELF only provides symbols. UART1 output goes to
+:description: Loads the Wisp app (zephyr.bin, linked at 0x448000 behind Wisp Boot) at $base and
+:description: starts it the way Wisp Boot hands off: VTOR = $base, MSP = vector[0], PC = vector[1].
+:description: No Wisp Boot and no bootloader here (rung 3 and W18 have them). The ELF only provides
+:description: symbols. UART1 output goes to
 :description: $G2_CAPTURE_OUT/uart1.txt (g2emu's UART1 model). Run by scripts/sim.sh.
 :description:
 :description: Variables (set before including): $bin, $elf (required), $sp, $pc (from the vector
 :description: table; scripts/sim.sh reads them from zephyr.bin), $mips (default 250), $variant
-:description: (panel model: 0 JBD4010, default; 1 A6N-G). The driver test saves `panel SaveLog`,
+:description: (panel model: 0 JBD4010, default; 1 A6N-G), $base (default 0x448000). The driver test saves `panel SaveLog`,
 :description: `panel SaveFrame` and `iom SaveLog` after the run (scripts/drivers_test.sh).
 
 $mips ?= 250
 $variant ?= 0
+$base ?= 0x448000
 
 include $ORIGIN/../third_party/g2emu/cs/G2ClkgenRtc.cs
 include $ORIGIN/../third_party/g2emu/cs/G2Pwrctrl.cs
@@ -20,13 +22,13 @@ include $ORIGIN/models/WispMspiPanel.cs
 
 mach create "wisp_g2"
 machine LoadPlatformDescription $ORIGIN/wisp_g2.repl
-sysbus LoadBinary $bin 0x438000
+sysbus LoadBinary $bin $base
 sysbus LoadSymbolsFrom $elf
 
 panel Variant $variant
 
 cpu PerformanceInMips $mips
-cpu VectorTableOffset 0x438000
+cpu VectorTableOffset $base
 cpu SP $sp
 cpu PC $pc
 logLevel 3
