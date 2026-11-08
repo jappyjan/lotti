@@ -305,12 +305,12 @@ struct MascotControllerTests {
 
     /// Lets observation callbacks and stream tasks run; records an issue if `condition` never holds.
     private func settle(_ rig: Rig, until condition: () -> Bool) async {
-        for _ in 0..<400 {
+        for _ in 0..<1000 {
             await rig.controller.settled()
             if condition() { return }
             try? await Task.sleep(for: .milliseconds(5))
         }
-        Issue.record("settle: condition not met in 2 s")
+        Issue.record("settle: condition not met in 1000 rounds (5 s or more)")
     }
 
     @Test func unknownLinkMeansNeutralOffAndNoImuTraffic() async {

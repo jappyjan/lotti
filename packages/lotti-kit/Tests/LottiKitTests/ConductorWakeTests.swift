@@ -240,6 +240,7 @@ struct ConductorWakeTests {
         #expect(conductor.mode == .off)
         hush(10)
         try await waitUntilHeard()  // the quiet that would have ended the command was read
+        try await Task.sleep(for: .milliseconds(100))  // and time for a wrongly kept listen to ask
         #expect(brain.asked.isEmpty)
         #expect(conductor.mode == .off)
         // The shared mic stays on and the next "Hey Lotti" works.
@@ -354,8 +355,9 @@ struct ConductorWakeTests {
         try await eventually { link.microphoneAttempts == 1 }  // the first start is under way
         press(.longPress)  // again, while the first start is (normally) still pending
         try await eventually { link.microphoneOn }
-        // The second hold has its subscription (the first, cancelled one never sets the source).
-        try await eventually { conductor.microphoneSource == "glasses" }
+        // The second hold has its subscription. (The first hold's is always cleared when it lets
+        // go, so this can't be left over from it.)
+        try await eventually { conductor.holdSubscription != nil }
         press(.longPressEnd)
         try await eventually { !link.microphoneOn }
     }
@@ -440,7 +442,7 @@ struct ConductorWakeTests {
         try await eventually { conductor.wakeState == .listening }
         #expect(link.microphoneStarts == 1)
         // No packets: after 150 ms the mic is switched off and on again.
-        try await eventually(timeout: 3) { link.microphoneStarts >= 2 }
+        try await eventually { link.microphoneStarts >= 2 }
         #expect(link.microphoneStops >= 1)
     }
 

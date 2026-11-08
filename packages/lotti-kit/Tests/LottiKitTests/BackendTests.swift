@@ -32,7 +32,7 @@ struct BackendClientTests {
         backend.refuse(2)
         backend.drop()
         try await eventually { !client.isReachable }
-        try await eventually(timeout: 3) { client.isReachable && backend.connectCount == 4 }
+        try await eventually { client.isReachable && backend.connectCount == 4 }
     }
 
     @Test func reconnectNowSkipsTheWait() async throws {

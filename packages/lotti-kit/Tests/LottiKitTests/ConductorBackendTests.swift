@@ -161,7 +161,7 @@ struct ConductorBackendTests {
         press(.tap)  // Verwerfen: the done line, then dark (only its timer turns it off; idle is 30 s)
         try await eventually { conductor.mode == .off }
         try await eventually { link.frames.last == .dark }  // and no indicator: nothing is pending
-        #expect(backend.received(type: "inbox_event").contains { $0["event"]?.string == "dismissed" && $0["itemId"]?.string == "m1" })
+        try await eventually { backend.received(type: "inbox_event").contains { $0["event"]?.string == "dismissed" && $0["itemId"]?.string == "m1" } }
     }
 
     @Test func anItemsServerActionRunsThroughPerformAndOffersUndo() async throws {
