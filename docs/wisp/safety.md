@@ -34,11 +34,13 @@ Each rung must pass before the next one may start. A rung is "passed" when its e
 
 Rung 4 stays closed until one such recovery path is proven on real hardware. The options, their gaps and the recommended first proof are in [recovery.md](recovery.md). That is the price of not bricking; there is no clever way around it for the first native flash.
 
+**2026-11-08:** that path is now proven on both temples (W18 F2, [hardware log](#hardware-log)). The plan for rung 4 is in [rung4.md](rung4.md): the route, the first image, the steps and the gaps. It is **proposed, not approved**. It asks Jan for changes to rules 1, 6 and 11, to the rung-4 row above and to Wisp Boot after W17 (decisions R4-1 to R4-4 and R4-7). Until he approves them, the rules on this page apply unchanged.
+
 ## Fallback-to-stock (designed into native mode)
 
 The Even bootloader installs whatever valid main image is staged in `ota/s200_firmware_ota.bin` when word 0 of the flag is `0x55555555` ([hardware.md](hardware.md#what-the-22610-bootloader-does-step-by-step-rung-3)). Wisp uses that as its parachute:
 
-1. Before the first native flash, the phone stores a pristine stock main image on the NOR littlefs as `wisp/rescue.bin` (written through the stock OTA file path while still on stock, or by Wisp host mode) and **verifies it on the glasses** (size, preamble, CRC) — see rule 11.
+1. Before the first native flash, the phone stores a pristine stock main image on the NOR littlefs as `wisp/rescue.bin` (written through the stock OTA file path while still on stock, or by Wisp host mode; neither exists: 2.4.0.24's OTA receiver refuses any path but the component type's own, and host mode was dropped. [rung4.md](rung4.md#5-rule-11-rescuebin) proposes writing it through Wisp itself) and **verifies it on the glasses** (size, preamble, CRC) — see rule 11.
 2. **Wisp Boot**, a tiny stage at `0x438000` (the image's entry), runs before anything else: it counts boot attempts in a record on the NOR (`wisp/boot.rec`), and if the app failed to confirm 3 boots in a row (or the touchpad rescue hold is seen at boot), it copies `wisp/rescue.bin` to `ota/s200_firmware_ota.bin`, verifies the copy's CRC, writes the flag record and resets. The Even bootloader then installs stock. A rescue interrupted by a power cut resumes on the next boot.
 3. The native app confirms a boot only after BLE is advertising and a phone session completed `HELLO`. A watchdog, armed and locked by Wisp Boot, covers hangs.
 
