@@ -290,7 +290,7 @@ The first native image (docs/wisp/rung4.md §2, W22): `pnpm nx run wisp-fw:build
 What the app does differently on native-0:
 
 - **Watchdogs** (`src/hal/native/power.c`): a thread at the highest priority, started at `POST_KERNEL` init, restarts Wisp Boot's locked WDT (raw `RSTRT`, also once at `PRE_KERNEL_1`) and kicks the nPM1300's every second, after arming it with stock's own writes (`07 05 0A`, `07 08 00 3C 00`, `07 03 01`, `07 00 01`).
-- **PMIC observed, not configured** (G12): none of Zephyr's nPM1300 drivers run (their init writes SHIP/LPRESET, the GPIO mode, rails and the whole charger configuration from our DTS, unchecked against stock until W21). The HAL's only PMIC writes are the watchdog's and the ADC's VBAT task (`05 00 01`); charger and VBUS status are reads. Renode asserts that allowlist.
+- **PMIC observed, not configured** (G12): none of Zephyr's nPM1300 drivers run (their init writes SHIP/LPRESET, the GPIO mode, rails and the whole charger configuration from our DTS, unchecked against stock until W21). The HAL's only PMIC writes are the watchdog's and the ADC's VBAT task (`05 00 01`); charger and VBUS status are reads. Renode asserts that allowlist and that no configuration register leaves W21's snapshot (`images/pmic-baseline-w21.json`, `scripts/pmic_baseline.py`); the driver test prints where the development build's drivers would.
 - **Panel off** (G11): the panel node and MSPI0 are disabled; no MSPI0, BUCK1, LDSW2 or panel GPIO is touched; display calls return `ENOTSUP`.
 - **Case UART** (`src/case/`, [case-uart.md](../../docs/wisp/case-uart.md)): IDENT, READ (its status, Wisp Boot's block) and RESET in the relay's frame shapes, stock's `0x24` query; nothing unasked; the case app's `0x13` poll unanswered (G10b).
 - **confirm()** after a BLE `HELLO` (interrupts locked); the services table is checked before use.
@@ -299,6 +299,17 @@ What the app does differently on native-0:
 
 
 **What runs.** The unmodified stock bootloader (2.4.0.24 by default, the version on Jan's temples; `WISP_STOCK_VERSION` picks another cached bundle) (`ota/s200_bootloader.bin` from the pinned bundle in `.wisp-cache/`, SHA-256 checked, never committed) at `0x410000`, started the way the SBL hands off. In front of nothing but Renode peripheral models: no code patches, no hooks in Even's code. The NOR is a 32 MiB file with a littlefs image built on the host (`tests/boot/tools/wisp_lfs.c`, the same littlefs source as Wisp Boot) holding `ota/s200_firmware_ota.bin` (the Wisp image as `wisp-ota pack-main` packs it, so wisp-ota's guards run on every test image) and `wisp/rescue.bin` (the stock main payload). Start state = "Wisp was installed through the stock OTA path": Wisp in MRAM, flag `0x55555555` still set (the bootloader never clears it, see hardware.md), so the bootloader reinstalls Wisp on every boot until the rescue replaces the staging file.
+
+**Since W22 (rung4.md):** two suites on two bootloaders (safety.md rule 12). `--bootloader stock` is the bundle's own 2.4.0.24; `--bootloader patched` is drdaeman's `87e2d4e0…` on 2.3.2.14 (built from the cache by `apps/wisp-recovery`), what Jan's temples run since W18; it is driven in 0.1 s steps (a longer `RunFor` through the loader's boot window can stall Renode) and is about 30× slower in wall time. `--suite fallback` is the Wisp Boot that rescues: the cases below plus the real app (native-0's) behind it, `native-app-runs` (boots, feeds both watchdogs, answers the case UART) and `native-app-unconfirmed` (never confirms without BLE: three power cuts while it runs, then the rescue ends in stock). `--suite observe` is native-0's observe-only Wisp Boot with its own expected outcome (OBSERVE: the app gets control every boot; Wisp Boot's NOR commands are RDID, RDSR and reads only, from the NOR model's code window; no MRAM write at all; its status block is checked field by field): `obs-native-0` (the real image as install-wisp leaves it, 4 boots, PMIC writes against W21's snapshot, the case-UART queries), `obs-would-rescue` (3 unconfirmed boots recorded and a valid `rescue.bin`: it reports "would rescue" and runs the app), `obs-crash-reset`, `obs-no-feed`, `obs-erased` (resets at once, every boot) and `obs-nor-gd` (a GD25LE256H RDID: reported, no filesystem, the app runs). The platform now has the case link on UART2 (`WispCaseLink`) and the PMIC watchdog on IOM7 (`WispPmicWdt`) in every run, and IOM0–6 as `WispIomTypes` (G2Iom with the submodule types the real app's I2C driver checks).
+
+W22 results on t3-worker, 2026-11-08 (`.wisp-cache/rung3/<bootloader>-<sha8>-<suite>/report.md`):
+
+| Suite | Wisp Boot (`wisp_boot.bin` SHA-256) | Stock 2.4.0.24 bootloader (`ecb91896…`) | Patched bootloader (`87e2d4e0…`) |
+| --- | --- | --- | --- |
+| observe (native-0's) | `d793a93e02ba18f7…` (8,256 B, the first 64 KiB of native-0) | **6/6 pass** | **6/6 pass** (`obs-native-0` first failed on a harness race, the stop came before the last boot's app was up; fixed and rerun: pass) |
+| fallback | `5d2a7be1cd514ad3…` (17,824 B; status block, services v2) | **28/28 pass**: reference, the 25 fault and power-cut cases, `native-app-runs`, `native-app-unconfirmed` (the two real-app cases rerun with the final app: pass) | **reference + `native-app-runs` + `native-app-unconfirmed` pass**; the 25 fault and power-cut cases were not run on this bootloader (about 30 min wall each here). The fallback build is not in native-0; its full patched run is due before native-1 is flashed (rule 12) |
+
+Every real-app run writes the PMIC only as W21's snapshot allows (`pmic_baseline.py`: 0 differences), kicks it at most about 1.1 s apart within a boot, and has no Apollo watchdog bite. Wisp Boot's NOR commands in the observe suite: `9f`, `05`, `13` only.
 
 **Models** (`renode/models/`, MIT, written for this rung; register maps from hal_ambiq's CMSIS `apollo510.h`, protocols from AmbiqSuite's HAL):
 
@@ -398,12 +409,12 @@ Before rung 3 can be signed off (see safety.md "Rung 3 status"):
 
 1. Jan reviews the terminal states and rules 11–12 in safety.md.
 2. ~~Repeat `boot-test` with the bootloader version actually installed on the temples~~ done 2026-11-06: 2.4.0.24, 26/26. Still open: which bootloader is really in MRAM (the Even app may install the bundle's bootloader component only on some updates; 2.3.2.14's and 2.4.0.24's DFU code is identical either way), and a NOR model answering as GD25LE256H in case the temples have that part.
-3. Put the real native app (Zephyr, relinked at `0x448000`, feeding the watchdog and calling `confirm()`) behind Wisp Boot instead of the bare-metal fault apps.
+3. ~~Put the real native app behind Wisp Boot~~ done in W22 (native-0, both suites, both bootloaders).
 
 Toward rung 4 (hardware), none of which emulation can answer:
 
 4. Read Wisp Boot's hardware assumptions off the stock image and the glasses: MSPI1 pin mux and clock after the bootloader's hand-off, UART1 state (or build with `WISP_BOOT_LOG=0`), ROM power-up on `MEMPWRSTATUS`, whether the 16 Hz watchdog divider and 8 s window suit the app.
 5. Touchpad rescue hold (PSoC on I2C5 `0x0C`) as a Wisp Boot input.
-6. Zephyr app: link at `0x448000`, feed the watchdog, confirm after BLE + `HELLO`, clear the flag after confirming (stock does that in its OTA init; until then every boot reinstalls the staged image). The board's uncached region already stops below Wisp Boot's RAM; `sram0` and the stack still have to be kept out of it.
+6. ~~Zephyr app: link at `0x448000`, feed the watchdog, confirm after BLE + `HELLO`~~ done in W22; still open: clear the flag after a confirmed new install (R4-3, G17).
 7. ~~Patch the HAL so the EM9305 update/recovery/trim code is compiled out and `apollox_blue.c` forces `skip_fw_update = true`~~ done 2026-11-06 ([third_party/ambiq](third_party/ambiq/README.md)); Bluetooth is on and `check_rule8.py` passes on the image. What remains toward a native boot: [Bluetooth, still missing](#still-missing-before-a-first-native-boot).
 8. Drivers still to write: the GX8002 mic path (UART3 control + I2S0 RX, never its firmware), PDM0, the buzzer (TIMER7 PWM), the magnetometer behind the IMU, the NOR littlefs (storage HAL), the inter-temple UART. A GPIO interrupt model in Renode would let the attention and data-ready paths run there too.

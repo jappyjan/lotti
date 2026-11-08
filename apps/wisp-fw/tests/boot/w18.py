@@ -65,6 +65,8 @@ REPO = APP_DIR.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "apps/wisp-recovery"))
 import case_uart
+sys.path.insert(0, str(APP_DIR / "scripts"))
+import pmic_baseline  # noqa: E402
 from rung3 import FIRMWARE_FILES, STOCK_MARK, Lfs, Renode, build_lfs_tool, evenota_components
 from wisp_w18 import image, native, pins
 from wisp_w18.links import RelayPortLink, SocketLink
@@ -664,7 +666,9 @@ class Harness:
             writes = self.write_log(run)          # the install's ROM writes, before the app runs
             uart = lambda: run.uart()             # noqa: E731
             banner = "*** Wisp native "
-            t += run.run_until(lambda: uart().count(banner) >= 1 and uart().count("wisp: heartbeat", uart().rfind(banner)) >= 3, 40)
+            # 0.1 s steps: a longer RunFor through the patched loader's boot window (no host
+            # attached) can stall Renode, as in rung3.py.
+            t += run.run_until(lambda: uart().count(banner) >= 1 and uart().count("wisp: heartbeat", uart().rfind(banner)) >= 3, 40, step=0.1)
             frames0 = len(run.frames())
 
             def ask(req: bytes) -> bytes:
@@ -677,8 +681,8 @@ class Harness:
                         return bytes.fromhex(fr[before])
                 raise RuntimeError(f"no case-UART reply to {req.hex()}")
             q = {"version": case_uart.decode_version(ask(case_uart.STOCK_VERSION_QUERY))}
-            st_code, data = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
-            q["ident"] = case_uart.decode_ident(data) if st_code == 0 else {"code": st_code}
+            st_code, ident = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
+            q["ident"] = case_uart.decode_ident(ident) if st_code == 0 else {"code": st_code}
             raw = case_uart.read_block(ask, case_uart.BLOCK_STATUS)
             q["status"] = case_uart.decode_status(raw) if raw else {}
             block = case_uart.read_block(ask, case_uart.BLOCK_BOOT) or b""
@@ -689,7 +693,7 @@ class Harness:
             code, _ = case_uart.decode_reply(ask(case_uart.reset_request()), case_uart.OP_RESET)
             banners = uart().count(banner)
             t += run.run_until(lambda: uart().count(banner) > banners and
-                               uart().count("wisp: heartbeat", uart().rfind(banner)) >= 2, 40)
+                               uart().count("wisp: heartbeat", uart().rfind(banner)) >= 2, 40, step=0.1)
             helo_after = sum(f.startswith(HELO_PREFIX) for f in run.frames())
             pm = self.pmic(run)
             mram = run.mram()
@@ -720,6 +724,9 @@ class Harness:
             fails.append(f"PMIC writes outside the allowlist: {bad}")
         if pm["expiries"]:
             fails.append(f"PMIC watchdog expired {pm['expiries']}x")
+        diffs = pmic_baseline.check([bytes.fromhex(w.replace(" ", "")) for w in data_writes])
+        if diffs:
+            fails.append(f"PMIC writes differ from W21's snapshot: {diffs[:4]}")
         # The app's kicks: from its first arming on (before, the loader programs kick), data
         # writes only (2-byte writes are a read's address phase); a gap ending in a boot's first
         # kick (followed at once by the arming) spans the reboot.

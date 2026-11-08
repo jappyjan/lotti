@@ -7,7 +7,8 @@
  * kicks it every second; the PMIC keeps running across an Apollo reset, so the timer is still
  * armed when Wisp starts after stock or after a loader session. Wisp keeps it armed with stock's
  * exact writes (07 05 0A, 07 08 00 3C 00, 07 03 01, 07 00 01, docs/wisp/recovery.md "The temple's
- * watchdog") and kicks it every second (07 04 01), as stock does. Its power cycle is the one reset
+ * watchdog"; W21 read CONFIG 0x0a and target 00 3c 00 on the left temple) and kicks it every second
+ * (07 04 01), as stock does. Its power cycle is the one reset
  * that also clears the Apollo state a software reset keeps, and a hang that stops the kicks ends
  * in the patched loader's boot window after 30.72 s.
  *

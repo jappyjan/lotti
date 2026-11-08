@@ -76,6 +76,10 @@ run_variant() {
 		echo "FAIL: renode $name" >&2
 		exit 1
 	}
+	# Report only (development builds run Zephyr's nPM1300 drivers; hardware images may not,
+	# cmake/hwimage.cmake): where those drivers with this DTS would leave W21's snapshot.
+	echo "PMIC writes vs W21's snapshot (images/pmic-baseline-w21.json), report only:"
+	python3 -I "$APP_DIR/scripts/pmic_baseline.py" --log "$run/iom.log" | sed 's/^/    /' || true
 	local check=(python3 -I "$APP_DIR/tests/drivers/check_drivers.py" --variant "${name%%-*}" --run "$run")
 	if [[ "$expect" == pass ]]; then
 		"${check[@]}"

@@ -15,6 +15,7 @@ import check_image as ci  # noqa: E402
 import check_native as cn  # noqa: E402
 import check_no_mram_write as nm  # noqa: E402
 import check_rule8 as r8  # noqa: E402
+import pmic_baseline as pb  # noqa: E402
 import wisp_layout as L  # noqa: E402
 
 
@@ -239,6 +240,25 @@ class CheckNative(unittest.TestCase):
         self.assertTrue(cn.check(boot + b"\0" * (0x10000 - len(boot)) + app, boot, app))  # padding
         bad_app = image(sp=0x2037_0008, reset=0x0044_9001, size=0x3000)
         self.assertTrue(cn.check(boot + b"\xff" * (0x10000 - len(boot)) + bad_app, boot, bad_app))
+
+
+class PmicBaseline(unittest.TestCase):
+    def test_native0_writes(self):
+        writes = [bytes.fromhex(h) for h in ("070401", "07050a", "0708003c00", "070301", "070001", "050001", "0510")]
+        self.assertEqual(pb.check(writes), [])
+
+    def test_differences(self):
+        self.assertTrue(pb.check([bytes.fromhex("040808")]))     # BUCK1 to 1.8 V: never
+        self.assertTrue(pb.check([bytes.fromhex("070501")]))     # the watchdog's mode changed
+        self.assertTrue(pb.check([bytes.fromhex("070101")]))     # the watchdog stopped
+        self.assertTrue(pb.check([bytes.fromhex("0B0001")]))     # hibernate
+        self.assertTrue(pb.check([bytes.fromhex("030ACF01")]))   # discharge limit
+        self.assertEqual(pb.check([bytes.fromhex("0408010215")]), [])  # BUCK1 norm/ret, BUCK2: stock's
+        self.assertEqual(len(pb.check([bytes.fromhex("0408010316")])), 2)
+
+    def test_log(self):
+        text = "12 ms write 07 04 01\n7 6B W 040801\nnoise\n"
+        self.assertEqual(pb.parse_log(text), [bytes.fromhex("070401"), bytes.fromhex("040801")])
 
 
 class CheckNativeFacts(unittest.TestCase):

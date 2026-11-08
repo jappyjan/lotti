@@ -50,6 +50,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import case_uart  # noqa: E402
+sys.path.insert(0, str(HERE.parents[1] / "scripts"))
+import pmic_baseline  # noqa: E402
 APP_DIR = HERE.parents[1]
 REPO = APP_DIR.parents[1]
 STOCK_VERSION = "2.4.0.24"
@@ -601,8 +603,11 @@ class Harness:
                 runs, handoffs = self.boots(r)
                 # Stop once the last boot's Wisp Boot is done (its status block sealed): it handed
                 # over (or, with no app, it is resetting at once).
+                # With the real app: the app of the last hand-off is up (its own banner, not an
+                # earlier boot's).
                 if runs >= case.min_boots and cuts_done == case.cuts_running and \
-                        (case.app != "real" or app_up) and (handoffs >= runs or case.app == "erased"):
+                        (case.app != "real" or (app_up and text.count(APP_BANNER) >= handoffs)) and \
+                        (handoffs >= runs or case.app == "erased"):
                     break
         if case.query:
             out["query"] = self.query(r, d)
@@ -624,6 +629,10 @@ class Harness:
         bad = sorted({w for _, w in data if w not in PMIC_ALLOWED})
         if bad:
             fails.append(f"PMIC writes outside the allowlist: {bad}")
+        # W21's snapshot (images/pmic-baseline-w21.json): no configuration register changes.
+        diffs = pmic_baseline.check([bytes.fromhex(w.replace(" ", "")) for _, w in data])
+        if diffs:
+            fails.append(f"PMIC writes differ from W21's snapshot: {diffs[:4]}")
         seq = [w for _, w in data if w != "07 04 01" and w != "05 00 01"]
         if [w for w in seq if w in PMIC_ARM][:4] != PMIC_ARM:
             fails.append(f"PMIC watchdog not armed with stock's sequence: {seq[:8]}")
@@ -640,7 +649,7 @@ class Harness:
             fails.append(f"PMIC kicks {longest} ms apart within one boot (want about 1 s)")
         if res["pmic_expiries"]:
             fails.append(f"the PMIC watchdog expired {res['pmic_expiries']} time(s)")
-        return f"{len(kicks)} PMIC kicks (at most {longest} ms apart within a boot)"
+        return f"{len(kicks)} PMIC kicks (at most {longest} ms apart within a boot), PMIC config = W21 snapshot"
 
     def check_status(self, case: Case, res: dict, fails: list[str]) -> str:
         raw = res.get("boot_status_raw")
