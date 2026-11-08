@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """install-wisp (docs/wisp/rung4.md §3, G1, decision R4-1) against fakes. No hardware.
 
-R4-1 is approved (2026-11-08), but the repository's pin tables stay empty until W23, so the real
-command refuses every image before it touches the case (checked first). Every other test pins a synthetic image for
-its duration (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small "app", an ELF whose segments
-are those bytes, a map file, and a Wisp Boot entry with both rung-3 suites.
+R4-1 is approved (2026-11-08), but the repository's pin tables stay empty until W23, so the
+real command refuses every image before it touches the case (checked first). Every other test
+pins a synthetic image for its duration (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small
+"app", an ELF whose segments are those bytes, a map file, and a Wisp Boot entry with both
+rung-3 suites.
 """
 
 import hashlib

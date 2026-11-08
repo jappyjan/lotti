@@ -58,6 +58,7 @@ class Session:
         # ends without an error keeps it held; after an error the cleanup releases as always.
         self.hold = False
         self.last_kick: float | None = None  # clock time a program that kicks the PMIC last started
+        self.hello_at: float | None = None  # clock time the loader's HELO arrived (after the relay's reset)
         self.bootloader_verified = False  # the feeding programs call into it: only after its CRC
         self.feeds = 0  # feed.bin runs in this session
         self.temple_reset_s: float | None = None  # when a HELO came mid-session, s since the relay start
@@ -91,6 +92,7 @@ class Session:
     def _claim(self) -> None:
         self.started = self.clock()
         beacon = self.link.start()
+        self.hello_at = self.clock()
         self.started = getattr(self.link, "relay_started", None) or self.started
         challenge = loader.decode_hello(beacon)
         self.log(f"HELO from the patched loader (challenge {challenge:#010x})")

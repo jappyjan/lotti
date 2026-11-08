@@ -76,8 +76,9 @@ PMIC_KICK_WIRE = bytes((0x07, 0x04, 0x01))
 # pmic_read.bin's registers, in the order it reads and sends them (programs/pmic_read.c, its
 # `ranges`): (16-bit address, name, kind). "config" is what Wisp's DTS and drivers must match and
 # what a later snapshot must equal; "status" reflects live state (VBUS, charging, rails) and may
-# differ; "watchdog" is the timer the stock app and the feed program (rung4.md exit item 5: only
-# the watchdog timer may differ). Register offsets as Zephyr's npm13xx drivers use them.
+# differ; "watchdog" is the timer's period (rung4.md exit item 5: only the watchdog timer may
+# differ). The timer's mode is "config": a watchdog that no longer resets the temple would remove
+# the PMIC's power cycle, the fail-safe native-0 keeps (G27). Offsets as Zephyr's npm13xx drivers.
 PMIC_READ_REGISTERS = (
     (0x0201, "VBUSIN.ILIM", "config"), (0x0202, "VBUSIN.ILIMSTARTUP", "config"),
     (0x0205, "VBUSIN.DETECT", "status"), (0x0207, "VBUSIN.STATUS", "status"),
@@ -101,7 +102,7 @@ PMIC_READ_REGISTERS = (
     (0x0509, "ADC.CONFIG", "config"), (0x050A, "ADC.NTCR_SEL", "config"),
     (0x0600, "GPIO0.MODE", "config"), (0x0601, "GPIO1.MODE", "config"), (0x0602, "GPIO2.MODE", "config"),
     (0x0603, "GPIO3.MODE", "config"), (0x0604, "GPIO4.MODE", "config"), (0x061E, "GPIO.STATUS", "status"),
-    (0x0705, "TIMER.CONFIG", "watchdog"),
+    (0x0705, "TIMER.CONFIG", "config"),
     (0x0708, "TIMER.TARGET_HI", "watchdog"), (0x0709, "TIMER.TARGET_MID", "watchdog"),
     (0x070A, "TIMER.TARGET_LO", "watchdog"),
     (0x0804, "LDSW.STATUS", "status"), (0x0805, "LDSW1.GPISEL", "config"), (0x0806, "LDSW2.GPISEL", "config"),
@@ -127,7 +128,8 @@ PEEK_REGIONS = {
                             "0x4336B0 GD25LE256H; an unknown ID keeps the default, which is the MX record"),
     "board": (0x2002_7018, 8, "board detect over the GPIO16 ADC strap (0x430440): u8 class, u16 code, i16 mV "
                               "(raw x 1190 >> 12, the app's hw_version bins: 100-250 mV = 5, 950-1050 mV = 6)"),
-    "uart2": (0x2000_0490, 28, "the bootloader's UART2 table entry, what the loader's precondition reads"),
+    "uart2": (0x2000_0490, 28, "the bootloader's UART2 table entry, what the loader's precondition reads "
+                               "(during the hold its awake byte is 1: the loader woke UART2)"),
     "power-callbacks": (0x2002_6E44, 8, "power pre/post callbacks; the loader requires both zero"),
     "flag": (0x007F_E000, 16, "the update-flag record"),
     "nor-records": (0x0043_36A0, 32, "the bootloader's two NOR ops records (MRAM)"),

@@ -13,10 +13,11 @@
  * in the same order; tests/test_pmic_read.py checks the wire under Unicorn).
  *
  * The only PMIC write is one watchdog kick before the reads: {0x07, 0x04, 0x01} to 0x6B, the write
- * the stock app makes every second and pmic_kick.h makes for feed and dump_fed, with the same
- * register sequence (the same bindings into the pinned bootloader, the same I2C table check). It
- * shares the reads' power window to fit the loader's 512 bytes. The program runs for well under a
- * second (59 short transfers, then four loader exchanges), so one kick keeps the temple fed as
+ * the stock app makes every second and pmic_kick.h makes for feed and dump_fed, through the same
+ * IOM7 registers and checks (the same bindings into the pinned bootloader, the same I2C table
+ * check, the same write-FIFO room check; this one also requires an empty receive FIFO first). It
+ * shares the reads' power window to fit the loader's 512 bytes. The program runs for well under
+ * a second (59 short transfers, then four loader exchanges), so one kick keeps the temple fed as
  * dump_fed's once-a-second kicks do.
  *
  * IOM7 is used exactly as the kick uses it: power_ctrl WAKE with retain, the transfer registers

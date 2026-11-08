@@ -31,7 +31,7 @@ from wisp_w18 import cli, image, links, loader, pins, relay_model, session, stat
 
 def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF) -> dict:
     """What the patched bootloader leaves in RAM at the hold, as the fake temple's readable memory."""
-    uart2 = struct.pack("<7I", 2, 0x2001_9000, 0x0043_4210, 0, 0, 0, 0)
+    uart2 = struct.pack("<7I", 2, 0x2001_9000, 0x0043_4210, 0, 0, 0, 1)  # awake: the loader woke UART2
     return {"nor": struct.pack("<I", nor), "board": struct.pack("<BBHhH", 0, 0, 3, millivolts, 0),
             "uart2": uart2, "power-callbacks": bytes(8)}
 
@@ -52,7 +52,7 @@ class Peek(unittest.TestCase):
         self.assertEqual(set(peek), set(pins.PEEK_REGIONS))
         self.assertTrue(peek["nor"]["part"].startswith("MX25U25643G"))
         self.assertEqual((peek["board"]["strap_mV"], peek["board"]["app_hw_version"]), (180, 5))
-        self.assertTrue(peek["uart2"]["loader_precondition"])
+        self.assertTrue(peek["uart2"]["loader_state"])
         self.assertTrue(peek["power-callbacks"]["zero"])
         self.assertEqual(peek["flag"]["word0"], "0xffffffff")
         self.assertEqual(case.mram.writes, [])
@@ -109,6 +109,17 @@ class AppCheck(unittest.TestCase):
         self.assertEqual(report["matches"], [])
         self.assertEqual(report["images"][-1]["name"], str(other))
 
+    def test_an_image_longer_than_the_app_region_is_refused_before_the_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            big = Path(tmp) / "big.bin"
+            big.write_bytes(bytes(pins.APP_END_CEILING - pins.APP_BASE + 16))
+
+            def no_case(_args):
+                raise AssertionError("touched the case")
+
+            with mock.patch.object(cli, "make_link", no_case), mock.patch("sys.stderr"), mock.patch("sys.stdout"):
+                self.assertEqual(cli.main(["app-check", "--side", "left", "--image", str(big)]), 2)
+
     def test_zero_vectors_and_a_set_flag_are_reported(self):
         app = bytes(16) + bytes(range(200))
         mram = temple(app, {0x7FE000: struct.pack("<4I", 0x55555555, ~0 & 0xFFFFFFFF, ~0 & 0xFFFFFFFF,
@@ -142,7 +153,9 @@ class HeldTemple(unittest.TestCase):
         self.assertEqual(len(report["sessions"]), 2)
         self.assertNotIn(loader.cont(), case.relays[0].temple.sent)  # session 0 held it
         self.assertIn(loader.cont(), case.relays[1].temple.sent)  # session 1 released it
-        self.assertLess(report["verdict"]["held_reset_s_after_last_kick"], report["verdict"]["limit_s"])
+        verdict = report["verdict"]
+        self.assertLessEqual(verdict["helo_s_after_relay_start"], verdict["limits_s"][0])
+        self.assertLess(verdict["helo_s_after_last_kick"], verdict["limits_s"][1])
 
     def test_held_reset_test_stops_when_the_held_temple_does_not_answer(self):
         case = Case(temple())
@@ -161,6 +174,41 @@ class HeldTemple(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(len(report["sessions"]), 2)
         self.assertNotIn("verdict", report)
+
+    def test_a_helo_that_comes_late_is_not_taken_for_the_cases_reset(self):
+        # The case's reset fails, and the PMIC's power cycle brings a HELO inside the relay's beacon
+        # window, ~15 s after the relay started: well inside 30.72 s of the held session's last
+        # kick, but not the 0.5-0.9 s the reset takes. That must not pass.
+        case = Case(temple())
+        made = case.link
+        count = [0]
+
+        def link(args=None):
+            made_link = made(args)
+            count[0] += 1
+            if count[0] == 2:
+                backend = made_link.port.temple
+                original = backend.start
+
+                def late():
+                    case.clock.advance(15.0)
+                    return original()
+
+                backend.start = late
+            return made_link
+
+        case.link = link
+        code, report = run_cli(["held-reset-test", "--side", "left"], case)
+        self.assertEqual(code, 1)
+        self.assertIn("INCONCLUSIVE", report["error"])
+        self.assertNotIn("verdict", report)
+
+    def test_held_reset_test_needs_the_temple_feed(self):
+        def no_case(_args):
+            raise AssertionError("touched the case")
+
+        with mock.patch.object(cli, "make_link", no_case), mock.patch("sys.stderr"), mock.patch("sys.stdout"):
+            self.assertEqual(cli.main(["held-reset-test", "--side", "left", "--no-temple-feed"]), 2)
 
     def test_held_reset_test_is_inconclusive_when_the_pmic_could_have_reset_it(self):
         case = Case(temple())
@@ -256,20 +304,35 @@ class BootWatch(unittest.TestCase):
             def request(self, index):
                 return bytes.fromhex("24000100a7")
 
-        case = BootCase(temple(), boot_s=0.0)
-        with mock.patch.dict(status.PROTOCOLS, {"bad": Bad}), mock.patch.object(cli, "WATCH_SLEEP",
-                                                                                 case.clock.advance):
-            code, report = run_cli(["boot-watch", "--side", "left", "--protocol", "bad"], case)
+        def no_case(_args):
+            raise AssertionError("touched the case")
+
+        with mock.patch.dict(status.PROTOCOLS, {"bad": Bad}), mock.patch.object(cli, "make_link", no_case), \
+                mock.patch("sys.stderr"), mock.patch("sys.stdout"):
+            self.assertEqual(cli.main(["boot-watch", "--side", "left", "--protocol", "bad"]), 2)
+
+        class Later(fake_status.FakeStatus):  # a later request the relay cannot carry: stops the watch
+            def request(self, index):
+                return super().request(index) if index == 0 else bytes.fromhex("24000100a7")
+
+        case = BootCase(temple(), boot_s=30.0)
+        with mock.patch.dict(status.PROTOCOLS, {"later": Later}), mock.patch.object(cli, "WATCH_SLEEP",
+                                                                                     case.clock.advance):
+            code, report = run_cli(["boot-watch", "--side", "left", "--protocol", "later"], case)
         self.assertEqual(code, 1)
         self.assertIn("not a frame the case relay forwards", report["error"])
-        self.assertEqual(case.relays[0].temple.app_frames, [])
+        self.assertEqual(case.relays[0].temple.app_frames, [fake_status.frame_9(fake_status.QUERY)])
 
-    def test_an_undocumented_flag_is_not_released_into(self):
+    def test_an_undocumented_flag_stops_the_watch_and_the_session_ends_as_always(self):
         mram = temple(b"", {0x7FE000: struct.pack("<I", 0x12345678)})
         case = BootCase(mram)
         code, report = watch_cli(["boot-watch", "--side", "left", "--protocol", "fake"], case)
         self.assertEqual(code, 1)
         self.assertIn("undocumented", report["error"])
+        self.assertNotIn("boot_watch", report)
+        temple_ = case.relays[0].temple
+        self.assertIn(loader.cont(), temple_.sent)  # the cleanup's CONT, as at the end of every session
+        self.assertEqual(temple_.app_frames, [])  # but no query
 
 
 class Clock(unittest.TestCase):

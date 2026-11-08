@@ -15,7 +15,9 @@ code, its stack and the ram_api is recorded, so a test can check the whole footp
     command (CMDCMP, or NAK when `nak`); a write transaction to 0x6B is decoded to its wire bytes;
     a read (CMD READ with a 2-byte offset, OFFSETHI then OFFSETLO on the wire) is decoded to its
     register address, answered from `pmic_registers` into the receive FIFO, which FIFOPTR's
-    FIFO1SIZ counts and FIFOPOP pops (`nak_reads`: reads NAK; `rx_bytes`: bytes a read returns);
+    FIFO1SIZ counts and FIFOPOP pops (`nak_reads`: reads NAK; `rx_bytes`: bytes a read returns).
+    A read command or a FIFOPOP access is a violation unless the test sets `allow_reads`, so the
+    programs that only kick keep their footprint (only pmic_read reads);
   - MRAM (0x400000-0x800000): readable; written only through the MRAM routine stub.
 """
 
@@ -69,6 +71,7 @@ class TempleCpu:
         self.reads: list[tuple[int, int, int]] = []  # (I2C address, register, bytes) per read transaction
         self.transactions: list[tuple] = []  # ("w", address, bytes) / ("r", address, register), in order
         self.pmic_registers: dict[int, int] = {}  # a read of a register not in it returns (reg * 7) & 0xFF
+        self.allow_reads = False
         self.nak_reads = False
         self.rx_bytes = 1  # bytes the PMIC answers a 1-byte read with (0: none arrive)
         self.rx: list[int] = []  # IOM7's receive FIFO
@@ -155,6 +158,8 @@ class TempleCpu:
         elif offset == 0x100:
             v = self.fifo_room << 8 | min(len(self.rx), 255) << 16
         elif offset == 0x108:
+            if not self.allow_reads:
+                self.violations.append("FIFOPOP read")
             popped, self.rx = self.rx[:4], self.rx[4:]
             v = int.from_bytes(bytes(popped).ljust(4, b"\0"), "little")
         else:
@@ -183,6 +188,8 @@ class TempleCpu:
                 if self.complete:
                     self._iom[0x204] |= 0x10 | 1 if self.nak else 1
             elif value & 0xF == 2:
+                if not self.allow_reads:
+                    self.violations.append("a read command")
                 tsize, offset_count = (value >> 8) & 0xFFF, (value >> 4) & 7
                 if push:
                     self.violations.append("bytes pushed before a read")

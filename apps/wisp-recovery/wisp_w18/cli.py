@@ -377,39 +377,53 @@ def cmd_hello(args) -> int:
     return with_session(args, "loader-hello", body)
 
 
-# The held-temple reset test (rung4.md §4, W21): session 2 must reset the temple before the PMIC's
-# watchdog could have, or the test proves nothing (a PMIC power cycle also brings HELO back). The
-# relay's reset comes 0.5-0.9 s after the relay starts; keep 5 s of margin.
+# The held-temple reset test (rung4.md §4, W21). Session 2's HELO must be the answer to the case's
+# reset, not to a PMIC power cycle: it has to come within HELD_RESET_HELO_S of the relay start (the
+# reset gives the loader's HELO 0.5-0.9 s after it on hardware), and before the PMIC's watchdog
+# could have fired, HELD_RESET_MARGIN_S inside 30.72 s after session 1's last kick. `last_kick` is
+# when the last kicking program was started, earlier than the kick itself, so the bound is safe.
+HELD_RESET_HELO_S = 3.0
 HELD_RESET_MARGIN_S = 5.0
 
 
 def cmd_held_reset(args) -> int:
+    if not temple_feed(args):
+        print("REFUSED: held-reset-test times the reset against the held session's last PMIC kick; it needs the "
+              "temple feed (drop --no-temple-feed)", file=sys.stderr)
+        return 2
     held: dict = {}
 
     def step(session, patched, index):
+        if index == 1:
+            held["hello"] = True  # the claim succeeded: the held temple answered the second reset
         fields = hello_checks(session, args.side)
         if index == 0:
             session.hold = True
-            held.update(last_kick=session.last_kick, side=args.side)
+            held["last_kick"] = session.last_kick
             print(f"session 0: the {args.side} temple is held in its loader (no CONT); next: a new session must "
                   "reset it", flush=True)
             return False, {"held_session": fields}
-        gap = session.started - held["last_kick"] if held.get("last_kick") is not None else None
+        after_start = session.hello_at - session.started
+        after_kick = session.hello_at - held["last_kick"]
         limit = pins.PMIC_WATCHDOG_S - HELD_RESET_MARGIN_S
-        verdict = {"held_reset_s_after_last_kick": round(gap, 2) if gap is not None else None, "limit_s": limit}
-        if gap is None or gap >= limit:
-            raise SessionError(f"INCONCLUSIVE: the second relay started {gap} s after the held session's last PMIC "
-                               f"kick (limit {limit:g} s): the PMIC's watchdog may have reset the temple first. "
-                               "Nothing was written; rerun held-reset-test.")
+        verdict = {"helo_s_after_relay_start": round(after_start, 2), "helo_s_after_last_kick": round(after_kick, 2),
+                   "limits_s": [HELD_RESET_HELO_S, limit]}
+        if after_start > HELD_RESET_HELO_S or after_kick >= limit:
+            raise SessionError(f"INCONCLUSIVE: the HELO came {after_start:.1f} s after the relay started (the case's "
+                               f"reset gives it within 1 s) and {after_kick:.1f} s after the held session's last PMIC "
+                               f"kick (limit {limit:g} s): the PMIC's watchdog may have reset the temple, not the "
+                               "case. Nothing was written; rerun held-reset-test.")
         print(f"OK: held-temple reset test passed on the {args.side} temple: the case reset a temple held in its "
-              f"loader and its HELO came back ({gap:.1f} s after the held session's last PMIC kick, before the "
-              "PMIC's watchdog could have reset it)", flush=True)
+              f"loader; its HELO came {after_start:.1f} s after the relay started and {after_kick:.1f} s after the "
+              "held session's last PMIC kick, before the PMIC's watchdog could have reset it", flush=True)
         return True, {"reset_session": fields, "verdict": verdict}
 
     def on_stop(report):
-        if held and len(report["sessions"]) > 1:
-            print("STOP (rung4.md §8): if the held temple did not come back with HELO, the case reset does not work "
-                  "without a running stock app. Do not go on with rung 4; report this.", file=sys.stderr)
+        if len(report["sessions"]) > 1 and not held.get("hello"):
+            print("STOP (rung4.md §8) if the second session's relay started (G2U2_ARMED in its log) and no HELO "
+                  "came: the case reset does not reach a temple held in its loader. Do not go on with rung 4; "
+                  "report this. The temple boots by itself when the PMIC's watchdog fires, about 30 s after the "
+                  "held session's last kick.", file=sys.stderr)
 
     return run_sessions(args, "held-reset-test", step, on_stop)
 
@@ -430,8 +444,10 @@ def describe_peek(name: str, data: bytes) -> dict:
         handle, pins_table = struct.unpack_from("<II", data, 4)
         callback, awake = struct.unpack_from("<II", data, 20)
         out.update(handle=f"{handle:#x}", pin_table=f"{pins_table:#x}", rx_callback=f"{callback:#x}",
-                   irq_mode=awake & 0xFF)
-        out["loader_precondition"] = bool(handle) and pins_table == 0x434210 and not awake & 0xFF and not callback
+                   awake=awake & 0xFF)
+        # The loader required awake == 0 at its check, then woke UART2 itself (0x41F8B4 sets it), so
+        # during the hold the state it leaves reads: handle set, the pinned pin table, no callback, awake.
+        out["loader_state"] = bool(handle) and pins_table == 0x434210 and not callback and awake & 0xFF == 1
     elif name == "power-callbacks":
         out["zero"] = data == bytes(8)
     elif name == "flag":
@@ -516,6 +532,10 @@ def known_images(extra: list[str]) -> list[dict]:
         if data[:8] == b"EVENOTA\0":
             data = image.main_from_bundle(data)
         out.append({"name": path, "bytes": len(data), "crc32": zlib.crc32(data), "sha256": image.sha(data)})
+    for entry in out:  # checksum.bin reads blindly: never past the app ceiling
+        if not 16 <= entry["bytes"] <= pins.APP_END_CEILING - pins.APP_BASE:
+            raise image.ImageError(f"{entry['name']}: {entry['bytes']} bytes does not fit the app region "
+                                   f"[{pins.APP_BASE:#x}, {pins.APP_END_CEILING:#x}); nothing was sent")
     return out
 
 
@@ -547,8 +567,8 @@ def cmd_app_check(args) -> int:
             entry["crc32"] = f"{entry['crc32']:08x}"
         matched = [e["name"] for e in images if e["matches"]]
         fields.update(images=images, matches=matched)
-        print(f"vectors at {pins.APP_BASE:#x}: {vectors.hex()}" + (" (zero: an interrupted write; the bootloader "
-                                                                   "does not hand off)" if fields["vectors_zero"] else ""))
+        note = " (zero: an interrupted write; the bootloader does not hand off)" if fields["vectors_zero"] else ""
+        print(f"vectors at {pins.APP_BASE:#x}: {vectors.hex()}{note}")
         for entry in images:
             print(f"  {entry['name']}: region CRC-32 {entry['region_crc32']} over {entry['bytes']} B, image "
                   f"{entry['crc32']}: {'MATCH' if entry['matches'] else 'no match'}")
@@ -570,11 +590,18 @@ def cmd_boot_watch(args) -> int:
               "The Wisp protocol comes with G10 (apps/wisp-fw); nothing was sent", file=sys.stderr)
         return 2
     protocol = factory()
+    if not status.relay_request_ok(protocol.request(0)):
+        print(f"REFUSED: {protocol.name}: its first request is not a frame the case relay forwards; nothing was sent",
+              file=sys.stderr)
+        return 2
 
     def body(session, patched):
         fields = hello_checks(session, args.side)
         if int(fields["flag"], 16) not in FLAG_VALUES:
-            raise SessionError(f"update flag {fields['flag']} is undocumented; not releasing into it")
+            raise SessionError(f"update flag {fields['flag']} is undocumented (rung4.md §8: stop); not watching. The "
+                               "session still ends with CONT, as every session does")
+        if not hasattr(session.link, "query"):
+            raise SessionError("boot-watch needs the case relay (G2TX after CONT); not watching")
         session.step = "release (CONT) and watch the boot"
         session.release()
         print(f"boot released; watching for {args.watch_s:g} s with {protocol.name!r}", flush=True)

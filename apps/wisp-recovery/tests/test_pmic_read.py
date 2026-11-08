@@ -32,14 +32,26 @@ HANDLE = pins.IOM7_HAL_HANDLE
 ADDRESSES = [address for address, _name, _kind in pins.PMIC_READ_REGISTERS]
 
 
+def reader():
+    """The temple model with reads allowed (only pmic_read reads)."""
+    cpu = temple_cpu.TempleCpu()
+    cpu.allow_reads = True
+    return cpu
+
+
 @unittest.skipIf(temple_cpu is None, "unicorn not installed")
 class Binary(unittest.TestCase):
+    def test_the_kicking_programs_still_may_not_read(self):
+        cpu = temple_cpu.TempleCpu()  # reads not allowed
+        cpu.run("pmic_read")
+        self.assertIn("a read command", cpu.violations)
+
     def test_it_fits_the_loader_and_matches_its_pin(self):
         code = image.program("pmic_read")
         self.assertTrue(2 <= len(code) <= 512 and len(code) % 2 == 0)
 
     def test_one_kick_then_one_write_read_per_allowlisted_register(self):
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.pmic_registers = {address: (i * 37 + 5) & 0xFF for i, address in enumerate(ADDRESSES)}
         self.assertEqual(cpu.run("pmic_read"), 0)
         self.assertEqual(cpu.violations, [])
@@ -52,7 +64,8 @@ class Binary(unittest.TestCase):
         self.assertEqual([c[:3] for c in cpu.power_calls], [(HANDLE, 0, 1), (HANDLE, 2, 1)])
         self.assertFalse(cpu.iom_powered)
         writes = {a - temple_cpu.IOM7 for k, a, _ in cpu.footprint if k == "w"}
-        self.assertEqual(writes, {0x200, 0x208, 0x2C4, 0x128, 0x10C, 0x120})  # INTEN INTCLR DEVCFG OFFSETHI PUSH CMD
+        # INTEN, INTCLR, DEVCFG, OFFSETHI, FIFOPUSH, CMD
+        self.assertEqual(writes, {0x200, 0x208, 0x2C4, 0x128, 0x10C, 0x120})
         pushes = [v for k, a, v in cpu.footprint if k == "w" and a - temple_cpu.IOM7 == 0x10C]
         self.assertEqual(pushes, [0x00010407])  # the kick's bytes; the reads push nothing
         others = {a for k, a, _ in cpu.footprint if k == "r" and not temple_cpu.IOM7 <= a < temple_cpu.IOM7 + 0x1000}
@@ -66,13 +79,13 @@ class Binary(unittest.TestCase):
         self.assertFalse(forbidden & set(ADDRESSES))
 
     def test_failures_return_a_code_and_send_nothing(self):
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.nak = True  # the kick NAKs: nothing read
         self.assertEqual(cpu.run("pmic_read"), 0x50010)
         self.assertEqual((cpu.reads, cpu.sent), ([], []))
         self.assertEqual([c[1] for c in cpu.power_calls], [0, 2])
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.nak_reads = True  # the first read NAKs
         result = cpu.run("pmic_read")
         self.assertEqual(result, (1 << 24) | 0x50010)
@@ -81,31 +94,31 @@ class Binary(unittest.TestCase):
         self.assertEqual((len(cpu.reads), cpu.sent), (1, []))
         self.assertFalse(cpu.iom_powered)
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.rx_bytes = 0  # the read completes but no byte arrives
         self.assertEqual(cpu.run("pmic_read"), (1 << 24) | 0x800)
         self.assertEqual(cpu.sent, [])
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.power_result[0] = 7  # WAKE with retain refused
         self.assertEqual(cpu.run("pmic_read"), 0x107)
         self.assertEqual((cpu.wire, cpu.reads), ([], []))
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.power_result[2] = 3  # the power-down refused after every transfer succeeded
         self.assertEqual(cpu.run("pmic_read"), 0x603)
         self.assertEqual(cpu.sent, [])
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.status_idle = False  # busy from the start
         self.assertEqual(cpu.run("pmic_read"), 0x200)
         self.assertEqual((cpu.wire, cpu.reads), ([], []))
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.complete = False  # no transfer ever completes
         self.assertEqual(cpu.run("pmic_read"), 0x400)
 
-        cpu = temple_cpu.TempleCpu()
+        cpu = reader()
         cpu.uc.mem_write(pins.I2C_TABLE_ENTRY_7, bytes(8))  # not the pinned bootloader's table
         self.assertEqual(cpu.run("pmic_read"), 0x10)
         self.assertEqual((cpu.power_calls, cpu.wire, cpu.reads), ([], [], []))
@@ -171,5 +184,6 @@ class Tool(unittest.TestCase):
 
     def test_pmic_read_needs_the_bootloader_checked_first(self):
         from fake_temple import FakeLoaderLink
-        with self.assertRaises(session.RefusedError), session.Session(FakeLoaderLink(temple()), log=lambda m: None) as s:
+        link = FakeLoaderLink(temple())
+        with self.assertRaises(session.RefusedError), session.Session(link, log=lambda m: None) as s:
             s.pmic_read()
