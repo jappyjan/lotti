@@ -1,10 +1,13 @@
 # SPDX-License-Identifier: MIT
 """What W18 does through a held loader session: claim, read-only checks, the INFO dump and the
-stock main-app recovery. Every write goes through `write_app`, which only accepts the pinned
-stock main image at 0x438000 (plus the bytes already there for the 16-byte tail unit).
+main-app writes. Every write goes through `AppWriter`, which takes an `AppImage`: the pinned stock
+main image (`recover`) or a pinned Wisp image (`install-wisp`, wisp_w18/native.py), each with its
+end bound, at 0x438000 (plus the bytes already there for the 16-byte tail unit).
 
-The write order (body first, its CRC, then the 16 vector bytes, then the full CRC) and the
-writer program are drdaeman's (tools/g2patch/recovery.py, src/examples/recover.c, MIT).
+The write order is drdaeman's (tools/g2patch/recovery.py, src/examples/recover.c, MIT), with one
+change from rung4.md (R4-1): the 16 vector bytes are zeroed first, then the body, its CRC, the
+vectors, the full CRC. An interrupted write then leaves vectors the bootloader refuses to hand
+off to, not a mix of old vectors and new code. The writer program is drdaeman's.
 
 `AppWriter` splits that write over as many held sessions as a session-time budget needs: each
 session CRC-checks the body written so far before it adds a part, and the vectors are written only
@@ -22,6 +25,8 @@ from __future__ import annotations
 import struct
 import time
 import zlib
+from dataclasses import dataclass
+from typing import Callable
 
 from . import image, loader, pins
 
@@ -253,12 +258,16 @@ class Session:
         return out
 
     # --- the one write path ---
-    def _write(self, address: int, data: bytes, progress=None) -> None:
+    def _write(self, address: int, data: bytes, bound: int, progress=None) -> None:
+        """Write `data` at `address`, inside [0x438000, bound). `bound` is the end of the image
+        being written (`AppImage.end`), never past the app ceiling 0x7F8000."""
         end = address + len(data)
         if (address | len(data)) & 15 or not data:
             raise RefusedError("MRAM writes are 16-byte aligned and non-empty")
-        if not pins.RECOVER_BASE <= address < end <= pins.RECOVER_END:
-            raise RefusedError(f"write [{address:#x}, {end:#x}) is outside the stock main-app region")
+        if bound & 15 or not pins.APP_BASE < bound <= pins.APP_END_CEILING:
+            raise RefusedError(f"end bound {bound:#x} is outside the main-app region")
+        if not pins.APP_BASE <= address < end <= bound:
+            raise RefusedError(f"write [{address:#x}, {end:#x}) is outside the image's region [{pins.APP_BASE:#x}, {bound:#x})")
         self.position = {"target": f"{address:#x}+{len(data)}", "sent": 0, "verified": 0}
         self.client.upload(image.program(self.writer), arg0=address, arg1=len(data))
         count = 0
@@ -298,22 +307,61 @@ class Session:
         return "recover_fed" if self.feeding else "recover"
 
     def write_app(self, stock: bytes, progress=None) -> dict:
-        """Write the pinned stock main image at 0x438000 in this one session: body, CRC, vectors,
-        CRC. (`AppWriter` with a budget splits the same write over several sessions.)"""
+        """Write the pinned stock main image at 0x438000 in this one session: vectors zeroed,
+        body, CRC, vectors, CRC. (`AppWriter` with a budget splits the same write over several
+        sessions.)"""
         writer = AppWriter(stock, log=self.log)
         writer.run(self, progress=progress)
         return writer.result
 
 
-class AppWriter:
-    """recover's write of the pinned stock main image, over one or more held sessions.
+ZERO_VECTORS = bytes(16)
 
-    Every session that continues the write first CRC-checks the body written so far against the
-    image (the resume check); a mismatch stops before anything else is written. The body goes
-    in parts at 0x438010+; the 16 vector bytes at 0x438000 are written only once the whole body
-    has been CRC-checked in the same session, and never in any part. Interrupted at any point,
-    the vectors in MRAM are the old ones, so the bootloader never jumps into a partial image
-    through new vectors.
+
+@dataclass(frozen=True)
+class AppImage:
+    """What an AppWriter may write: the image's bytes, the pin they must hash to, the end bound
+    of every write (the image's own end, rounded up to the 16-byte unit), and `check`, rerun on
+    the exact bytes the writer is about to send, before the first write of every run."""
+
+    name: str
+    data: bytes
+    sha256: str
+    end: int
+    check: Callable[[bytes], object] | None = None
+
+    def __post_init__(self):
+        # The writer's own gate, whatever the caller checked: the stock pin, or a Wisp image
+        # pinned in pins.WISP_IMAGES once R4-1 is approved (safety.md rule 1; rung4.md R4-1).
+        wisp = pins.R4_1_APPROVED and any(p["image_sha256"] == self.sha256 for p in pins.WISP_IMAGES.values())
+        if self.sha256 != pins.STOCK_MAIN_SHA256 and not wisp:
+            raise RefusedError(f"{self.name}: {self.sha256[:16]}... is neither the stock pin nor a pinned Wisp image "
+                               "(R4-1 not approved, or not in pins.WISP_IMAGES); nothing written")
+        if image.sha(self.data) != self.sha256:
+            raise RefusedError(f"{self.name}: the image is not the pinned one ({image.sha(self.data)[:16]}...)")
+        if self.end != pins.APP_BASE + ((len(self.data) + 15) & ~15) or self.end > pins.APP_END_CEILING:
+            raise RefusedError(f"{self.name}: end bound {self.end:#x} does not match the image or passes 0x7F8000")
+
+
+def stock_image(stock: bytes) -> AppImage:
+    """recover's image: only the pinned stock 2.4.0.24 main, bounded by its own length."""
+    if image.sha(stock) != pins.STOCK_MAIN_SHA256:
+        raise RefusedError("recover only writes the pinned stock 2.4.0.24 main image")
+    return AppImage(f"stock {pins.STOCK_MAIN_VERSION} main", stock, pins.STOCK_MAIN_SHA256, pins.RECOVER_END)
+
+
+class AppWriter:
+    """A main-app image write (recover: the pinned stock image; install-wisp: a pinned Wisp
+    image), over one or more held sessions.
+
+    Before the first body byte, the 16 vector bytes at 0x438000 are zeroed (unless they already
+    read zero, as after an earlier interrupted run). Every session that continues the write first
+    CRC-checks the body written so far against the image (the resume check); a mismatch stops
+    before anything else is written. The body goes in parts at 0x438010+; the real vectors are
+    written only once the whole body has been CRC-checked in the same session, and never in any
+    part. Interrupted at any point after the zeroing, the vectors in MRAM are zero, so the
+    bootloader refuses the hand-off (the patched loader still runs first) instead of jumping into
+    a mix of old vectors and new code.
 
     `run(session)` does one session's share and returns True when the image is complete. With
     `budget` (seconds since the relay started), it sizes the part to end inside the budget and
@@ -324,20 +372,20 @@ class AppWriter:
     FIRST_PART = 4096  # bytes, until a rate is measured
     RESERVE = 1.5  # s kept for the part's CRC, the release and the relay exit
 
-    def __init__(self, stock: bytes, budget: float | None = None, resume_at: int = 0, log=print):
-        if image.sha(stock) != pins.STOCK_MAIN_SHA256:
-            raise RefusedError("recover only writes the pinned stock 2.4.0.24 main image")
-        self.stock = stock
+    def __init__(self, app: AppImage | bytes, budget: float | None = None, resume_at: int = 0, log=print):
+        self.app = app if isinstance(app, AppImage) else stock_image(app)
+        self.stock = self.app.data  # the image's bytes (the name predates install-wisp)
         self.budget = budget
         self.log = log
-        self.size = pins.RECOVER_END - pins.RECOVER_BASE
-        self.body_base = pins.RECOVER_BASE + 16
+        self.size = self.app.end - pins.APP_BASE
+        self.body_base = pins.APP_BASE + 16
         self.body_len = self.size - 16
         if resume_at % 16 or not 0 <= resume_at <= self.body_len:
             raise RefusedError(f"--resume-at must be a multiple of 16 in [0, {self.body_len}]")
         self.done = resume_at  # body bytes written and CRC-verified (by this run or, with
         self.resumed_at = resume_at  # --resume-at, by an earlier one: checked before any write)
         self.target: bytes | None = None
+        self.vectors_zeroed = False  # zero in MRAM: read back so, or written so by this run
         self.rate = self.FIRST_RATE
         self.measured = False
         self.sessions = 0
@@ -345,18 +393,40 @@ class AppWriter:
 
     def _prepare(self, s: Session) -> None:
         s.step = "read the image tail unit"
-        tail = s.dump(pins.RECOVER_BASE + self.size - 16, 16)  # keep what follows the image in its last unit
+        tail = s.dump(pins.APP_BASE + self.size - 16, 16)  # keep what follows the image in its last unit
         keep = len(self.stock) - (self.size - 16)
-        self.target = self.stock + tail[keep:]
+        target = self.stock + tail[keep:]
+        # The checks run on the buffer the writer streams from, not on the file it came from.
+        sent = target[: len(self.stock)]
+        if image.sha(sent) != self.app.sha256 or len(target) != self.size:
+            raise RefusedError(f"{self.app.name}: the bytes to send are not the pinned image; nothing written")
+        if self.app.check is not None:
+            s.step = "rule-3 checks on the bytes to send"
+            self.result["checks"] = self.app.check(sent)
+        self.target = target
         s.step = "CRC of the app region before"
-        before = s.checksum(pins.RECOVER_BASE, self.size)
+        before = s.checksum(pins.APP_BASE, self.size)
         self.result["crc_before"] = f"{before:08x}"
-        self.log(f"app region CRC-32 before: {before:08x} (stock {zlib.crc32(self.target):08x})")
+        self.log(f"app region CRC-32 before: {before:08x} ({self.app.name} {zlib.crc32(self.target):08x})")
         s.step = "RAM API v2 check"
         s.client.upload(image.program(s.writer))  # length 0 = API check only, programs nothing
         result, output = s.client.execute()
         if result or output:
             raise SessionError("the loader lacks RAM API v2 (recv); nothing written")
+
+    def _zero_vectors(self, s: Session) -> None:
+        """Zero the 16 vector bytes before the first body byte of this run (R4-1)."""
+        s.step = "read the vector bytes"
+        if s.dump(pins.APP_BASE, 16) != ZERO_VECTORS:
+            s.step = "zero the 16 vector bytes (before the body)"
+            s._write(pins.APP_BASE, ZERO_VECTORS, self.app.end)
+            if s.checksum(pins.APP_BASE, 16) != zlib.crc32(ZERO_VECTORS):
+                raise SessionError("the zeroed vectors did not read back as zero; nothing else written")
+            self.result["vectors_zeroed"] = True
+            self.log("vectors zeroed: the bootloader refuses the hand-off until the write completes")
+        else:
+            self.result.setdefault("vectors_zeroed", False)  # already zero
+        self.vectors_zeroed = True
 
     def _body_crc(self, s: Session, length: int) -> int:
         return s.checksum(self.body_base, length)
@@ -390,6 +460,8 @@ class AppWriter:
                                    f"image {want:08x}; nothing written in this session, vectors untouched")
             self.log(f"resume check: {self.done} body bytes already in MRAM match the image ({crc:08x})")
         if self.done < self.body_len:
+            if not self.vectors_zeroed:
+                self._zero_vectors(s)
             n = self._part(s)
             at = self.done
             s.step = "write the app body (vectors not yet written)"
@@ -399,7 +471,7 @@ class AppWriter:
                 if progress:
                     progress(at + count)
 
-            s._write(self.body_base + at, target[16 + at : 16 + at + n], offset)
+            s._write(self.body_base + at, target[16 + at : 16 + at + n], self.app.end, offset)
             took = s.clock() - started
             if n >= BLOCK and took > 0:  # size later parts by the slowest rate seen so far
                 self.rate = max(self.rate, took / n) if self.measured else took / n
@@ -425,9 +497,9 @@ class AppWriter:
                     raise SessionError("app body CRC mismatch; the vector table was NOT committed")
         # Here the whole body was CRC-checked in this session (the resume check or the step above).
         s.step = "write the 16 vector bytes"
-        s._write(pins.RECOVER_BASE, target[:16])
+        s._write(pins.APP_BASE, target[:16], self.app.end)
         s.step = "final CRC"
-        final = s.checksum(pins.RECOVER_BASE, self.size)
+        final = s.checksum(pins.APP_BASE, self.size)
         if final != zlib.crc32(target):
             raise SessionError("final app CRC mismatch")
         self.result.update({"crc_after": f"{final:08x}", "bytes": self.size})

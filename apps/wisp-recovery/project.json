@@ -3,10 +3,7 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "sourceRoot": "apps/wisp-recovery/wisp_case",
-  "tags": [
-    "lang:python",
-    "scope:wisp"
-  ],
+  "tags": ["lang:python", "scope:wisp"],
   "targets": {
     "test": {
       "executor": "nx:run-commands",
@@ -14,9 +11,16 @@
         "command": "uv run -q --with unicorn==2.1.3 python -I -m unittest discover -s apps/wisp-recovery/tests -v"
       },
       "inputs": [
-        "{projectRoot}/**/*"
+        "{projectRoot}/**/*",
+        "{workspaceRoot}/packages/wisp-ota/src/**/*"
       ],
-      "cache": true
+      "cache": true,
+      "dependsOn": [
+        {
+          "projects": ["wisp-ota"],
+          "target": "build"
+        }
+      ]
     },
     "plan": {
       "executor": "nx:run-commands",

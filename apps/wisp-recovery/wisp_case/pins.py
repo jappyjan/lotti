@@ -41,6 +41,7 @@ CASE_IMAGE_SHA256 = "773b6d4cfdaf0a5a74a557e3babe8222a0ae813436b76a7437c1096d2c6
 CONSOLE_BAUD = 1_000_000  # 8N1
 CONSOLE_BANNER = rb"\*{6} B200 ([0-9]+\.[0-9]+\.[0-9]+) "
 CONSOLE_POWER_UP = b"Power up..."
+CONSOLE_STATUS = b"B200 vol:"  # the case app's periodic status line
 
 # --- The volatile bridge in case SRAM [W pogoBridge.js] -------------------------------------
 BRIDGE_ADDRESS = 0x2001_0000

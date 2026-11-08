@@ -37,6 +37,12 @@ Emulated time and the case's YHM4005 watchdog (recovery.md, "Long relay sessions
   `helo_delay_s` delays the temple's HELO, so every wait loop of the relay gets time to feed.
   `feed_callers` records where the -feed relay's feed_tick was called from.
 - `forbidden_writes` lists any write to the case flash or its FLASH registers (there must be none).
+
+The pogo switch after quick app restarts (W18 F1d split): with `pogo_window_s`, the YHM2510 reads
+NOT_IDLE_YHM at a ROM entry when the case app's last two boots came less than `pogo_window_s`
+apart and the last one ran less than `pogo_settle_s` before the ROM entry; otherwise IDLE_YHM.
+Times come from `pogo_clock` (the host's console clock in tests). The bridge then refuses G2RQ with
+status 3. `app_boots` records every app boot's time.
 """
 
 from __future__ import annotations
@@ -58,6 +64,7 @@ from wisp_w18 import relay_feed  # noqa: E402
 FLASH, FLASH_SIZE = 0x0800_0000, 0x2_0000
 SRAM, SRAM_SIZE = 0x2000_0000, 0x2_4000
 IDLE_YHM = bytes.fromhex("811104afaf03812022ff")  # third seated-idle profile in the bridge
+NOT_IDLE_YHM = bytes.fromhex("811004afaf03812022ff")  # register 1 not back to idle: not allowlisted
 MX_GPIO_INIT = 0x08006A40
 STUB_INIT = (0x08004EEC, 0x08008438, MX_GPIO_INIT, 0x08002888, 0x08006CF8, 0x08006C80,
              0x08004D30)  # the last: CASE_GPIO_INIT, called by the W18 relay's temple reset
@@ -135,7 +142,7 @@ class FakeTemple:
 class FakeCase:
     def __init__(self, flash_length, temples=None, yhm=IDLE_YHM, rom_reply_banner=BANNER,
                  rts_resets=True, status_line=None, wdt_timeout_s=None, exchange_s=0.0, poll_step_s=0.05,
-                 helo_delay_s=0.0, host_think_s=0.0):
+                 helo_delay_s=0.0, host_think_s=0.0, pogo_window_s=None, pogo_settle_s=3.0, pogo_clock=None):
         # rts_resets=False models a driver whose RTS changes never reach the case: the app
         # keeps running and only prints its periodic status line (status_line) when listened to.
         self.rts_resets = rts_resets
@@ -173,6 +180,9 @@ class FakeCase:
         self.on_wdt_reset = None
         self.relay_started_at = None  # emulated time of the last Go
         self.forbidden_writes: list[tuple[int, int]] = []
+        self.pogo_window_s, self.pogo_settle_s, self.pogo_clock = pogo_window_s, pogo_settle_s, pogo_clock
+        self.app_boots: list[float] = []
+        self.rom_entries: list[tuple[float, bool]] = []  # (time, YHM idle) of every ROM entry by the host
         self._reset_peripherals_state()
         self.uc = u.Uc(u.UC_ARCH_ARM, u.UC_MODE_THUMB | u.UC_MODE_MCLASS)
         self.uc.mem_map(FLASH, FLASH_SIZE)
@@ -281,11 +291,23 @@ class FakeCase:
             self.host_in.clear()
         if self.dtr:
             self.mode = "normal"
+            if self.pogo_clock is not None:
+                self.app_boots.append(self.pogo_clock())
             self._emit(self.banner, need=(1_000_000, "N"))
         else:
+            if self.pogo_window_s is not None:
+                self._pogo_at_rom_entry()
             self.mode = "rom-wait-sync"
             self.rom = self._rom()
             next(self.rom)
+
+    def _pogo_at_rom_entry(self):
+        now = self.pogo_clock()
+        boots = self.app_boots
+        quick = len(boots) >= 2 and boots[-1] - boots[-2] < self.pogo_window_s
+        busy = quick and now - boots[-1] < self.pogo_settle_s
+        self.yhm = bytearray(NOT_IDLE_YHM if busy else IDLE_YHM)
+        self.rom_entries.append((now, not busy))
 
     def _emit(self, data, need):
         port = self.port

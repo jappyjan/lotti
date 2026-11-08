@@ -66,7 +66,7 @@ def enter_rom(device: str, bridge: bytes, opener, sleep=time.sleep, log=None, at
 
 
 def case_banner(device: str, opener, sleep=time.sleep, clock=time.monotonic, timeout: float = 6.0,
-                listen_full: bool = False) -> dict:
+                listen_full: bool = False, settle_s: float = 0.0) -> dict:
     """Reset the case into its normal application and read its boot banner (no bytes sent).
 
     Returns the version (None if no fresh boot banner was seen), the full capture as
@@ -74,6 +74,12 @@ def case_banner(device: str, opener, sleep=time.sleep, clock=time.monotonic, tim
     seconds since just before the port was opened. A "fresh boot" needs both the
     `****** B200 x.y.z` banner and `Power up...`, which the case prints only at start-up;
     its periodic `B200 vol:...` status lines do not count.
+
+    With `settle_s`, it keeps the case app running and listens that long after the banner before
+    it returns (`settle`: how long, and when each `B200 vol:` status line came, in seconds after
+    the banner). The W18 relay needs that between two sessions: right after two app restarts
+    within about 2 s, the pogo switch (YHM2510) is not idle yet and the bridge refuses G2RQ with
+    status 3 (hardware log, W18 F1d split).
     """
     t0 = clock()
     stamp = lambda: round(clock() - t0, 4)  # noqa: E731
@@ -100,10 +106,25 @@ def case_banner(device: str, opener, sleep=time.sleep, clock=time.monotonic, tim
                 version, banner_t = match.group(1).decode(), chunks[-1]["t"]
                 if not listen_full:
                     break
+        if version is not None and settle_s:
+            deadline = t0 + banner_t + settle_s
+            while clock() < deadline:
+                chunk = port.read(4096)
+                if chunk:
+                    chunks.append({"t": stamp(), "n": len(chunk), "text": chunk.decode("ascii", "backslashreplace")})
+                    text += chunk
     finally:
         port.close()
         lines.append({"t": stamp(), "action": "close"})
+    settle = None
+    if version is not None and settle_s:
+        # When each chunk with a status line arrived, in seconds after the banner: the hardware
+        # run tells how soon the app prints its first one.
+        settle = {"seconds": round(stamp() - banner_t, 3),
+                  "status_line_t": [round(c["t"] - banner_t, 3) for c in chunks
+                                    if c["t"] > banner_t and pins.CONSOLE_STATUS.decode() in c["text"]]}
     return {
+        "settle": settle,
         "version": version,
         "fresh_boot": version is not None,
         "banner_t": banner_t,
