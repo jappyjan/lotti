@@ -448,11 +448,15 @@ struct ConductorWakeTests {
 
     @Test func theWatchdogLeavesAStreamingMicAlone() async throws {
         let conductor = Self.makeConductor(link: link, brain: brain, speech: speech, phoneMic: phoneMic,
-                                           classifier: classifier, watchdog: .seconds(1))
+                                           classifier: classifier, watchdog: .seconds(2))
         try await wakeOn(conductor)
-        for _ in 0..<40 {  // 1.6 s of audio, a chunk every 40 ms
+        // Audio every 20 ms for longer than the watchdog, measured by the clock rather than a count
+        // of sleeps: on a loaded runner a 40 ms sleep can take far longer, so a fixed count both
+        // stretched the run and left gaps the watchdog rightly saw as silence.
+        let started = ContinuousClock.now
+        while ContinuousClock.now - started < .seconds(3) {
             hush(1)
-            try await Task.sleep(for: .milliseconds(40))
+            try await Task.sleep(for: .milliseconds(20))
         }
         #expect(link.microphoneStarts == 1)
         #expect(link.microphoneStops == 0)
