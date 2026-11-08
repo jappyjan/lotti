@@ -98,7 +98,7 @@ struct ToolboxTests {
     }
 
     @Test func aToolCanTakeLongerThanTheToolboxDefault() async {
-        let toolbox = Toolbox([FakeTool("slow", delay: .milliseconds(300), timeout: .seconds(2))],
+        let toolbox = Toolbox([FakeTool("slow", delay: .milliseconds(300), timeout: .seconds(30))],
                               callTimeout: .milliseconds(100))
         let results = await toolbox.run([ToolCall(id: "1", tool: "slow")], allowed: ["slow"])
         #expect(results == [ToolResult(id: "1", ok: true, content: "ok")])

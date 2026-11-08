@@ -21,8 +21,10 @@ struct ConductorBackendTests {
         conductor = Conductor(
             link: link, brain: brain, remote: BackendBrain(client: client), backend: client, speech: FakeSpeech(),
             today: FixedToday(info: TodayInfo(now: Date())), inboxSummary: InboxSummary(german: true),
-            timing: .init(idle: .seconds(5), done: .milliseconds(100), answer: .milliseconds(300),
-                          finalTranscript: .milliseconds(200), remote: .seconds(2), locationAfter: locationAfter))
+            // Long screen and answer timers: a stalled runner must not take a "done" line away
+            // before the test reads it. A test about one running out shortens it itself.
+            timing: .init(idle: .seconds(30), done: .seconds(30), answer: .seconds(30),
+                          finalTranscript: .seconds(30), remote: .seconds(30), locationAfter: locationAfter))
         if reachable { try await eventually { client.isReachable } }
     }
 
@@ -145,8 +147,21 @@ struct ConductorBackendTests {
         press(.tap)
         try await eventually { conductor.screen?.text == "Verworfen." }
         #expect(conductor.mode == .done)
+    }
+
+    @Test func theLastDismissGoesDarkWithNoIndicator() async throws {
+        try await fill(Self.mail1)
+        press(.doubleTap)
+        try await eventually { conductor.screen?.rail?.items.first?.action == .openInbox(page: 0) }
+        press(.tap)
+        try await eventually { conductor.screen?.kind == .list }
+        press(.tap)  // Mara
+        try await eventually { conductor.screen?.kind == .original }
+        conductor.timing.done = .milliseconds(100)
+        press(.tap)  // Verwerfen: the done line, then dark (only its timer turns it off; idle is 30 s)
         try await eventually { conductor.mode == .off }
         try await eventually { link.frames.last == .dark }  // and no indicator: nothing is pending
+        try await eventually { backend.received(type: "inbox_event").contains { $0["event"]?.string == "dismissed" && $0["itemId"]?.string == "m1" } }
     }
 
     @Test func anItemsServerActionRunsThroughPerformAndOffersUndo() async throws {
@@ -189,8 +204,7 @@ struct ConductorBackendTests {
     @Test func aCatchupWaitsWhileTheGlassesAreOffYourFace() async throws {
         link.sendWear(false)
         backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails, nichts Dringendes.","at":"2026-11-03T08:15:00+01:00"}"#)
-        try await eventually { client.lastCatchup != nil }
-        try await Task.sleep(for: .milliseconds(30))
+        try await eventually { conductor.lastCatchup?.catchup.id == "k1" }  // the conductor has it (held)
         #expect(conductor.screen == nil && conductor.mode == .off)
         link.sendWear(true)
         conductor.handle(InputEvent(.worn, from: .glasses))
@@ -205,8 +219,7 @@ struct ConductorBackendTests {
                                   now: { clock.now })
         link.sendWear(false)
         backend.send(#"{"type":"catchup","id":"k2","text":"Alt.","at":"2026-11-03T08:15:00+01:00"}"#)
-        try await eventually { client.lastCatchup?.id == "k2" }
-        try await Task.sleep(for: .milliseconds(30))
+        try await eventually { conductor.lastCatchup?.catchup.id == "k2" }  // this conductor has it (held)
         clock.now += 2 * 3600 + 1
         link.sendWear(true)
         conductor.handle(InputEvent(.worn, from: .glasses))
@@ -228,8 +241,7 @@ struct ConductorBackendTests {
         #expect(!(conductor.screen?.rail?.items ?? []).contains { $0.title == "Catch-up" })
         conductor.handle(InputEvent(.doubleTap, from: .ring))  // back: off
         backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails, nichts Dringendes.","at":"2026-11-03T08:15:00+01:00"}"#)
-        try await eventually { client.lastCatchup?.id == "k1" }
-        try await Task.sleep(for: .milliseconds(30))
+        try await eventually { conductor.lastCatchup?.catchup.id == "k1" }
         conductor.handle(InputEvent(.removed, from: .glasses))
         clock.now += 3600
         conductor.handle(InputEvent(.doubleTap, from: .ring))
@@ -244,8 +256,7 @@ struct ConductorBackendTests {
     @Test func theCatchupChoiceDoesNotPushAllItemsOffTheRail() async throws {
         try await fill(#"{"id":"m1","kind":"mail","title":"Mara","summary":"Pizza um 8?","body":"x","createdAt":"2026-11-03T08:15:00+01:00","status":"seen"}"#)
         backend.send(#"{"type":"catchup","id":"k1","text":"Zwei Mails.","at":"2026-11-03T08:15:00+01:00"}"#)
-        try await eventually { client.lastCatchup?.id == "k1" }
-        try await Task.sleep(for: .milliseconds(30))
+        try await eventually { conductor.lastCatchup?.catchup.id == "k1" }
         conductor.handle(InputEvent(.removed, from: .glasses))
         press(.doubleTap)
         let titles = try #require(conductor.screen?.rail?.items.map(\.title))
@@ -287,8 +298,7 @@ struct ConductorBackendTests {
         try await eventually { conductor.mode == .showing }
         let screen = conductor.screen
         backend.send(#"{"type":"catchup","id":"k1","text":"Während du weg warst …","at":"2026-11-03T08:15:00+01:00"}"#)
-        try await eventually { client.lastCatchup != nil }
-        try await Task.sleep(for: .milliseconds(30))
+        try await eventually { conductor.lastCatchup?.catchup.id == "k1" }  // handled, and not shown
         #expect(conductor.screen == screen)
     }
 
@@ -296,7 +306,7 @@ struct ConductorBackendTests {
 
     @Test func theLocationIconShowsWhileTheBackendReadsAndBrieflyAfter() async throws {
         // A long hold, so a slow runner can't make "a moment after" miss it.
-        let rig = try await ConductorBackendTests(locationAfter: .seconds(2))
+        let rig = try await ConductorBackendTests(locationAfter: .seconds(30))
         func location() -> G2ImageBox? { rig.link.frames.last?.images.first { $0.id == G2ImageBox.locationID } }
         rig.backend.send(#"{"type":"location_access","phase":"start","callId":"t1","at":"2026-11-03T08:15:00+01:00"}"#)
         try await eventually { location() != nil }
