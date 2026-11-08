@@ -1,6 +1,6 @@
 # Wisp — rung 4 plan: the first native flash
 
-**Status: proposed 2026-11-08; nothing in it has run.** This was written on t3-worker from the docs and the code, and no hardware was touched. An independent review checked it against safety.md; its findings are worked in. Jan gave the go to plan the next rung. Every write below still needs its own explicit go (safety rule 4). The rule changes in [Decisions for Jan](#decisions-for-jan) need his approval before the steps that depend on them.
+**Status: approved by Jan on 2026-11-08 ("I approve everything", R4-1 to R4-8, W19 done); nothing in it has run on hardware yet.** This was written on t3-worker from the docs and the code, and no hardware was touched. An independent review checked it against safety.md; its findings are worked in. Jan gave the go to plan the next rung. Every write below still needs its own explicit go (safety rule 4). The rule changes in [Decisions for Jan](#decisions-for-jan) are now in safety.md.
 
 Tags as elsewhere: **[C]** confirmed (code, log, static analysis), **[I]** inferred, **[?]** open.
 
@@ -34,7 +34,7 @@ Tags as elsewhere: **[C]** confirmed (code, log, static analysis), **[I]** infer
 
 ## 1. The exit check for rung 4
 
-This is the proposed replacement for the rung-4 row of the [ladder](safety.md#the-ladder) (decision R4-4). The present row still requires "SWD access proven", which W17 replaced.
+This is the replacement (approved, R4-4, now in safety.md) for the rung-4 row of the [ladder](safety.md#the-ladder) (decision R4-4). The present row still requires "SWD access proven", which W17 replaced.
 
 | Rung | What gets flashed | Brick risk | Exit check | Precondition |
 | --- | --- | --- | --- | --- |
@@ -97,7 +97,7 @@ Size: Wisp Boot padded to 64 KiB plus the 190 KB app, about 210 KB. Through the 
 
 Route (a), installing from the phone over stock with no cable (goal 5), comes back after rung 4. By then these are in place: `rescue.bin`, the loader flag clear (G26), Wisp Boot's flag clear (R4-3), its PMIC kick (G16) and image-keyed records (G24).
 
-**R4-1, the change to rule 1 (needs Jan's approval).** The exception now ends:
+**R4-1, the change to rule 1 (approved 2026-11-08, now in safety.md).** The exception now ends:
 
 > Its loader tools write MRAM only in the stock main-app region and only with the pinned stock image.
 
@@ -172,7 +172,7 @@ Tooling needed:
 - for any install over BLE, because those go through the staging file and the flag ([§3](#3-how-it-gets-onto-the-temple), the state row);
 - for a temple that runs native away from the case and the Mac.
 
-**R4-2: proposed wording** (needs Jan's approval):
+**R4-2: wording** (approved 2026-11-08, now in safety.md):
 
 > 11. **No native flash without a proven way back to stock on that temple.** Before every native write: case recovery (W18 F2) has passed on that temple, the held-temple reset test has passed, and `loader-hello` passes in the same session as the write, before it.
 >
@@ -222,7 +222,7 @@ Each fault image is the passed `native-2` Wisp Boot plus an app built with one `
 | --- | --- | --- | --- |
 | F1 | the app hangs early: no watchdog feed, no BLE | 3 boots ended by the 8 s watchdog → Wisp Boot copies `rescue.bin` to staging and sets the flag → the Even bootloader installs stock → stock clears the flag | **No host action.** Within minutes the temple advertises as stock and the Even app connects. Then read-only through the case: `app-check` gives app region CRC `d9864941` over 3,700,080 B, bootloader CRC `63cd8dda`, flag clear, and `pmic_read` matches the snapshot. Step 0 answers 2.4.0.24 |
 | F2 | HardFault in the app's reset handler | as F1: the app's vector table is live, the fault halts, and the locked 8 s watchdog resets | as F1 |
-| F3 | the app runs and BLE works, but it never confirms (`HELLO` handler disabled) | Attempts count only at boot, and the app keeps feeding the watchdog. So the three boots come from **three case resets** (host action), then the rescue follows. A "no confirm within N minutes, then reset" rule in the app would make it automatic; that is R4-8, Jan's call | as F1 |
+| F3 | the app runs and BLE works, but it never confirms (`HELLO` handler disabled) | Attempts count only at boot, and the app keeps feeding the watchdog. So the three boots come from **three case resets** (host action), then the rescue follows. A "no confirm within N minutes, then reset" rule in the app would make it automatic; that is R4-8, approved | as F1 |
 | F4 | a case reset during the rescue copy | the rescue resumes at the next boot and ends in stock | as F1, plus Wisp Boot's report that it resumed. The timing comes from F1's measured copy time |
 | F5 | a dead native image with no `rescue.bin`: `native-1` with an erased app part (Wisp Boot's vector check resets at once) | Wisp Boot cannot rescue → **case recovery** | `recover` (about 72 min) ends at CRC `d9864941`, and stock boots: case recovery from a temple in a reset loop |
 | (F6) | touchpad rescue hold | only if implemented (Wisp Boot TODO, `boot_main.c:307`) | as F1 |
@@ -241,7 +241,7 @@ Jan's standing permission of 2026-11-07 covers starting RO runs. Every **W** ste
 
 | Step | What | HW | Needs |
 | --- | --- | --- | --- |
-| W19 | Jan decides R4-1, R4-2, R4-4 and R4-7 (R4-3, R4-6 and R4-8 can wait until W26; R4-5 is optional) | — | this plan |
+| W19 | **Done 2026-11-08:** Jan approved R4-1 to R4-8 | — | this plan |
 | W20 | Static analysis, no hardware: **the reset waveform's `reset_gpio` and the loader's UART2 precondition**; the NOR classifier and board-detect results in the patched bootloader's RAM; whether step 0's "hardware 5" is the hw_version byte `uled_mspi_init` uses; how case 1.2.57 treats a temple that doesn't answer its UART protocol (does it reset it, or start a case-UART OTA?); what stock does at boot when `/firmware/*.bin` is missing or wrong; the address of `bootloader_error_reset` in the patched image. Then build `peek`, `--no-release` and `pmic_read.bin` | — | G3, G4 |
 | W21 | **Pre-qualification session, left.** `loader-hello`; the **held-temple reset test**; `peek` for the NOR ID and hw_version; the `pmic_read` snapshot (its first run with its own go). About 10 min. **Stop the whole plan if the held temple does not come back with `HELO`.** | **RO** | G3, G25 |
 | W22 | Build `native-0` and its tooling; emulate: rung 3 for the observe-only Wisp Boot (its own suite) and the fallback build, on the stock and the patched bootloaders, with the real app behind both (rule 12). A `w18-test` case writes `native-0` through the loader into the stock app region, then `CONT` → Wisp Boot → app, with the PMIC watchdog armed and the case-UART status answering | — | G1, G2, G5–G15, G27 |
@@ -346,6 +346,8 @@ Size: **S** < 1 day, **M** 1–3 days, **L** > 3 days, for one thread.
 - anything happens that the step's expected output doesn't describe (W18's rule).
 
 ## Decisions for Jan
+
+**All approved by Jan on 2026-11-08** ("I approve everything"). Where a decision offered a choice, the recommendation stands: R4-6 is a shared key (an HMAC, as with the loader's `HOLD`); R4-8's N is set in W26 and is long enough for a bench session; R4-5's program still needs its own go for its first run; `recover` keeps `--allow-pending-flag`.
 
 | # | Decision | Needed before |
 | --- | --- | --- |
