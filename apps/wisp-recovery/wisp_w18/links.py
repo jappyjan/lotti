@@ -298,18 +298,30 @@ class _RelayFraming:
         same stock UART re-init as every exchange) and waits for a temple frame up to its poll
         bound. A held loader sends nothing, so the normal answer is G2RX status 2 with no frame.
         Keeps the relay running without temple traffic; returns (status, frame, seconds)."""
+        return self.query(b"", idle=True)
+
+    def query(self, frame: bytes, idle: bool = False) -> tuple[int, bytes, float]:
+        """One G2TX whose answer may be missing: `frame` (empty, or one the relay forwards: 9, 25
+        or 32 bytes starting 7E 00 01 n-5) goes to the temple, and the relay returns the first
+        5A A5 FF frame of 13, 21, 29 or 32 bytes it receives within its poll bound. Returns
+        (relay status, temple frame, seconds): status 0 with a frame, 1 when the frame did not go
+        out whole, 2 when no such frame came. Unlike `exchange`, statuses 1 and 2 do not raise:
+        boot-watch asks a booting app that may not answer yet."""
         if self.port is None or not self.ready:
             raise LinkError("relay is not running")
-        packet = b"G2TX\0"
+        if len(frame) not in (0, 9, 25, 32) or (frame and frame[:4] != bytes((0x7E, 0, 1, len(frame) - 5))):
+            raise ValueError("the relay forwards only empty frames or 9/25/32-byte frames starting 7E 00 01 n-5")
+        packet = b"G2TX" + bytes((len(frame),)) + frame
         packet += bytes((sum(packet) & 255,))
-        entry = self.recent.begin(b"")
-        entry["idle"] = True
+        entry = self.recent.begin(frame)
+        if idle:
+            entry["idle"] = True
         start = self.recent.clock()
         timeout, self.port.timeout = self.port.timeout, self.IDLE_TIMEOUT
         try:
             self.port.write(packet)
             self.port.flush()
-            head = read_exact(self.port, 6, "relay response to an empty G2TX")
+            head = read_exact(self.port, 6, "relay response to an empty G2TX" if idle else "relay response")
             if head[:4] != b"G2RX" or head[5] > 32:
                 raise LinkError(f"invalid relay header {head.hex()}")
             tail = read_exact(self.port, head[5] + 1, "temple response")

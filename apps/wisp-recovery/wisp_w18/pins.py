@@ -22,6 +22,7 @@ STOCK_MAIN_VERSION = "2.4.0.24"
 STOCK_MAIN_SHA256 = "df8cfddf3bd29a8351129a8364a8e0dafb347ffc7bfcbca5b52fdd973a7cce4a"
 STOCK_MAIN_BYTES = 3_700_068
 STOCK_MAIN_PAYLOAD_SHA256 = "33f9eb7a47f996b8bcf34ac9df8bc2f7b698a6512cbf370d25b3215ad0dde298"
+STOCK_MAIN_CRC32 = 0x9C66_404B  # zlib CRC-32 of those 3,700,068 bytes: what `app-check` compares
 
 # --- The patched bootloader [D firmware.py, boot.ld] -------------------------------------------
 BOOT_BASE = 0x0041_0000
@@ -54,6 +55,11 @@ PROGRAMS = {
     "feed": "bd72c6b14fee4fbeee890d14a9a8e9ccd33a5b8cb071b0f9b1aa00ea7a7409d9",
     "dump_fed": "7ac581fd2028ff167ca0461ea9c844dc3dfd2842cabdfcc1637a332a28aafbc5",
     "recover_fed": "8f5cefb93786f676b8d5c8131b3c6999775dc36bd59b9a4990f2b40678d6f610",
+    # Ours (rung4.md §4, G3): a read-only nPM1300 snapshot over the bootloader's IOM7. One kick
+    # (the feed's write), then one write-read per register of PMIC_READ_REGISTERS, baked into the
+    # image; tests/test_pmic_read.py checks its wire under Unicorn. Its first hardware run needs
+    # Jan's own go (a new program on the PMIC bus).
+    "pmic_read": "491f98f55dc65a81ff2a1ba88be7233e5c90d93508423b7c0306c5d26e27b989",
 }
 # What the feeding programs use of the patched 2.3.2.14 bootloader [S: disassembly, and the IOM7
 # state read through the loader in Renode], valid only while it is the one in MRAM (every session
@@ -67,10 +73,68 @@ TICK_COUNT = 0x0041_60E9  # xTaskGetTickCount (Thumb) [D platform.h]; 1024 ticks
 # An Apollo510 reset does not stop it, and the bootloader and the loader never kick it.
 PMIC_WATCHDOG_S = 30.72
 PMIC_KICK_WIRE = bytes((0x07, 0x04, 0x01))
+# pmic_read.bin's registers, in the order it reads and sends them (programs/pmic_read.c, its
+# `ranges`): (16-bit address, name, kind). "config" is what Wisp's DTS and drivers must match and
+# what a later snapshot must equal; "status" reflects live state (VBUS, charging, rails) and may
+# differ; "watchdog" is the timer's period (rung4.md exit item 5: only the watchdog timer may
+# differ). The timer's mode is "config": a watchdog that no longer resets the temple would remove
+# the PMIC's power cycle, the fail-safe native-0 keeps (G27). Offsets as Zephyr's npm13xx drivers.
+PMIC_READ_REGISTERS = (
+    (0x0201, "VBUSIN.ILIM", "config"), (0x0202, "VBUSIN.ILIMSTARTUP", "config"),
+    (0x0205, "VBUSIN.DETECT", "status"), (0x0207, "VBUSIN.STATUS", "status"),
+    (0x0304, "BCHARGER.ENABLE", "config"),
+    (0x0308, "BCHARGER.ISET_MSB", "config"), (0x0309, "BCHARGER.ISET_LSB", "config"),
+    (0x030A, "BCHARGER.ISET_DISCHG_MSB", "config"), (0x030B, "BCHARGER.ISET_DISCHG_LSB", "config"),
+    (0x030C, "BCHARGER.VTERM", "config"), (0x030D, "BCHARGER.VTERM_R", "config"),
+    (0x030E, "BCHARGER.TRICKLE_SEL", "config"), (0x030F, "BCHARGER.ITERM_SEL", "config"),
+    (0x0310, "BCHARGER.NTC_COLD_MSB", "config"), (0x0311, "BCHARGER.NTC_COLD_LSB", "config"),
+    (0x0312, "BCHARGER.NTC_COOL_MSB", "config"), (0x0313, "BCHARGER.NTC_COOL_LSB", "config"),
+    (0x0314, "BCHARGER.NTC_WARM_MSB", "config"), (0x0315, "BCHARGER.NTC_WARM_LSB", "config"),
+    (0x0316, "BCHARGER.NTC_HOT_MSB", "config"), (0x0317, "BCHARGER.NTC_HOT_LSB", "config"),
+    (0x0334, "BCHARGER.CHG_STAT", "status"), (0x0336, "BCHARGER.ERR_REASON", "status"),
+    (0x0350, "BCHARGER.VBATLOW_EN", "config"),
+    (0x0408, "BUCK1.VOUT_NORM", "config"), (0x0409, "BUCK1.VOUT_RET", "config"),
+    (0x040A, "BUCK2.VOUT_NORM", "config"), (0x040B, "BUCK2.VOUT_RET", "config"),
+    (0x040C, "BUCK.EN_CTRL", "config"), (0x040D, "BUCK.VRET_CTRL", "config"),
+    (0x040E, "BUCK.PWM_CTRL", "config"), (0x040F, "BUCK.SW_CTRL", "config"),
+    (0x0410, "BUCK1.VOUT_STAT", "status"), (0x0411, "BUCK2.VOUT_STAT", "status"),
+    (0x0415, "BUCK.CTRL0", "config"), (0x0434, "BUCK.STATUS", "status"),
+    (0x0509, "ADC.CONFIG", "config"), (0x050A, "ADC.NTCR_SEL", "config"),
+    (0x0600, "GPIO0.MODE", "config"), (0x0601, "GPIO1.MODE", "config"), (0x0602, "GPIO2.MODE", "config"),
+    (0x0603, "GPIO3.MODE", "config"), (0x0604, "GPIO4.MODE", "config"), (0x061E, "GPIO.STATUS", "status"),
+    (0x0705, "TIMER.CONFIG", "config"),
+    (0x0708, "TIMER.TARGET_HI", "watchdog"), (0x0709, "TIMER.TARGET_MID", "watchdog"),
+    (0x070A, "TIMER.TARGET_LO", "watchdog"),
+    (0x0804, "LDSW.STATUS", "status"), (0x0805, "LDSW1.GPISEL", "config"), (0x0806, "LDSW2.GPISEL", "config"),
+    (0x0807, "LDSW.CONFIG", "config"), (0x0808, "LDSW1.LDOSEL", "config"), (0x0809, "LDSW2.LDOSEL", "config"),
+    (0x080C, "LDSW1.VOUTSEL", "config"), (0x080D, "LDSW2.VOUTSEL", "config"),
+    (0x0B04, "SHIP.CONFIG", "config"), (0x0B06, "SHIP.LPCONFIG", "config"),
+)
 # recover.bin calls the stock 2.3.2.14 MRAM wrapper at this Thumb address [D recover.c]; it is
 # only valid while the patched (2.3.2.14-based) bootloader is the one in MRAM, which every
 # loader session proves first (preflight hash of [BOOT_BASE, +PATCHED_BOOTLOADER_BYTES)).
 MRAM_WRAPPER_2_3_2_14 = 0x0042_E83D
+# The patched bootloader's own `bootloader_error_reset` [S, W20; hardware.md]: writes the clear
+# record {~0 x4} to the flag through MRAM_WRAPPER_2_3_2_14 with the ROM key, then RSTGEN SWPOR.
+# What G26's flag-clear program will call; nothing in this tool calls it yet.
+BOOTLOADER_ERROR_RESET_2_3_2_14 = 0x0042_E157
+
+# --- Reads the loader tools may make (`peek`; rung4.md §4, G3) ----------------------------------
+# name -> (address, length, what): the patched (2.3.2.14-based) bootloader's RAM and MRAM only,
+# read with dump/dump_fed after the bootloader CRC check. Addresses from W20's static analysis
+# (hardware.md, "The patched bootloader's RAM"), checked by running its start-up under Unicorn.
+PEEK_REGIONS = {
+    "nor": (0x2000_023C, 4, "NOR ops record chosen by the RDID classifier (0x41FE0A): 0x4336A0 MX25U25643G, "
+                            "0x4336B0 GD25LE256H; an unknown ID keeps the default, which is the MX record"),
+    "board": (0x2002_7018, 8, "board detect over the GPIO16 ADC strap (0x430440): u8 class, u16 code, i16 mV "
+                              "(raw x 1190 >> 12, the app's hw_version bins: 100-250 mV = 5, 950-1050 mV = 6)"),
+    "uart2": (0x2000_0490, 28, "the bootloader's UART2 table entry, what the loader's precondition reads "
+                               "(during the hold its awake byte is 1: the loader woke UART2)"),
+    "power-callbacks": (0x2002_6E44, 8, "power pre/post callbacks; the loader requires both zero"),
+    "flag": (0x007F_E000, 16, "the update-flag record"),
+    "nor-records": (0x0043_36A0, 32, "the bootloader's two NOR ops records (MRAM)"),
+}
+PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 
 # --- The case relay (case SRAM, loaded through the STM32 ROM like step 0) [D link.py] ----------
 # drdaeman's case.bin: the webflasher bridge + his reset/claim/relay extension + Even's 372-byte
@@ -132,11 +196,11 @@ SIDES = ("left", "right")
 
 # --- Wisp native images through the loader (docs/wisp/rung4.md §3, decision R4-1) -------------
 # `install-wisp` writes only an image listed in WISP_IMAGES, and only while R4_1_APPROVED is True.
-# Both stay as they are until Jan approves R4-1 (rule 1's W18 exception extended to pinned Wisp
-# images) and a reviewed commit pins a built native-0 image. Until then the command refuses every
-# image before it touches the case (safety.md rule 1). tests/test_install_wisp.py checks that the
-# table is empty while R4-1 is not approved.
-R4_1_APPROVED = False
+# Jan approved R4-1 on 2026-11-08 (rule 1's W18 exception extended to pinned Wisp images; commit
+# 9181c94). WISP_IMAGES and WISP_BOOT_PASSED stay empty until W23: a reviewed commit pins a built
+# native-0 image and its Wisp Boot. Until then the command refuses every image before it touches
+# the case (safety.md rule 1); tests/test_install_wisp.py keeps both tables empty.
+R4_1_APPROVED = True
 WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
 # Wisp Boot builds that passed rung 3, by the SHA-256 of the padded 64 KiB slot, with the suites
 # they passed (wisp-fw:boot-test, `.wisp-cache/rung3/<bootloader>/report.md`). R4-1 asks for both
@@ -148,7 +212,8 @@ WISP_BOOT_PASSED: dict[str, dict] = {}
 # Post-link gates a Wisp image's build must have passed (rung4.md R4-1): the rule-8 gate and the
 # no-MRAM-write gate over [0x448000, end) (G13).
 WISP_GATES = ("check_rule8", "no-mram-write")
-# name -> {"image_sha256", "image_bytes", "elf_sha256", "map_sha256", "gates": (...)}.
+# name -> {"image_sha256", "image_bytes", "elf_sha256", "map_sha256", "gates": (...)}, plus
+# optionally "crc32" (zlib CRC-32 of the image), which `app-check` compares the app region with.
 WISP_IMAGES: dict[str, dict] = {}
 BATTERY_MIN_PERCENT = 80
 BATTERY_MIN_MV = 3900  # rung4.md R4-4, while native (Wisp's status reports mV)

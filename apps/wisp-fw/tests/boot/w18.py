@@ -37,6 +37,11 @@ Cases (end states):
                 (feed.bin, dump_fed.bin) and survives; `recover-fed` writes the dead temple in one
                 session with recover_fed.bin under the same armed watchdog. Each checks that every
                 PMIC write during the session is the kick 07 04 01
+  rung4-reads   rung 4's read-only tools (rung4.md G3) against the real patched bootloader: `peek` of
+                every allowlisted region (the NOR record must be the MX one the NOR model answers,
+                UART2's table entry and the power callbacks read back as the loader leaves them)
+                and `pmic_read.bin` through the bootloader's IOM7 HAL under the armed PMIC
+                watchdog: 58 registers back, nothing but kicks written to the PMIC in the session
 """
 import argparse
 import hashlib
@@ -532,6 +537,35 @@ class Harness:
 
         self.session_case("recover-fed", None, body, check, setup=setup, temple_feed=True, session_budget=900)
 
+    # --- rung 4's reads (rung4.md G3) ---
+    def rung4_reads(self):
+        def setup(run):
+            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+
+        def body(s):
+            from wisp_w18.cli import describe_peek
+            peek = {name: describe_peek(name, s.peek(name)) for name in pins.PEEK_REGIONS}
+            return {"peek": peek, "pmic": s.pmic_read(), "feeds": s.feeds}
+
+        def check(run, result):
+            p = self.pmic(run)
+            v = result.get("value")
+            leading, _writes = self.leading_kicks(p["log"])
+            if not v:
+                return False, f"{result} {p}"
+            peek = v["peek"]
+            ok = (peek["nor"]["record"] == "0x4336a0" and peek["uart2"]["loader_state"]
+                  and peek["power-callbacks"]["zero"] and peek["flag"]["word0"] == "0xffffffff"
+                  and len(v["pmic"]) == len(pins.PMIC_READ_REGISTERS) and p["expiries"] == 0
+                  and leading >= v["feeds"] + 1 and run.stock_running())
+            timer = {f"{a:#06x}": f"{v['pmic'][a]:#04x}" for a in (0x0705, 0x0708, 0x0709, 0x070A)}
+            return ok, (f"peek: NOR record {peek['nor']['record']} (MX), UART2 as the loader leaves it, callbacks zero, "
+                        f"board strap {peek['board']['strap_mV']} mV; pmic_read: {len(v['pmic'])} registers (timer "
+                        f"{timer}); {leading} kicks and no other PMIC write in the session; stock app running"
+                        if ok else f"{v} leading={leading} {p}")
+
+        self.session_case("rung4-reads", self.app, body, check, setup=setup, temple_feed=True)
+
     # --- install-wisp (rung4.md G1) ---
     def wisp_image(self) -> AppImage:
         """A non-stock image install-wisp may write in emulation: the stock app (it boots) with a
@@ -687,7 +721,7 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
                                                    "recover-relay", "recover-cut", "recover-split", "temple-wdt",
-                                                   "recover-fed", "install-wisp", "install"])
+                                                   "recover-fed", "rung4-reads", "install-wisp", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -716,6 +750,8 @@ def main() -> int:
         h.temple_wdt(fed=True)
     if "recover-fed" in only:
         h.recover_fed()
+    if "rung4-reads" in only:
+        h.rung4_reads()
     if "install-wisp" in only:
         h.install_wisp()
         h.install_wisp_cut()

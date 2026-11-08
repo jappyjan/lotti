@@ -3,7 +3,8 @@
 (docs/wisp/rung4.md §3, G1, decision R4-1). Nothing here talks to hardware.
 
 - `resolve`: the image must be listed in pins.WISP_IMAGES, and R4-1 must be approved
-  (pins.R4_1_APPROVED). Both are off in the repository, so every image is refused. The ELF and
+  (pins.R4_1_APPROVED). R4-1 is approved (2026-11-08) but the table stays empty until W23 pins
+  native-0 after review, so every image is refused. The ELF and
   map files must match their pins, the build must have passed the gates the pin records, and
   the first 64 KiB (Wisp Boot) must be a build that passed both rung-3 suites R4-1 names.
 - `rule3`: safety.md rule 3 on the bytes the writer is about to send, in both implementations
@@ -240,10 +241,10 @@ def resolve(data: bytes, elf: bytes, map_text: bytes, expect: str) -> dict:
     digest = image.sha(data)
     if not pins.R4_1_APPROVED or not pins.WISP_IMAGES:
         raise NativeRefused(
-            "install-wisp writes only Wisp images pinned in wisp_w18/pins.py (WISP_IMAGES). The table stays "
-            "empty until Jan approves R4-1 (docs/wisp/rung4.md, safety.md rule 1) and a reviewed commit pins "
-            f"a built native-0 image. This image ({digest[:16]}...) is not pinned. Nothing was sent and the "
-            "case was not touched.")
+            "install-wisp writes only Wisp images pinned in wisp_w18/pins.py (WISP_IMAGES), and only with R4-1 "
+            "approved (docs/wisp/rung4.md, safety.md rule 1; approved 2026-11-08). The table stays empty until "
+            f"W23: a reviewed commit pins a built native-0 image. This image ({digest[:16]}...) is not pinned. "
+            "Nothing was sent and the case was not touched.")
     found = find_pin(digest)
     if found is None:
         raise NativeRefused(f"image {digest[:16]}... is not in pins.WISP_IMAGES; nothing was sent")

@@ -21,6 +21,14 @@
 // way. An Apollo510 reset leaves the watchdog as it is: the PMIC is a separate chip. Writes that arm or reconfigure the timer (07 00, 07 01, 07 05, 07 08..0A) are
 // logged, not acted on, so the stock app's own PMIC set-up after a release cannot reset the run.
 //
+// Reads (for pmic_read.bin, rung4.md G3): G2Iom serves a READ from the register the previous
+// write named and always reports FIFOPTR = 0x00202000. The stock app reads that way (an address
+// write, then a READ). pmic_read.bin uses the IOM's offset phase instead (READ with OFFSETCNT 2:
+// OFFSETHI, then OFFSETLO, a repeated start, the data), so for such a READ this model first hands
+// G2Iom the offset bytes as an address write of its own (not logged: no write reaches the PMIC),
+// and FIFOPTR's FIFO1SIZ counts the bytes of the last READ (whole words, as the HAL pops them)
+// down to 0 as FIFOPOP is read, so a program can see an empty or a filled receive FIFO.
+//
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
 // PmicLog (one line per PMIC write).
 using System;
@@ -83,11 +91,23 @@ namespace Antmicro.Renode.Peripherals.Wisp
             push.Clear();
             devcfg = 0;
             offsetHi = 0;
+            rxBytes = 0;
         }
 
         public byte ReadByte(long offset) { return iom.ReadByte(offset); }
         public ushort ReadWord(long offset) { return iom.ReadWord(offset); }
-        public uint ReadDoubleWord(long offset) { return iom.ReadDoubleWord(offset); }
+        public uint ReadDoubleWord(long offset)
+        {
+            switch(offset & 0xFFF)
+            {
+            case 0x100: // FIFOPTR: FIFO1SIZ (bits 23:16) from the last READ
+                return (iom.ReadDoubleWord(offset) & 0xFF00FFFFu) | (Math.Min(rxBytes, 0xFFu) << 16);
+            case 0x108: // FIFOPOP: one word out of the receive FIFO
+                rxBytes = rxBytes >= 4 ? rxBytes - 4 : 0;
+                return iom.ReadDoubleWord(offset);
+            }
+            return iom.ReadDoubleWord(offset);
+        }
         public void WriteByte(long offset, byte value) { Observe(offset, value, 1); iom.WriteByte(offset, value); }
         public void WriteWord(long offset, ushort value) { Observe(offset, value, 2); iom.WriteWord(offset, value); }
         public void WriteDoubleWord(long offset, uint value) { Observe(offset, value, 4); iom.WriteDoubleWord(offset, value); }
@@ -109,9 +129,33 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 devcfg = value & 0x7F;
                 return;
             case 0x120: // CMD
+                if((value & 0xF) == 2)
+                {
+                    Read(value);
+                }
                 Command(value);
                 return;
             }
+        }
+
+        private void Read(uint cmd)
+        {
+            var tsize = (cmd >> 8) & 0xFFF;
+            var offsetCount = (int)((cmd >> 4) & 7);
+            rxBytes = (tsize + 3) & ~3u;
+            if(offsetCount == 0)
+            {
+                return;
+            }
+            uint word = 0;
+            var n = 0;
+            for(var i = offsetCount - 1; i >= 1; i--, n++)
+            {
+                word |= ((offsetHi >> (8 * (i - 1))) & 0xFF) << (8 * n);
+            }
+            word |= (cmd >> 24) << (8 * n);
+            iom.WriteDoubleWord(0x10C, word);
+            iom.WriteDoubleWord(0x120, ((uint)offsetCount << 8) | 1);
         }
 
         private void Command(uint cmd)
@@ -164,7 +208,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly G2Iom iom;
         private readonly StringBuilder log;
         private List<byte> push;
-        private uint devcfg, offsetHi;
+        private uint devcfg, offsetHi, rxBytes;
         private long nowMs, lastKickMs, periodMs;
     }
 }
