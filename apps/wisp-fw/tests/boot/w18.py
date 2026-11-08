@@ -39,7 +39,8 @@ Cases (end states):
                 PMIC write during the session is the kick 07 04 01
   rung4-reads   rung 4's read-only tools (rung4.md G3) against the real patched bootloader: `peek` of
                 every allowlisted region (the NOR record must be the MX one the NOR model answers,
-                UART2's table entry and the power callbacks read back as the loader leaves them) and `pmic_read.bin` through the bootloader's IOM7 HAL under the armed PMIC
+                UART2's table entry and the power callbacks read back as the loader leaves them)
+                and `pmic_read.bin` through the bootloader's IOM7 HAL under the armed PMIC
                 watchdog: 58 registers back, nothing but kicks written to the PMIC in the session
 """
 import argparse

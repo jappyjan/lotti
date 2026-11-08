@@ -258,13 +258,14 @@ def stall_summary(diagnostics: dict) -> dict | None:
     return out
 
 
-def run_sessions(args, name: str, step, on_stop=None, fields=None) -> int:
+def run_sessions(args, name: str, step, on_stop=None, fields=None, on_session=None) -> int:
     """Run `step(session, patched, index) -> (finished, fields)` in held loader sessions, one
     after the other, until it says finished (most commands need one). Every session claims the
     loader, checks the bootloader CRC and releases it, with every gate of a single session. One
     report: the fields, each session's length, and for a session that stopped, the error that
     stopped it (not whatever the cleanup ran into), its step and position, the cleanup failures
-    and its last frames. `on_stop(report)` adds to the report of a stopped run.
+    and its last frames. `on_stop(report)` adds to the report of a stopped run; `on_session(session)`
+    sees each Session before it claims the loader.
 
     Every session after the first lets the case app settle (SETTLE_S) before the ROM entry. A
     relay start refused with status 3 (pogo switch not idle, zero writes) is retried after the
@@ -284,6 +285,8 @@ def run_sessions(args, name: str, step, on_stop=None, fields=None) -> int:
             if settle and hasattr(link, "settle_s"):
                 link.settle_s = SETTLE_S
             session = Session(link, temple_feed=temple_feed(args))
+            if on_session:
+                on_session(session)
             entry: dict = {"index": index}
             if settle:
                 entry["settle_s"] = SETTLE_S
@@ -394,8 +397,6 @@ def cmd_held_reset(args) -> int:
     held: dict = {}
 
     def step(session, patched, index):
-        if index == 1:
-            held["hello"] = True  # the claim succeeded: the held temple answered the second reset
         fields = hello_checks(session, args.side)
         if index == 0:
             session.hold = True
@@ -408,24 +409,34 @@ def cmd_held_reset(args) -> int:
         limit = pins.PMIC_WATCHDOG_S - HELD_RESET_MARGIN_S
         verdict = {"helo_s_after_relay_start": round(after_start, 2), "helo_s_after_last_kick": round(after_kick, 2),
                    "limits_s": [HELD_RESET_HELO_S, limit]}
-        if after_start > HELD_RESET_HELO_S or after_kick >= limit:
-            raise SessionError(f"INCONCLUSIVE: the HELO came {after_start:.1f} s after the relay started (the case's "
-                               f"reset gives it within 1 s) and {after_kick:.1f} s after the held session's last PMIC "
-                               f"kick (limit {limit:g} s): the PMIC's watchdog may have reset the temple, not the "
-                               "case. Nothing was written; rerun held-reset-test.")
+        if after_start > HELD_RESET_HELO_S:
+            held["late"] = True
+            raise SessionError(f"STOP: the HELO came {after_start:.1f} s after the relay started, not within "
+                               f"{HELD_RESET_HELO_S:g} s as the case's reset gives it ({after_kick:.1f} s after the held "
+                               "session's last PMIC kick): the PMIC's watchdog brought it, the case's reset did not. "
+                               "Nothing was written.")
+        if after_kick >= limit:
+            raise SessionError(f"INCONCLUSIVE: the second session started too late: its HELO came {after_kick:.1f} s "
+                               f"after the held session's last PMIC kick (limit {limit:g} s), so the PMIC's watchdog may "
+                               "have reset the temple first. Nothing was written; rerun held-reset-test.")
         print(f"OK: held-temple reset test passed on the {args.side} temple: the case reset a temple held in its "
               f"loader; its HELO came {after_start:.1f} s after the relay started and {after_kick:.1f} s after the "
               "held session's last PMIC kick, before the PMIC's watchdog could have reset it", flush=True)
         return True, {"reset_session": fields, "verdict": verdict}
 
-    def on_stop(report):
-        if len(report["sessions"]) > 1 and not held.get("hello"):
-            print("STOP (rung4.md §8) if the second session's relay started (G2U2_ARMED in its log) and no HELO "
-                  "came: the case reset does not reach a temple held in its loader. Do not go on with rung 4; "
-                  "report this. The temple boots by itself when the PMIC's watchdog fires, about 30 s after the "
-                  "held session's last kick.", file=sys.stderr)
+    sessions: list = []
 
-    return run_sessions(args, "held-reset-test", step, on_stop)
+    def on_stop(report):
+        late = held.get("late")
+        no_helo = len(report["sessions"]) > 1 and sessions and sessions[-1].hello_at is None
+        if late or no_helo:
+            print("STOP (rung4.md §8): " + ("the HELO came late, from the PMIC's watchdog" if late else
+                  "if the second session's relay started (its case_uart_registers event is in the report) and the "
+                  "boot beacon timed out") + ": the case reset does not reach a temple held in its loader. Do not "
+                  "go on with rung 4; report this. The temple boots by itself when the PMIC's watchdog fires, about "
+                  "30 s after the held session's last kick.", file=sys.stderr)
+
+    return run_sessions(args, "held-reset-test", step, on_stop, on_session=sessions.append)
 
 
 def describe_peek(name: str, data: bytes) -> dict:

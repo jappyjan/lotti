@@ -200,7 +200,8 @@ class HeldTemple(unittest.TestCase):
         case.link = link
         code, report = run_cli(["held-reset-test", "--side", "left"], case)
         self.assertEqual(code, 1)
-        self.assertIn("INCONCLUSIVE", report["error"])
+        self.assertIn("STOP", report["error"])
+        self.assertIn("PMIC", report["error"])
         self.assertNotIn("verdict", report)
 
     def test_held_reset_test_needs_the_temple_feed(self):
