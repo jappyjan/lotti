@@ -335,8 +335,9 @@ class KickFailure(unittest.TestCase):
         STOCK = Recover.STOCK
         original = FakeLoaderLink._prog_recover_fed
 
-        def latch_after_feed(self, addr, n):  # feed.bin passed; then IOM7 latches during the write
-            case.pmic.kick_status = 0x107
+        def latch_after_feed(self, addr, n):  # feed.bin and the API check passed; IOM7 latches in a write
+            if n:
+                case.pmic.kick_status = 0x107
             return (yield from original(self, addr, n))
         from unittest import mock
         with mock.patch.object(FakeLoaderLink, "_prog_recover_fed", latch_after_feed):

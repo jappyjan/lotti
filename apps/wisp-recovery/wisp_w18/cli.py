@@ -9,6 +9,8 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   link-soak           read-only: stream N bytes of the app region out through the loader (dump), as
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
+  install-wisp        write a pinned Wisp native image to MRAM through the loader (rung4.md, R4-1);
+                      refuses every image until Jan approves R4-1 and an image is pinned
 
 Two watchdogs limit a session, one in the case and one in the temple (recovery.md, "Long relay
 sessions" and "The temple's watchdog"):
@@ -20,6 +22,11 @@ sessions" and "The temple's watchdog"):
     `recover` writes in one session. --no-temple-feed runs drdaeman's programs only; then
     `recover` splits its write into sessions of at most --max-session-s (default 20) seconds
     after the relay starts, each resumed by CRC, as before.
+
+Between two sessions of one command the case app runs SETTLE_S seconds after its banner before
+the next ROM entry: right after two quick app restarts the pogo switch is not idle and the relay
+refuses to start (status 3, zero writes; W18 F1d split). A refusal is recognised at once and the
+session is retried once after the same settle.
 """
 
 from __future__ import annotations
@@ -33,9 +40,9 @@ import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import image, pins
-from .links import CaseRelayLink, SocketLink
-from .session import BLOCK, AppWriter, Session, SessionError
+from . import image, native, pins
+from .links import CaseRelayLink, PogoNotIdle, SocketLink
+from .session import BLOCK, AppImage, AppWriter, Session, SessionError
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
 # The left temple's relay sessions stopped 19.5-22.2 s after the relay started (link-soak) and
@@ -46,6 +53,10 @@ RUNS = Path(__file__).resolve().parents[1] / "runs"
 # CRC and the release. With both feeds a session has no limit (0).
 DEFAULT_MAX_SESSION_S = 12.0
 DEFAULT_MAX_SESSION_UNFED_TEMPLE_S = 20.0
+# Seconds the case app runs after its banner before a later session (or a retry) enters the ROM.
+# The app feeds the case's YHM4005 every 5 s, so this also gives the ROM phase a fresh window.
+SETTLE_S = 5.0
+POGO_RETRIES = 1  # retries of a session whose relay start was refused with status 3
 
 
 def default_max_session_s(profile: str, temple_feed: bool = True) -> float:
@@ -239,34 +250,63 @@ def stall_summary(diagnostics: dict) -> dict | None:
     return out
 
 
-def run_sessions(args, name: str, step, on_stop=None) -> int:
+def run_sessions(args, name: str, step, on_stop=None, fields=None) -> int:
     """Run `step(session, patched, index) -> (finished, fields)` in held loader sessions, one
     after the other, until it says finished (most commands need one). Every session claims the
     loader, checks the bootloader CRC and releases it, with every gate of a single session. One
     report: the fields, each session's length, and for a session that stopped, the error that
     stopped it (not whatever the cleanup ran into), its step and position, the cleanup failures
-    and its last frames. `on_stop(report)` adds to the report of a stopped run."""
+    and its last frames. `on_stop(report)` adds to the report of a stopped run.
+
+    Every session after the first lets the case app settle (SETTLE_S) before the ROM entry. A
+    relay start refused with status 3 (pogo switch not idle, zero writes) is retried after the
+    same settle, at most POGO_RETRIES times, and only when the case's record proved it wrote
+    nothing."""
     patched = image.build_patched_bootloader()
-    report: dict = {"side": args.side, "command": name, "temple_feed": temple_feed(args), "sessions": []}
+    report: dict = {"side": args.side, "command": name, "temple_feed": temple_feed(args), "sessions": [],
+                    **(fields or {})}
     code = 1
     link = session = None
     try:
         index = 0
+        settle = False
+        retries = 0
         while True:
             link = make_link(args)
+            if settle and hasattr(link, "settle_s"):
+                link.settle_s = SETTLE_S
             session = Session(link, temple_feed=temple_feed(args))
             entry: dict = {"index": index}
+            if settle:
+                entry["settle_s"] = SETTLE_S
             report["sessions"].append(entry)
-            with session:
-                session.require_patched_bootloader(patched)
-                finished, fields = step(session, patched, index)
-                report.update(fields or {})
-                entry["relay_seconds"] = round(session.elapsed(), 1)  # before the release
+            try:
+                with session:
+                    session.require_patched_bootloader(patched)
+                    finished, step_fields = step(session, patched, index)
+                    report.update(step_fields or {})
+                    entry["relay_seconds"] = round(session.elapsed(), 1)  # before the release
+            except PogoNotIdle as refused:
+                entry["pogo_not_idle"] = True
+                if hasattr(link, "diagnostics"):
+                    entry["link"] = link.diagnostics()  # its G2RS and the zero-write record
+                report["pogo_not_idle"] = report.get("pogo_not_idle", 0) + 1
+                print(f"session {index}: pogo switch not idle (relay status 3), zero writes, nothing sent to the "
+                      "temple", file=sys.stderr, flush=True)
+                if session.cleanup_errors or retries >= POGO_RETRIES:
+                    raise refused
+                retries += 1
+                settle = True
+                print(f"  retrying session {index} after the case app has run {SETTLE_S:g} s", file=sys.stderr,
+                      flush=True)
+                continue
             entry["exchanges"] = getattr(getattr(link, "recent", None), "count", None)
             entry["feeds"] = session.feeds
             if finished:
                 break
             index += 1
+            settle = True
+            retries = 0
         report["success"] = True
         code = 0
     except BaseException as error:  # noqa: BLE001 - reported
@@ -338,7 +378,16 @@ class StreamCheck:
         self.data = bytearray()
         self.rate, self.measured = self.FIRST_RATE, False
         self.seconds = 0.0
-        self.exchanges = 0
+        self.exchanges = 0  # stream exchanges of the parts already finished
+        self._running: tuple | None = None  # (link, its count when the running part started)
+
+    @property
+    def exchanges_so_far(self) -> int:
+        """Stream exchanges up to now, the running part included (for the progress line)."""
+        if self._running is None:
+            return self.exchanges
+        link, count0 = self._running
+        return self.exchanges + link.recent.count - count0
 
     def _part(self, session) -> int:
         remaining = self.length - len(self.data)
@@ -360,10 +409,14 @@ class StreamCheck:
         session.position = {"target": f"{address:#x}+{n}", "streamed_before": at}
         count0 = session.link.recent.count
         started = session.clock()
-        part = session.dump(address, n, (lambda c: progress(at + c)) if progress else None)
+        self._running = (session.link, count0)
+        try:
+            part = session.dump(address, n, (lambda c: progress(at + c)) if progress else None)
+        finally:
+            self._running = None
+            self.exchanges += session.link.recent.count - count0
         took = session.clock() - started
         self.seconds += took
-        self.exchanges += session.link.recent.count - count0
         if n >= 256 and took > 0:  # size later parts by the slowest rate seen so far
             self.rate = max(self.rate, took / n) if self.measured else took / n
             self.measured = True
@@ -391,7 +444,7 @@ def cmd_soak(args) -> int:
     def progress(count):
         if count - last[0] >= 64 * 1024 or count == length:
             last[0] = count
-            print(f"{count}/{length} bytes read ({reader.exchanges} stream exchanges so far)", flush=True)
+            print(f"{count}/{length} bytes read ({reader.exchanges_so_far} stream exchanges so far)", flush=True)
 
     def step(session, patched, index):
         fields = {}
@@ -418,6 +471,61 @@ def cmd_soak(args) -> int:
     return run_sessions(args, "link-soak", step, on_stop)
 
 
+def write_image(args, name: str, writer: AppWriter, gate, done_text: str, fields=None) -> int:
+    """recover's and install-wisp's write: `gate(session, index) -> fields` runs first in every
+    session (after the bootloader CRC), then the writer's share of the image. A stopped write
+    reports how far the body is verified and the command that continues it."""
+    start = time.monotonic()
+    first = [True]  # the first verified block shows at once that streaming works
+    budget = writer.budget
+
+    def progress(count):
+        if first[0] or count % (64 * 1024) == 0 or count >= writer.body_len:
+            first[0] = False
+            rate = (count - writer.resumed_at) / max(time.monotonic() - start, 1e-3)
+            print(f"{count}/{writer.body_len} body bytes written and read back ({rate / 1024:.1f} KiB/s)", flush=True)
+
+    def step(session, patched, index):
+        gate_fields = gate(session, index)
+        finished = writer.run(session, progress)
+        if budget is not None:
+            print(f"session {index}: body {writer.done}/{writer.body_len} bytes written and CRC-checked "
+                  f"({session.elapsed():.1f} s since the relay started)", flush=True)
+        out = {**gate_fields, "body_verified": writer.done, "max_session_s": budget, "resumed_at": writer.resumed_at,
+               "vectors_zeroed": writer.result.get("vectors_zeroed")}
+        if "checks" in writer.result:
+            out["rule3"] = writer.result["checks"]
+        if not finished:
+            return False, out
+        result = {k: v for k, v in writer.result.items() if k != "checks"}
+        print(f"OK: {done_text} written and verified ({result['crc_after']}) in {writer.sessions} session(s); "
+              "releasing boot")
+        return True, {**out, **result, "seconds": round(time.monotonic() - start, 1), "sessions_used": writer.sessions}
+
+    def on_stop(report):
+        report["body_verified"] = writer.done
+        report["vectors_zeroed"] = writer.result.get("vectors_zeroed")
+        report["vectors_written"] = bool(writer.result.get("crc_after"))
+        if report["vectors_zeroed"] and not report["vectors_written"]:
+            print("  the vectors at 0x438000 are zero: the temple stays in its loader and boots no app until this "
+                  "write completes (rerun it; the patched loader still answers)", file=sys.stderr)
+        if writer.done and not report["vectors_written"]:
+            hint = resume_command(args, name, writer.done, budget)
+            report["resume_with"] = hint
+            print(f"  {writer.done} body bytes are written and CRC-verified; the vectors are not written. "
+                  f"To continue later (it CRC-checks those bytes first): {hint}", file=sys.stderr)
+
+    return run_sessions(args, name, step, on_stop, fields)
+
+
+def resume_command(args, name: str, done: int, budget) -> str:
+    session = f" --max-session-s {budget:g}" if budget else " --max-session-s 0"
+    if name == "install-wisp":
+        return (f"w18.py install-wisp --side {args.side} --image {args.image} --elf {args.elf} --map {args.map} "
+                f"--expect {args.expect} --battery <N|NmV, read again> --resume-at {done}{session}")
+    return f"w18.py recover --side {args.side} --image {args.image} --resume-at {done}{session}"
+
+
 def cmd_recover(args) -> int:
     data = Path(args.image).read_bytes()
     try:
@@ -430,52 +538,64 @@ def cmd_recover(args) -> int:
         return 2
     if args.max_session_s is None:
         args.max_session_s = default_max_session_s(args.case_profile, temple_feed(args))
-    budget = args.max_session_s or None
     try:
-        writer = AppWriter(stock, budget=budget, resume_at=args.resume_at)
+        writer = AppWriter(stock, budget=args.max_session_s or None, resume_at=args.resume_at)
     except SessionError as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2
-    start = time.monotonic()
-    first = [True]  # the first verified block shows at once that streaming works
 
-    def progress(count):
-        if first[0] or count % (64 * 1024) == 0 or count >= writer.body_len:
-            first[0] = False
-            rate = (count - writer.resumed_at) / max(time.monotonic() - start, 1e-3)
-            print(f"{count}/{writer.body_len} body bytes written and read back ({rate / 1024:.1f} KiB/s)", flush=True)
-
-    def step(session, patched, index):
+    def gate(session, index):
         flag = session.flag()
         if index == 0:
             print(f"update flag {flag:#010x}")
         if flag == 0x55555555 and not args.allow_pending_flag:
             raise SystemExit("REFUSED: the update flag is set; the bootloader would install the staged OTA "
                              "file after release. Pass --allow-pending-flag if that is intended.")
-        finished = writer.run(session, progress)
-        if budget is not None:
-            print(f"session {index}: body {writer.done}/{writer.body_len} bytes written and CRC-checked "
-                  f"({session.elapsed():.1f} s since the relay started)", flush=True)
-        fields = {"flag": f"{flag:#010x}", "body_verified": writer.done, "max_session_s": budget,
-                  "resumed_at": writer.resumed_at}
-        if not finished:
-            return False, fields
-        result = writer.result
-        print(f"OK: stock {pins.STOCK_MAIN_VERSION} main app written and verified ({result['crc_after']}) in "
-              f"{writer.sessions} session(s); releasing boot")
-        return True, {**fields, **result, "seconds": round(time.monotonic() - start, 1), "sessions_used": writer.sessions}
+        return {"flag": f"{flag:#010x}"}
 
-    def on_stop(report):
-        report["body_verified"] = writer.done
-        report["vectors_written"] = bool(writer.result.get("crc_after"))
-        if writer.done and not report["vectors_written"]:
-            hint = (f"w18.py recover --side {args.side} --image {args.image} --resume-at {writer.done}"
-                    + (f" --max-session-s {budget:g}" if budget else " --max-session-s 0"))
-            report["resume_with"] = hint
-            print(f"  {writer.done} body bytes are written and CRC-verified; the vectors are not written. "
-                  f"To continue later (it CRC-checks those bytes first): {hint}", file=sys.stderr)
+    return write_image(args, "recover", writer, gate, f"stock {pins.STOCK_MAIN_VERSION} main app")
 
-    return run_sessions(args, "recover", step, on_stop)
+
+def cmd_install_wisp(args) -> int:
+    """rung4.md §3 (G1): a pinned Wisp image into the app region through the case loader."""
+    try:
+        data = native.read(args.image, "--image")
+        facts = native.resolve(data, native.read(args.elf, "--elf"), native.read(args.map, "--map"), args.expect)
+    except (native.NativeRefused, OSError) as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return 2
+    battery = native.parse_battery(args.battery)
+    if not battery["ok"]:
+        print(f"REFUSED: --battery {args.battery!r}: needs >= {pins.BATTERY_MIN_PERCENT} (percent, read in the Even app "
+              f"while on stock) or >= {pins.BATTERY_MIN_MV}mV (Wisp's status while native)", file=sys.stderr)
+        return 2
+    if args.max_session_s is None:
+        args.max_session_s = default_max_session_s(args.case_profile, temple_feed(args))
+    try:
+        app = AppImage(f"Wisp {facts['name']}", data, facts["image_sha256"], int(facts["end"], 16), check=native.rule3)
+        writer = AppWriter(app, budget=args.max_session_s or None, resume_at=args.resume_at)
+    except SessionError as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return 2
+    print(f"install-wisp: {facts['name']} {facts['image_sha256'][:16]}..., {facts['bytes']} B into "
+          f"[{pins.APP_BASE:#x}, {facts['end']}); Wisp Boot {facts['wisp_boot_sha256'][:16]}...", flush=True)
+
+    def gate(session, index):
+        """loader-hello in the same session, before any write: the bootloader CRC a second time
+        (run_sessions read the first) and a clear update flag. No override."""
+        crc = session.bootloader_crc()
+        flag = session.flag()
+        want = zlib.crc32(image.build_patched_bootloader())
+        print(f"session {index}: loader-hello: bootloader CRC-32 {crc:08x} twice, update flag {flag:#010x}", flush=True)
+        if crc != want:
+            raise SessionError(f"the second bootloader CRC read {crc:08x}, not {want:08x}; nothing written")
+        if flag != 0xFFFFFFFF:
+            raise SessionError(f"the update flag reads {flag:#010x}, not clear; install-wisp writes only with a clear "
+                               "flag (rung4.md R4-1); nothing written")
+        return {"flag": f"{flag:#010x}", "loader_hello": {"bootloader_crc32": f"{crc:08x}", "flag": f"{flag:#010x}"}}
+
+    fields = {"image": facts, "expect": args.expect, "battery": battery}
+    return write_image(args, "install-wisp", writer, gate, f"Wisp {facts['name']}", fields)
 
 
 def main(argv=None) -> int:
@@ -528,6 +648,21 @@ def main(argv=None) -> int:
     sp.add_argument("--resume-at", type=lambda v: int(v, 0), default=0,
                     help="body bytes an earlier recover run wrote and verified (it prints the value); "
                          "they are CRC-checked against the image before anything is written")
+    sp = sub.add_parser("install-wisp", help="write a pinned Wisp native image through the loader (rung4.md "
+                                              "R4-1; refuses every image until R4-1 is approved and one is pinned)")
+    common(sp)
+    sp.add_argument("--image", required=True, help="the combined native image (Wisp Boot slot + app), linked at 0x438000")
+    sp.add_argument("--elf", required=True, help="the app's ELF the image was built from (pinned)")
+    sp.add_argument("--map", required=True, help="its linker map (pinned)")
+    sp.add_argument("--expect", required=True, help="the first 12 or more hex digits of the image's SHA-256: the "
+                                                    "image Jan's go names")
+    sp.add_argument("--battery", required=True, help="battery: percent read in the Even app while on stock (>= 80), "
+                                                     "or millivolts from Wisp's status while native, e.g. 3950mV")
+    sp.add_argument("--max-session-s", type=float, default=None,
+                    help="as for recover (default 0, one session, when both watchdogs are fed)")
+    sp.add_argument("--resume-at", type=lambda v: int(v, 0), default=0,
+                    help="body bytes an earlier install-wisp run of the same image wrote and verified")
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
-            "info-dump": cmd_info, "link-soak": cmd_soak, "recover": cmd_recover}[a.command](a)
+            "info-dump": cmd_info, "link-soak": cmd_soak, "recover": cmd_recover,
+            "install-wisp": cmd_install_wisp}[a.command](a)

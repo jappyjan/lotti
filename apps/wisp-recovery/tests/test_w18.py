@@ -147,6 +147,30 @@ class Sessions(unittest.TestCase):
         self.assertEqual(info["dcu"]["LCSREG"], "0x00000005")
         self.assertEqual(len(bytes.fromhex(info["infoc"]["hex"])), 1024)
 
+    def test_recover_zeroes_the_vectors_first_and_writes_them_last(self):
+        stock = fake_stock()
+        old = fake_stock()[:16][::-1] + b"\x11" * 4000  # a running app's vectors and code
+        link = FakeLoaderLink(temple(old))
+        with SmallStock(stock), session.Session(link, log=lambda m: None) as s:
+            result = s.write_app(stock)
+        writes = link.mram.writes
+        self.assertEqual(writes[0], (pins.APP_BASE, 16))  # zeroed before any body byte
+        self.assertEqual(writes[-1], (pins.APP_BASE, 16))  # the real vectors last
+        self.assertEqual(writes.count((pins.APP_BASE, 16)), 2)
+        self.assertTrue(all(a >= pins.APP_BASE + 16 for a, _ in writes[1:-1]))
+        self.assertTrue(result["vectors_zeroed"])
+        self.assertEqual(link.mram.read(pins.APP_BASE, len(stock)), stock)
+
+    def test_an_interrupted_write_leaves_zero_vectors(self):
+        stock = fake_stock(8000)
+        mram = temple(b"\x22" * 8000)
+        with SmallStock(stock):
+            with self.assertRaises(session.TempleReset), \
+                    session.Session(CuttingLink(mram, cut_after_writes=10), log=lambda m: None) as s:
+                s.write_app(stock)
+        self.assertEqual(mram.read(pins.APP_BASE, 16), bytes(16))  # not the old vectors, not the new
+        self.assertEqual(mram.writes[0], (pins.APP_BASE, 16))
+
     def test_recover_writes_body_then_vectors(self):
         stock = fake_stock()
         dead = b"\0" * 4016
@@ -174,8 +198,17 @@ class Sessions(unittest.TestCase):
                 link = FakeLoaderLink(temple())
                 with self.assertRaises(session.RefusedError):
                     with session.Session(link, log=lambda m: None) as s:
-                        s._write(address, bytes(16))
+                        s._write(address, bytes(16), pins.RECOVER_END)
                 self.assertEqual(link.mram.writes, [])
+
+    def test_the_end_bound_is_checked_and_capped_at_the_app_ceiling(self):
+        for address, bound in ((pins.APP_BASE, pins.APP_END_CEILING + 16), (pins.APP_BASE, pins.APP_BASE),
+                               (pins.APP_BASE, pins.APP_BASE + 8), (pins.APP_BASE + 32, pins.APP_BASE + 32),
+                               (0x7F8000, pins.APP_END_CEILING), (0x7FE000, 0x7FE010)):
+            link = FakeLoaderLink(temple())
+            with self.assertRaises(session.RefusedError), session.Session(link, log=lambda m: None) as s:
+                s._write(address, bytes(16), bound)
+            self.assertEqual(link.mram.writes, [])
 
     def test_power_cut_mid_write_then_a_fresh_session_completes(self):
         stock = fake_stock(8000)

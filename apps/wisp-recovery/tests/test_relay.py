@@ -143,6 +143,25 @@ class Cli(unittest.TestCase):
         self.assertEqual(report["crc32"], f"{zlib.crc32(app):08x}")
         self.assertGreater(report["exchanges"], 8192 // 16)
 
+    def test_link_soak_progress_counts_the_running_stream(self):
+        """The progress line used to say "0 stream exchanges so far": the count was only added up
+        after the part. 64 KiB is 4,096 dump outputs, so the first line must say at least that."""
+        import io
+
+        app = bytes((i * 31 + 7) & 255 for i in range(1 << 17))
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            link = links.RelayPortLink(relay_model.RelayModel(FakeLoaderLink(temple(app))), "left")
+            with mock.patch.object(cli, "make_link", lambda args: link), \
+                    mock.patch.object(image, "build_patched_bootloader", lambda cache=None: FAKE_PATCHED), \
+                    mock.patch.object(cli, "save", lambda report, name: Path(name)), mock.patch("sys.stderr"):
+                self.assertEqual(cli.main(["link-soak", "--side", "left", "--bytes", str(1 << 17)]), 0)
+        lines = [line for line in out.getvalue().splitlines() if "stream exchanges so far" in line]
+        counts = [int(line.split("(")[1].split()[0]) for line in lines]
+        self.assertEqual(len(counts), 2, lines)
+        self.assertGreaterEqual(counts[0], 4096)
+        self.assertGreaterEqual(counts[1], 2 * 4096)
+
     def test_link_soak_never_writes(self):
         mram = temple(b"\0" * 4096)
         self.run_cli(["link-soak", "--side", "left", "--bytes", "4096"], mram)

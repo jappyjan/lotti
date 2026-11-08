@@ -23,6 +23,13 @@ Cases (end states):
                 between sessions, the vectors go last; stock boots
   install-*     the post-cut MRAM states of the stock app's bootloader copy (4 KiB chunks, lowest
                 first, as reverse-engineered from 2.4.0.24): k of 38 chunks new, the rest old
+  install-wisp  install-wisp's write (rung4.md G1) of a synthetic non-stock image (the stock app with
+                a marker block appended, so it boots) over a running stock app: the loader-hello gate
+                in the same session, rule 3 on the bytes sent, the vectors zeroed first and written
+                last, every write inside the image's end bound (the boot ROM's write log); it boots
+  install-wisp-cut  the same write cut by a power loss half way: the vectors read zero, the
+                bootloader does not hand off to the half-written image, the loader answers again,
+                and a second session completes the image, which boots
   temple-wdt-*  the temple's nPM1300 watchdog (renode/models/WispPmicWdt.cs on IOM7), armed at the
                 start as the stock app leaves it, with a period scaled to Renode's virtual time
                 (PMIC_PERIOD_S): `-unfed` runs drdaeman's programs and is power-cycled mid-session
@@ -48,10 +55,10 @@ REPO = APP_DIR.parents[1]
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO / "apps/wisp-recovery"))
 from rung3 import STOCK_MARK, Renode, evenota_components
-from wisp_w18 import image, pins
+from wisp_w18 import image, native, pins
 from wisp_w18.links import RelayPortLink, SocketLink
 from wisp_w18.relay_model import RelayModel
-from wisp_w18.session import AppWriter, Session
+from wisp_w18.session import AppImage, AppWriter, Session, SessionError
 
 FLAG = 0x7FE000
 # The temple watchdog cases. Renode runs a loader exchange in about 12 us of virtual time (the
@@ -525,6 +532,132 @@ class Harness:
 
         self.session_case("recover-fed", None, body, check, setup=setup, temple_feed=True, session_budget=900)
 
+    # --- install-wisp (rung4.md G1) ---
+    def wisp_image(self) -> AppImage:
+        """A non-stock image install-wisp may write in emulation: the stock app (it boots) with a
+        64-byte marker appended, so the region it fills and its hash differ from stock. The writer
+        refuses any image that is not pinned with R4-1 approved, so this process (Renode, never a
+        case) approves R4-1 and pins it in memory; the repository's table stays empty."""
+        data = self.app + b"WISP-RENODE-G1-" * 4 + b"END!"
+        pins.R4_1_APPROVED = True
+        pins.WISP_IMAGES = {"renode-synthetic": {"image_sha256": image.sha(data)}}
+        return AppImage("synthetic", data, image.sha(data), pins.APP_BASE + ((len(data) + 15) & ~15),
+                        check=native.rule3)
+
+    def wisp_session(self, s: Session, app: AppImage) -> dict:
+        """install-wisp's session: the loader-hello gate (the bootloader CRC a second time and a
+        clear flag), then the writer, which reruns rule 3 on the bytes it sends."""
+        want = __import__("zlib").crc32(self.patched)
+        if s.bootloader_crc() != want or s.flag() != 0xFFFFFFFF:
+            raise SessionError("loader-hello gate failed")
+        writer = AppWriter(app, log=lambda m: None)
+        writer.run(s)
+        return writer.result
+
+    @staticmethod
+    def write_log(run) -> list[tuple[int, int]]:
+        """(destination, words) of every MRAM write through the boot ROM, in order."""
+        out = []
+        for line in run.r.cmd("bootrom WriteLog").splitlines():
+            m = re.search(r"dst=0x([0-9A-F]+) words=(\d+)", line)
+            if m:
+                out.append((int(m.group(1), 16), int(m.group(2))))
+        return out
+
+    def install_wisp(self):
+        app = self.wisp_image()
+        end = app.end
+
+        def body(s):
+            return self.wisp_session(s, app)
+
+        def check(run, result):
+            mram = run.mram()
+            writes = self.write_log(run)
+            v = result.get("value") or {}
+            image_ok = mram[0x38000:0x38000 + len(app.data)] == app.data
+            boot_ok = mram[0x10000:0x10000 + len(self.patched)] == self.patched
+            order_ok = (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
+                        and all(d >= pins.APP_BASE + 16 for d, _ in writes[1:-1]))
+            bound_ok = all(pins.APP_BASE <= d and d + 4 * n <= end for d, n in writes)
+            checks_ok = all(r["ok"] for r in v.get("checks", []))
+            ok = bool(v) and v.get("vectors_zeroed") and image_ok and boot_ok and order_ok and bound_ok and checks_ok \
+                and run.stock_running()
+            return ok, (f"synthetic image written ({len(app.data)} B, CRC {v.get('crc_after')}): vectors zeroed first "
+                        f"and written last of {len(writes)} ROM writes, all inside [0x438000, {end:#x}), rule 3 "
+                        f"passed on the sent bytes; bootloader unchanged; the image boots" if ok else
+                        f"image_ok={image_ok} boot_ok={boot_ok} order_ok={order_ok} bound_ok={bound_ok} "
+                        f"checks_ok={checks_ok} first={writes[:2]} last={writes[-1:]} {result} stock={run.stock_running()}")
+
+        self.session_case("install-wisp", self.app, body, check, budget=60)
+
+    def install_wisp_cut(self, fraction=0.5):
+        """Power lost half way through install-wisp over a running stock app."""
+        app = self.wisp_image()
+        name = f"install-wisp-cut-{int(fraction * 100)}pct"
+        run = Run(self.work, name, self.patched, self.app)
+        try:
+            cut_at = 1 + int(((len(app.data) - 16) // 256) * fraction)  # write 0 zeroes the vectors
+            run.r.cmd(f"bootrom CutAfterWriteIndex {cut_at}")
+            log = []
+            t0 = time.time()
+
+            def host(link):
+                try:
+                    with Session(link, log=log.append) as s:
+                        s.require_patched_bootloader(self.patched)
+                        self.wisp_session(s, app)
+                    return "completed (no cut?)"
+                except BaseException as error:  # noqa: BLE001
+                    return repr(error)
+            thread, first = run.attach(host)
+            t = 0.0
+            while thread.is_alive():
+                run.r.cmd('emulation RunFor "1"')
+                t += 1
+            run.r.cmd("bootrom CutAfterWriteIndex -1")
+            after_cut = run.mram()
+            vectors_zero = after_cut[0x38000:0x38010] == bytes(16)
+            jumps_before = len(JUMP_RE.findall(run.uart()))
+            helo_before = sum(f.startswith(HELO_PREFIX) for f in run.frames())
+            # Nobody answers now: the loader's window passes, then the bootloader decides.
+            t += run.run_until(lambda: False, 12)
+            helo_after = sum(f.startswith(HELO_PREFIX) for f in run.frames())
+            jumped = len(JUMP_RE.findall(run.uart())) > jumps_before
+            refused = not run.stock_running()
+
+            def host2(link):
+                with Session(link, log=log.append) as s:
+                    s.require_patched_bootloader(self.patched)
+                    return self.wisp_session(s, app)
+            thread, second = run.attach(host2)
+            run.r.cmd("rstgen PowerCut")
+            while thread.is_alive():
+                run.r.cmd('emulation RunFor "1"')
+                t += 1
+            t += run.run_until(run.stock_running, 60)
+            mram = run.mram()
+            image_ok = mram[0x38000:0x38000 + len(app.data)] == app.data
+            boot_ok = mram[0x10000:0x10000 + len(self.patched)] == self.patched
+            v2 = second.get("value") or {}
+            # The cut rebooted the temple and its loader sent HELO again: session 1 got it instead of
+            # a reply (TempleReset), so the frame log holds two (the claim's and the reboot's).
+            ok = ("TempleReset" in str(first.get("value")) and helo_before >= 2 and vectors_zero and refused
+                  and not jumped
+                  and v2.get("crc_after") and not v2.get("vectors_zeroed") and image_ok and boot_ok
+                  and run.stock_running())
+            self.record(name, bool(ok),
+                        (f"cut after ROM write {cut_at}: session 1 stopped ({str(first.get('value'))[:50]}); vectors read "
+                         f"zero; the loader sent HELO again at the reboot; then no hand-off to the image (no jump "
+                         f"logged, no app in 12 s); session 2 found the vectors zero, wrote the image and verified it; it boots" if ok else
+                         f"first={first} vectors_zero={vectors_zero} refused={refused} helo={helo_before}->{helo_after} "
+                         f"jumped={jumped} second={second} image_ok={image_ok} boot_ok={boot_ok} "
+                         f"stock={run.stock_running()}"),
+                        f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+            (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
+        finally:
+            run.close()
+
     def install_states(self, old: bytes, label: str, ks):
         """Post-cut MRAM states of the stock app's bootloader copy (chunks of 4 KiB, ascending)."""
         for k in ks:
@@ -554,7 +687,7 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
                                                    "recover-relay", "recover-cut", "recover-split", "temple-wdt",
-                                                   "recover-fed", "install"])
+                                                   "recover-fed", "install-wisp", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -583,6 +716,9 @@ def main() -> int:
         h.temple_wdt(fed=True)
     if "recover-fed" in only:
         h.recover_fed()
+    if "install-wisp" in only:
+        h.install_wisp()
+        h.install_wisp_cut()
     if "install" in only:
         ks = [int(k) for k in a.install_chunks.split(",")]
         if "2.4.0.24" in a.install_old:

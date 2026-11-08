@@ -41,6 +41,14 @@ class LinkError(RuntimeError):
     pass
 
 
+class PogoNotIdle(LinkError):
+    """The bridge refused G2RQ with status 3 at once (a 13-byte G2RS instead of its UART
+    registers): the pogo switch (YHM2510) did not read a seated-idle baseline, so the bridge
+    selected no route and wrote nothing, and nothing reached the temple. On hardware this came
+    right after two case app restarts within about 2 s (W18 F1d split). A retry after the case
+    app has run a few seconds (`settle_s`) is safe."""
+
+
 RECENT = 16  # exchanges kept for the error report
 
 # Exit status the pinned bridge reports in G2RS (and in its retained record, word 5) after the
@@ -58,6 +66,7 @@ RELAY_EXIT_STATUS = {
     16: "no G2RQ from the host",
 }
 RELAY_EXIT_OK = 6
+RELAY_NOT_IDLE = 3
 
 
 class _Recent:
@@ -203,6 +212,7 @@ class _RelayFraming:
     ready = False
     route = 0
     relay_started = None
+    refused_status = None  # the G2RS status of a refused G2RQ
     sleep = staticmethod(time.sleep)
     IDLE_TIMEOUT = 120.0  # s; the relay answers an empty G2TX after its own poll bound (18 s; ~31 s with the feed)
 
@@ -222,7 +232,13 @@ class _RelayFraming:
         port.write(bytes(header[5:]))
         port.flush()
         port.timeout = 60.0
-        registers = struct.unpack("<4I", read_exact(port, 16, "UART registers"))
+        # Armed, the bridge sends its 16 bytes of UART registers. Refused, it sends G2RS at once
+        # (12 bytes and its capture, none here, plus a checksum: 13 bytes) and resets the case.
+        # The first 12 bytes tell the two apart.
+        head = read_exact(port, 12, "UART registers")
+        if head[:4] == b"G2RS":
+            self._refused(head)
+        registers = struct.unpack("<4I", head + read_exact(port, 4, "UART registers"))
         self.log({"case_uart_registers": [hex(r) for r in registers]})
         if read_exact(port, 11, "arm marker") != b"G2U2_ARMED\n":
             raise LinkError("relay did not arm (route not selected?)")
@@ -234,6 +250,23 @@ class _RelayFraming:
         # Allow the temple to turn its half-duplex pins from TX to RX before HOLD [D link.py].
         self.sleep(0.03)
         return beacon
+
+    def _refused(self, head: bytes) -> None:
+        """G2RS in answer to G2RQ: the bridge refused to arm. Status 3 raises PogoNotIdle."""
+        if head[4] != 1 or head[9] > 64:
+            raise LinkError(f"invalid G2RS in answer to G2RQ: {head.hex()}")
+        tail = read_exact(self.port, head[9] + 1, "G2RS tail")
+        if tail[-1] != (sum(head) + sum(tail[:-1])) & 255 or head[5:8] != bytes((2, self.route, pins.RELAY_SEQUENCE)):
+            raise LinkError(f"invalid G2RS in answer to G2RQ: {(head + tail).hex()}")
+        status = head[8]
+        self.refused_status = status
+        self.log({"relay_refused_status": status, "relay_refused_meaning": RELAY_EXIT_STATUS.get(status, "unknown"),
+                  "g2rs": (head + tail).hex()})
+        if status == RELAY_NOT_IDLE:
+            raise PogoNotIdle("relay refused to start (status 3): the case's pogo switch was not idle; zero writes, "
+                              "nothing sent to the temple")
+        raise LinkError(f"relay refused to start (status {status}: {RELAY_EXIT_STATUS.get(status, 'unknown')}); "
+                        "nothing sent to the temple")
 
     def exchange(self, frame: bytes) -> bytes:
         if self.port is None or not self.ready:
@@ -351,7 +384,7 @@ class CaseRelayLink(_RelayFraming):
     reset into its own app (banner again). The case flash is never written."""
 
     def __init__(self, device: str, side: str, profile: str, image_cache=None, opener=serial_opener,
-                 sleep=time.sleep, log=None):
+                 sleep=time.sleep, log=None, settle_s: float = 0.0, console_clock=time.monotonic):
         from .image import CACHE, build_relay
 
         if side not in pins.SIDES:
@@ -360,6 +393,10 @@ class CaseRelayLink(_RelayFraming):
         self.image = build_relay(profile, image_cache or CACHE)
         self.profile = profile
         self.opener, self.sleep = opener, sleep
+        # How long the case app runs after its banner before start() enters the ROM: 0 for the
+        # first session of a command, cli.SETTLE_S for every later one and for a retry after
+        # status 3. The console clock times that listen (tests pass a virtual one).
+        self.settle_s, self.console_clock = settle_s, console_clock
         self.events: list[dict] = []
         self.port = None
         self.loader = None
@@ -373,8 +410,10 @@ class CaseRelayLink(_RelayFraming):
         self._log(event)
 
     def start(self) -> bytes:
-        before = case_banner(self.device, self.opener, self.sleep)
+        before = case_banner(self.device, self.opener, self.sleep, self.console_clock, settle_s=self.settle_s)
         self.log({"case_version_before": before["version"]})
+        if before["settle"] is not None:
+            self.log({"case_settle": before["settle"]})
         if before["version"] != case_pins.CASE_VERSION:
             raise LinkError(f"case reports {before['version']!r}, expected {case_pins.CASE_VERSION}; nothing loaded")
         self.touched = True
@@ -421,17 +460,24 @@ class CaseRelayLink(_RelayFraming):
                         retained = self.loader.read_memory(case_pins.RESULT_ADDRESS, case_pins.RESULT_LENGTH)
                         proof = self.loader.read_memory(case_pins.PROOF_ADDRESS, len(case_pins.PROOF))
                         words = struct.unpack_from("<14I", retained)
-                        restored = (
-                            proof == case_pins.PROOF
-                            and words[:5] == (0x47524247, 2, 2, self.route, pins.RELAY_SEQUENCE)
-                            and words[6:9] == (0x3FF,) * 3 and words[9] == 0x1FF and words[13] == 0
-                            and retained[56:66] == retained[76:86]
-                        )
-                        self.log({"route_restored": restored, "relay_record": retained.hex(),
-                                  "relay_record_decoded": decode_relay_record(retained)})
+                        ran = proof == case_pins.PROOF and words[:5] == (0x47524247, 2, 2, self.route,
+                                                                           pins.RELAY_SEQUENCE)
+                        record = {"relay_record": retained.hex(), "relay_record_decoded": decode_relay_record(retained)}
+                        if self.refused_status is not None:
+                            # Refused before any route selection: nothing to restore. The record
+                            # must say so: that status, no YHM write, no temple byte, no capture.
+                            untouched = ran and words[5] == self.refused_status and words[7:14] == (0,) * 7
+                            self.log({"route_untouched": untouched, **record})
+                            if not untouched:
+                                errors.append(f"status {self.refused_status} without a clean zero-write record in "
+                                              "the case")
+                        else:
+                            restored = (ran and words[6:9] == (0x3FF,) * 3 and words[9] == 0x1FF and words[13] == 0
+                                        and retained[56:66] == retained[76:86])
+                            self.log({"route_restored": restored, **record})
+                            if not restored:
+                                errors.append("case route restoration not verified")
                         checked = True
-                        if not restored:
-                            errors.append("case route restoration not verified")
                     self.loader.clear_sram()
                     self.log({"case_sram_cleared": True})
                     break
@@ -444,7 +490,7 @@ class CaseRelayLink(_RelayFraming):
                     if self.port is not None:
                         self.port.close()
                         self.port = None
-            after = case_banner(self.device, self.opener, self.sleep)
+            after = case_banner(self.device, self.opener, self.sleep, self.console_clock)
             self.log({"case_version_after": after["version"]})
             if after["version"] != case_pins.CASE_VERSION:
                 errors.append("case did not come back with its 1.2.57 banner")

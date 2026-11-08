@@ -121,12 +121,37 @@ CASE_PRE_CHECKS = (  # (address, length, sha256) read through the ROM before loa
 OTA_BOOT_FILENAME = b"ota/s200_bootloader.bin"
 OTA_BOOT_TYPE = 1
 OTA_STORAGE_LITTLEFS = 3
-# MRAM through the loader: only the stock main app region, only the pinned stock main bytes
-# (or the backup taken in the same session, never anything else).
+# MRAM through the loader: only inside the main-app region, and only up to the end of the image
+# being written: the pinned stock main bytes (`recover`), or a pinned Wisp image (`install-wisp`,
+# below), never anything else.
 RECOVER_BASE = APP_BASE
 RECOVER_END = APP_BASE + ((STOCK_MAIN_BYTES + 15) & ~15)
+APP_END_CEILING = 0x007F_8000  # no image may end past it (rule 3; wisp-ota APP_END_CEILING)
 APP_REGION_END = 0x007F_E000  # update-flag record; never written
 SIDES = ("left", "right")
+
+# --- Wisp native images through the loader (docs/wisp/rung4.md §3, decision R4-1) -------------
+# `install-wisp` writes only an image listed in WISP_IMAGES, and only while R4_1_APPROVED is True.
+# Both stay as they are until Jan approves R4-1 (rule 1's W18 exception extended to pinned Wisp
+# images) and a reviewed commit pins a built native-0 image. Until then the command refuses every
+# image before it touches the case (safety.md rule 1). tests/test_install_wisp.py checks that the
+# table is empty while R4-1 is not approved.
+R4_1_APPROVED = False
+WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
+# Wisp Boot builds that passed rung 3, by the SHA-256 of the padded 64 KiB slot, with the suites
+# they passed (wisp-fw:boot-test, `.wisp-cache/rung3/<bootloader>/report.md`). R4-1 asks for both
+# suites in WISP_BOOT_SUITES; the observe-only build has its own suite with its own outcomes.
+# Empty: the build that passed 26/26 on 2026-11-06 (wisp_boot.bin 8dd8fd69ef4b...) ran on the
+# stock 2.2.6.10 and 2.4.0.24 bootloaders only, not yet on the patched one.
+WISP_BOOT_SUITES = ("stock-2.4.0.24", "patched-87e2d4e0")
+WISP_BOOT_PASSED: dict[str, dict] = {}
+# Post-link gates a Wisp image's build must have passed (rung4.md R4-1): the rule-8 gate and the
+# no-MRAM-write gate over [0x448000, end) (G13).
+WISP_GATES = ("check_rule8", "no-mram-write")
+# name -> {"image_sha256", "image_bytes", "elf_sha256", "map_sha256", "gates": (...)}.
+WISP_IMAGES: dict[str, dict] = {}
+BATTERY_MIN_PERCENT = 80
+BATTERY_MIN_MV = 3900  # rung4.md R4-4, while native (Wisp's status reports mV)
 
 
 def go_token(side: str) -> str:

@@ -178,6 +178,22 @@ class RecoverGuard(unittest.TestCase):
         self.assertGreaterEqual(len(checks), len(sessions) - 1)
         self.assertEqual(report["crc_after"], f"{zlib.crc32(case.mram.read(pins.APP_BASE, 40000)):08x}")
 
+    def test_split_recover_over_a_running_app_zeroes_the_vectors_once_first(self):
+        """The vectors are zeroed in the first session, before its part; later sessions find them
+        zero and only CRC-check the body; the real vectors come last."""
+        running = bytes((i * 3 + 1) & 255 for i in range(40000))
+        case = Case(temple(running), hang_after_s=20.0)
+        code, report = recover_cli(self.STOCK, case)
+        self.assertEqual(code, 0, report.get("error"))
+        writes = case.mram.writes
+        self.assertEqual(writes[0], (pins.APP_BASE, 16))
+        self.assertEqual(writes[-1], (pins.APP_BASE, 16))
+        self.assertEqual(writes.count((pins.APP_BASE, 16)), 2)
+        self.assertTrue(all(a >= BODY for a, _ in writes[1:-1]))
+        self.assertGreater(len(report["sessions"]), 2)
+        self.assertEqual(case.mram.read(pins.APP_BASE, len(self.STOCK)), self.STOCK)
+        self.assertEqual(report["crc_after"], f"{zlib.crc32(case.mram.read(pins.APP_BASE, 40000)):08x}")
+
     def stop_mid_split(self):
         """Session 3 dies in the middle of its part (a per-exchange failure)."""
         case = Case(self.dead())

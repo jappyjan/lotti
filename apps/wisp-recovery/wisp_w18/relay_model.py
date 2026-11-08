@@ -30,6 +30,10 @@ started, as on hardware; observed-33-feed feeds it every 2 s, so it never does. 
 keeps SRAM and leaves the case in its ROM, which answers no relay frame: the same silence and
 the same record as the stops above. `idle_s` stays the old relay's 12 s; the feeding relay's empty-G2TX
 bound is about 31 s on hardware.
+
+`not_idle` models the pogo switch read right after two quick case app restarts (W18 F1d split): the
+bridge finds no seated-idle YHM baseline, selects no route, writes nothing and answers G2RQ with
+the 13-byte G2RS of status 3, then resets the case.
 """
 
 from __future__ import annotations
@@ -43,12 +47,15 @@ REGISTERS = struct.pack("<4I", 0x5, 0x0, 0x40, 0x4000C0)  # what Jan's case repo
 # status bits that change by themselves when a route is selected. Right: by analogy.
 YHM_IDLE = bytes.fromhex("811104afaf03812033ff")
 YHM_SELECTED = {0: bytes.fromhex("81100ca6af03c10333ff"), 1: bytes.fromhex("81100cafa603c10533ff")}
+YHM_NOT_IDLE = bytes.fromhex("811004afaf03812033ff")  # register 1 not yet back to its idle 0x11
 
 
 class RelayModel:
     def __init__(self, temple, hang_when=None, clock=None, exchange_s=0.0175, idle_s=12.0,
-                 hang_after_s=None, hang_after_exchanges=None, watchdog_s=None, feeds_watchdog=False):
+                 hang_after_s=None, hang_after_exchanges=None, watchdog_s=None, feeds_watchdog=False,
+                 not_idle=False):
         self.temple = temple
+        self.not_idle = not_idle
         self.hang_when = hang_when
         self.clock = clock
         self.exchange_s, self.idle_s = exchange_s, idle_s
@@ -111,6 +118,12 @@ class RelayModel:
                     self._exit(1 if header[:4] != b"G2RQ" else 2, restore=False)
                     return
                 self.route = header[6]
+                if self.not_idle:  # baseline read, not allowlisted: no route, no write
+                    for i, v in enumerate((0x47524247, 1, header[5], header[6], header[7], 0, 0x3FF)):
+                        self._word(i, v)
+                    self.record[56:66] = YHM_NOT_IDLE
+                    self._exit(3, restore=False)
+                    return
                 for i, v in enumerate((0x47524247, 1, header[5], header[6], header[7], 0, 0x3FF, 0x3FF, 0, 0xF)):
                     self._word(i, v)
                 self.record[56:66] = YHM_IDLE
