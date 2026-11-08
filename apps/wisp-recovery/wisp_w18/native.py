@@ -16,8 +16,8 @@
   refuses. The two are also cross-checked offline: wisp-ota's test suite and
   tests/test_install_wisp.py run the same vectors
   (packages/wisp-ota/src/testing/main-payload-vectors.json) and must agree guard by guard.
-- `elf_matches`: every loadable ELF segment placed in MRAM lies inside the image and equals its
-  bytes there.
+- `elf_matches`: every loadable ELF segment placed in MRAM lies inside the image, and its
+  sections' bytes equal the image there (padding between sections is not compared).
 """
 
 from __future__ import annotations
@@ -187,8 +187,8 @@ def rule3(sent: bytes) -> list[dict]:
 
 # --- ELF ----------------------------------------------------------------------------------------
 
-def elf_segments(elf: bytes) -> list[tuple[int, bytes]]:
-    """(load address, file bytes) of every PT_LOAD segment with file contents (ELF32 LE)."""
+def _load_segments(elf: bytes) -> list[tuple[int, int, bytes]]:
+    """(load address, file offset, file bytes) of every PT_LOAD segment with file contents."""
     if len(elf) < 52 or elf[:4] != b"\x7fELF" or elf[4] != 1 or elf[5] != 1:
         raise NativeRefused("--elf is not a 32-bit little-endian ELF")
     try:
@@ -202,24 +202,62 @@ def elf_segments(elf: bytes) -> list[tuple[int, bytes]]:
             if p_type == 1 and p_filesz:
                 if p_offset + p_filesz > len(elf):
                     raise NativeRefused("--elf has a segment past its end")
-                out.append((p_paddr, elf[p_offset : p_offset + p_filesz]))
+                out.append((p_paddr, p_offset, elf[p_offset : p_offset + p_filesz]))
+    except struct.error as error:
+        raise NativeRefused(f"--elf is truncated ({error})") from None
+    return out
+
+
+def elf_segments(elf: bytes) -> list[tuple[int, bytes]]:
+    """(load address, file bytes) of every PT_LOAD segment with file contents (ELF32 LE)."""
+    return [(address, content) for address, _offset, content in _load_segments(elf)]
+
+
+def elf_section_ranges(elf: bytes) -> list[tuple[int, int]]:
+    """(file offset, size) of every section with contents that is loaded (SHF_ALLOC, not
+    SHT_NOBITS). Empty if the ELF has no section headers."""
+    try:
+        shoff, = struct.unpack_from("<I", elf, 0x20)
+        shentsize, shnum = struct.unpack_from("<HH", elf, 0x2E)
+        if not shoff or not shnum:
+            return []
+        if shentsize < 40:
+            raise NativeRefused("--elf has a malformed section header table")
+        out = []
+        for i in range(shnum):
+            _name, sh_type, sh_flags, _addr, sh_offset, sh_size = struct.unpack_from("<6I", elf, shoff + i * shentsize)
+            if sh_flags & 0x2 and sh_type != 8 and sh_size:
+                out.append((sh_offset, sh_size))
     except struct.error as error:
         raise NativeRefused(f"--elf is truncated ({error})") from None
     return out
 
 
 def elf_matches(elf: bytes, data: bytes) -> int:
-    """Every loadable segment placed in MRAM lies inside [0x438000, image end) and equals the
-    image there. Returns how many segments were compared; refuses if none was."""
+    """Every loadable segment placed in MRAM lies inside [0x438000, image end), and every byte of
+    it that belongs to a section equals the image there. Bytes between sections inside a segment
+    are alignment padding: the ELF holds zeros there, objcopy's binary its gap fill (0xFF in
+    Zephyr's zephyr.bin), so they are not compared. An ELF without section headers is compared
+    segment for segment. Returns how many segments were compared; refuses if none was."""
+    sections = elf_section_ranges(elf)
     compared = 0
-    for address, content in elf_segments(elf):
+    for address, offset, content in _load_segments(elf):
         if not 0x0040_0000 <= address < 0x0080_0000:
             continue  # RAM-only (no load address in MRAM)
         at = address - pins.APP_BASE
         if at < 0 or at + len(content) > len(data):
             raise NativeRefused(f"--elf places {len(content)} bytes at {address:#x}, outside the image")
-        if data[at : at + len(content)] != content:
-            raise NativeRefused(f"--elf segment at {address:#x} differs from the image")
+        if not sections:
+            ranges = [(0, len(content))]
+        else:
+            ranges = [(max(s, offset) - offset, min(s + n, offset + len(content)) - offset)
+                      for s, n in sections if s < offset + len(content) and s + n > offset]
+            if not ranges:
+                raise NativeRefused(f"--elf segment at {address:#x} holds no section")
+        for lo, hi in ranges:
+            if data[at + lo : at + hi] != content[lo:hi]:
+                first = next(i for i in range(lo, hi) if data[at + i] != content[i])
+                raise NativeRefused(f"--elf segment at {address:#x} differs from the image at {address + first:#x}")
         compared += 1
     if not compared:
         raise NativeRefused("--elf has no segment in MRAM")
