@@ -1,0 +1,125 @@
+# SPDX-License-Identifier: MIT
+"""What `boot-watch` asks a booting temple app through the case relay (rung4.md §3, G2).
+
+After CONT the patched loader hands off to the app in MRAM, and the case relay stays up until
+G2EX: every G2TX hands one frame to the temple and returns the first temple frame within the
+relay's poll bound. `boot-watch` uses that to watch the boot before it ends the session.
+
+The questions are a pluggable `StatusProtocol`. The Wisp case-UART status protocol (the version
+answer, the status query, the reset command) is G10's, defined in apps/wisp-fw; when it exists,
+it registers itself in PROTOCOLS. This module only fixes what any protocol must respect, because
+the pinned relay (drdaeman's case_exchange.c) enforces it in the case:
+
+  - a request is empty (listen only) or 9, 25 or 32 bytes starting 7E 00 01 n-5 (the loader's
+    request framing); the stock version query `24 00 01 00 a7` cannot be sent this way;
+  - a reply is a 5A A5 FF frame whose length byte is 8, 16, 24 or 27 (13, 21, 29 or 32 bytes in
+    all); anything else reaches the host as "no frame" (relay status 2).
+
+Built in: `listen`, which sends nothing and records any frame the temple sends by itself. It is
+safe against any temple. The loader's own HELO is recognised whatever the protocol: after CONT it
+means the temple rebooted (a crash loop, a watchdog, or the PMIC's power cycle).
+
+tests/fake_status.py has a fake protocol and the fake app that answers it.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Callable
+
+from . import loader
+
+RELAY_REQUEST_LENGTHS = (9, 25, 32)
+RELAY_REPLY_LENGTHS = (13, 21, 29, 32)
+
+
+def relay_request_ok(frame: bytes) -> bool:
+    """A frame the pinned relay hands to the temple (or b"", listen only)."""
+    return not frame or (len(frame) in RELAY_REQUEST_LENGTHS and frame[:4] == bytes((0x7E, 0, 1, len(frame) - 5)))
+
+
+def relay_reply_ok(frame: bytes) -> bool:
+    """A temple frame the pinned relay passes back to the host."""
+    return (len(frame) in RELAY_REPLY_LENGTHS and frame[:3] == b"\x5a\xa5\xff"
+            and len(frame) == frame[3] + 5)
+
+
+def is_loader_hello(frame: bytes) -> bool:
+    return len(frame) == 21 and frame[:12] == loader.hello(0)[:12]
+
+
+class StatusProtocol:
+    """The hook. `request(i)` is the i-th frame to send (b"" = listen only), `decode(frame)` turns
+    one temple frame into fields, or None if the frame is not this protocol's, and
+    `complete(answers)` says when boot-watch has seen enough and may end the session early."""
+
+    name = "?"
+
+    def request(self, index: int) -> bytes:
+        raise NotImplementedError
+
+    def decode(self, frame: bytes) -> dict | None:
+        raise NotImplementedError
+
+    def complete(self, answers: list[dict]) -> bool:
+        return False
+
+
+class ListenOnly(StatusProtocol):
+    """Sends nothing; records whatever 5A A5 FF frame the temple sends by itself."""
+
+    name = "listen"
+
+    def request(self, index: int) -> bytes:
+        return b""
+
+    def decode(self, frame: bytes) -> dict | None:
+        return {"frame": frame.hex()}
+
+
+# name -> factory. G10 adds the Wisp protocol here, with its tests; nothing else belongs here.
+PROTOCOLS: dict[str, Callable[[], StatusProtocol]] = {"listen": ListenOnly}
+
+
+def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float = 1.0, clock=time.monotonic,
+          sleep=time.sleep, log=print) -> dict:
+    """Ask `protocol`'s questions through the relay for `duration_s`, at most one every
+    `interval_s`. Returns the events: each answer with its time since the watch started, the
+    unanswered queries, and every loader HELO (a reboot)."""
+    started = clock()
+    out: dict = {"protocol": protocol.name, "answers": [], "unanswered": 0, "reboots_s": [], "foreign": []}
+    index = 0
+    while clock() - started < duration_s:
+        frame = protocol.request(index)
+        if not relay_request_ok(frame):
+            raise ValueError(f"{protocol.name}: request {frame.hex()} is not a frame the case relay forwards; "
+                             "nothing sent")
+        asked = clock()
+        status, reply, _seconds = link.query(frame)
+        t = round(clock() - started, 3)
+        index += 1
+        if status == 1:
+            raise RuntimeError(f"the relay could not send query {index - 1} to the temple (status 1)")
+        if status == 0 and is_loader_hello(reply):
+            out["reboots_s"].append(t)
+            log(f"boot-watch: t = {t:.1f} s: the loader's HELO, the temple rebooted")
+        elif status == 0:
+            decoded = protocol.decode(reply)
+            if decoded is None:
+                out["foreign"].append({"t": t, "frame": reply.hex()})
+            else:
+                out["answers"].append({"t": t, **decoded})
+                log(f"boot-watch: t = {t:.1f} s: {decoded}")
+                if protocol.complete(out["answers"]):
+                    out["complete"] = True
+                    break
+        else:
+            out["unanswered"] += 1
+        wait = max(interval_s - (clock() - asked), 0.0)
+        if clock() - started + wait >= duration_s:
+            break
+        if wait:
+            sleep(wait)
+    out["seconds"] = round(clock() - started, 1)
+    out["queries"] = index
+    return out

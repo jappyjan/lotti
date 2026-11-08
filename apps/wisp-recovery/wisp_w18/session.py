@@ -53,6 +53,11 @@ class Session:
         self.link = link
         self.log = log
         self.temple_feed = temple_feed
+        # `hold`: end the session without CONTINUE, leaving the temple held in its loader (the
+        # held-temple reset test, rung4.md W21; `loader-hello --no-release`). Only a session that
+        # ends without an error keeps it held; after an error the cleanup releases as always.
+        self.hold = False
+        self.last_kick: float | None = None  # clock time a program that kicks the PMIC last started
         self.bootloader_verified = False  # the feeding programs call into it: only after its CRC
         self.feeds = 0  # feed.bin runs in this session
         self.temple_reset_s: float | None = None  # when a HELO came mid-session, s since the relay start
@@ -121,7 +126,7 @@ class Session:
         error that ended the session: that one propagates, the cleanup failures are attached to
         it (a note, and `cleanup_errors`). Without an earlier error, a cleanup failure raises."""
         failures = []
-        if self.claimed and not self.released:
+        if self.claimed and not self.released and (error is not None or not self.hold):
             try:
                 self.release()
             except Exception as caught:  # noqa: BLE001 - reported below
@@ -153,6 +158,7 @@ class Session:
             raise RefusedError("feed.bin calls into the bootloader; its CRC must be checked first")
         step, self.step = self.step, "feed the temple watchdog"
         self.client.upload(image.program("feed"))
+        self.last_kick = self.clock()
         result, data = self.client.execute()
         self.feeds += 1
         if result or data:
@@ -173,6 +179,8 @@ class Session:
 
     def dump(self, address: int, length: int, progress=None) -> bytes:
         self.client.upload(image.program("dump_fed" if self.feeding else "dump"), arg0=address, arg1=length)
+        if self.feeding:
+            self.last_kick = self.clock()  # dump_fed kicks before its first frame
         received = 0
 
         def counted(chunk: bytes) -> None:
@@ -225,6 +233,33 @@ class Session:
     def flag(self) -> int:
         return struct.unpack("<I", self.dump(FLAG, 4))[0]
 
+    # --- allowlisted reads (rung4.md §4, G3) ---
+    def peek(self, name: str) -> bytes:
+        """One region of pins.PEEK_REGIONS (the patched bootloader's RAM and MRAM), read with
+        dump/dump_fed. Anything else is refused before a byte goes to the temple."""
+        if name not in pins.PEEK_REGIONS:
+            raise RefusedError(f"peek {name!r} is not in pins.PEEK_REGIONS; nothing read")
+        if not self.bootloader_verified:
+            raise RefusedError("peek reads the patched bootloader's RAM; its CRC must be checked first")
+        address, length, _what = pins.PEEK_REGIONS[name]
+        return self.dump(address, length)
+
+    def pmic_read(self) -> dict[int, int]:
+        """The nPM1300 snapshot (pmic_read.bin): one kick, then the registers of
+        pins.PMIC_READ_REGISTERS, each by one I2C write-read. Returns {address: value}."""
+        if not self.bootloader_verified:
+            raise RefusedError("pmic_read.bin calls into the bootloader; its CRC must be checked first")
+        step, self.step = self.step, "pmic_read: nPM1300 register snapshot"
+        self.client.upload(image.program("pmic_read"))
+        self.last_kick = self.clock()
+        result, data = self.client.execute()
+        if result:
+            raise SessionError(f"pmic_read.bin failed: {describe_pmic_read(result)}; nothing more runs in this session")
+        if len(data) != len(pins.PMIC_READ_REGISTERS):
+            raise SessionError(f"pmic_read.bin sent {len(data)} bytes, expected {len(pins.PMIC_READ_REGISTERS)}")
+        self.step = step
+        return {address: value for (address, _name, _kind), value in zip(pins.PMIC_READ_REGISTERS, data)}
+
     # --- INFO / debug-lock dump (reads only; each read gated on what the previous ones said) ---
     def info_dump(self) -> dict:
         out: dict = {}
@@ -270,6 +305,8 @@ class Session:
             raise RefusedError(f"write [{address:#x}, {end:#x}) is outside the image's region [{pins.APP_BASE:#x}, {bound:#x})")
         self.position = {"target": f"{address:#x}+{len(data)}", "sent": 0, "verified": 0}
         self.client.upload(image.program(self.writer), arg0=address, arg1=len(data))
+        if self.writer == "recover_fed":
+            self.last_kick = self.clock()
         count = 0
 
         def checked(chunk: bytes) -> None:
@@ -313,6 +350,31 @@ class Session:
         writer = AppWriter(stock, log=self.log)
         writer.run(self, progress=progress)
         return writer.result
+
+
+def describe_pmic_read(result: int) -> str:
+    """pmic_read.bin's result code in words (programs/pmic_read.c)."""
+    if result == 1:
+        return "the send to the host failed"
+    if result == 0x10:
+        return "status 0x10: the I2C table is not the pinned bootloader's (nothing called)"
+    if result >> 8 == 1:
+        return f"status {result:#x}: IOM7 power-up refused (HAL status {result & 0xFF})"
+    if result >> 8 == 6:
+        return f"status {result:#x}: IOM7 power-down refused after the reads (HAL status {result & 0xFF})"
+    index, code = result >> 24, result & 0xFFFFFF
+    what = {0x200: "IOM7 not idle or receive FIFO not empty", 0x300: "no room in the write FIFO",
+            0x400: "no completion", 0x800: "no byte received"}.get(code)
+    if what is None and code >> 16 == 5:
+        what = f"I2C error, INTSTAT {code & 0xFFFF:#x}" + (" (NAK)" if code & 0x10 else "")
+    if index == 0:
+        where = "the watchdog kick"
+    elif index <= len(pins.PMIC_READ_REGISTERS):
+        address, name, _kind = pins.PMIC_READ_REGISTERS[index - 1]
+        where = f"the read of {name} ({address:#06x})"
+    else:
+        where = f"transfer {index}"
+    return f"status {result:#x}: {where} failed: {what or 'unknown code'}"
 
 
 ZERO_VECTORS = bytes(16)

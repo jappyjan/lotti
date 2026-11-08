@@ -13,6 +13,9 @@ code, its stack and the ram_api is recorded, so a test can check the whole footp
     stubs that record their arguments);
   - IOM7's registers, with the nPM1300 behind it: STATUS idle, FIFOPTR with room, INTSTAT set by a
     command (CMDCMP, or NAK when `nak`); a write transaction to 0x6B is decoded to its wire bytes;
+    a read (CMD READ with a 2-byte offset, OFFSETHI then OFFSETLO on the wire) is decoded to its
+    register address, answered from `pmic_registers` into the receive FIFO, which FIFOPTR's
+    FIFO1SIZ counts and FIFOPOP pops (`nak_reads`: reads NAK; `rx_bytes`: bytes a read returns);
   - MRAM (0x400000-0x800000): readable; written only through the MRAM routine stub.
 """
 
@@ -44,7 +47,7 @@ BL_STUBS = (TICK, POWER, MRAM_WRAPPER)
 
 IOM7_WRITES = {0x200: "INTEN", 0x208: "INTCLR", 0x2C4: "DEVCFG", 0x128: "OFFSETHI", 0x10C: "FIFOPUSH",
                0x120: "CMD"}
-IOM7_READS = {0x248: "STATUS", 0x100: "FIFOPTR", 0x204: "INTSTAT", 0x200: "INTEN"}
+IOM7_READS = {0x248: "STATUS", 0x100: "FIFOPTR", 0x204: "INTSTAT", 0x200: "INTEN", 0x108: "FIFOPOP"}
 
 
 class TempleCpu:
@@ -63,6 +66,12 @@ class TempleCpu:
         self.status_idle = True
         self.fifo_room = 32
         self.wire: list[tuple[int, bytes, int]] = []  # (I2C address, bytes, tick) per write transaction
+        self.reads: list[tuple[int, int, int]] = []  # (I2C address, register, bytes) per read transaction
+        self.transactions: list[tuple] = []  # ("w", address, bytes) / ("r", address, register), in order
+        self.pmic_registers: dict[int, int] = {}  # a read of a register not in it returns (reg * 7) & 0xFF
+        self.nak_reads = False
+        self.rx_bytes = 1  # bytes the PMIC answers a 1-byte read with (0: none arrive)
+        self.rx: list[int] = []  # IOM7's receive FIFO
         self.footprint: list[tuple[str, int, int]] = []  # ("r"/"w", address, value) outside the program
         self.violations: list[str] = []
         self.mram_writes: list[tuple[int, int]] = []
@@ -144,7 +153,10 @@ class TempleCpu:
         if offset == 0x248:
             v = 4 if self.status_idle else 2
         elif offset == 0x100:
-            v = self.fifo_room << 8
+            v = self.fifo_room << 8 | min(len(self.rx), 255) << 16
+        elif offset == 0x108:
+            popped, self.rx = self.rx[:4], self.rx[4:]
+            v = int.from_bytes(bytes(popped).ljust(4, b"\0"), "little")
         else:
             v = self._iom.get(offset, 0)
         c.mem_write(address & ~3, struct.pack("<I", v))
@@ -167,8 +179,28 @@ class TempleCpu:
                 if offset_count:
                     self.violations.append("unexpected offset bytes in a PMIC write")
                 self.wire.append((self._iom[0x2C4] & 0x7F, bytes(push[:tsize]), self.ticks))
+                self.transactions.append(("w", self._iom[0x2C4] & 0x7F, bytes(push[:tsize])))
                 if self.complete:
                     self._iom[0x204] |= 0x10 | 1 if self.nak else 1
+            elif value & 0xF == 2:
+                tsize, offset_count = (value >> 8) & 0xFFF, (value >> 4) & 7
+                if push:
+                    self.violations.append("bytes pushed before a read")
+                if offset_count != 2:
+                    self.violations.append(f"a PMIC read with {offset_count} offset bytes")
+                register = (self._iom[0x128] & 0xFF) << 8 | value >> 24
+                address = self._iom[0x2C4] & 0x7F
+                self.reads.append((address, register, tsize))
+                self.transactions.append(("r", address, register))
+                if self.complete:
+                    if self.nak_reads:
+                        self._iom[0x204] |= 0x10 | 1
+                    else:
+                        byte = self.pmic_registers.get(register, (register * 7) & 0xFF)
+                        self.rx += [byte] * min(tsize, self.rx_bytes)
+                        self._iom[0x204] |= 1
+            else:
+                self.violations.append(f"IOM7 command {value:#x}")
         else:
             self._iom[offset] = value
 

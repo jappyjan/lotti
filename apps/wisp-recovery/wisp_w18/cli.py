@@ -5,12 +5,19 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   bootloader-plan     what will be written, where, the hashes, the preconditions (touches nothing)
   bootloader-install  the one bootloader write, over the stock BLE OTA; needs --go <token>
   loader-hello        read-only: claim the loader through the case, CRC the bootloader twice, release
+                      (--no-release: end holding the temple in its loader, no CONT)
+  held-reset-test     read-only: loader-hello --no-release, then a second session that must reset the
+                      held temple and get its HELO (rung4.md W21; stop the plan if it does not)
+  peek                read-only: allowlisted bootloader RAM/MRAM (NOR part, board strap, UART2, flag)
+  pmic-read           read-only: the nPM1300 register snapshot (pmic_read.bin; first run: Jan's go)
+  app-check           read-only: bootloader CRC, update flag, vectors, app region CRC vs known images
+  boot-watch          CONT, then status queries to the booting app through the relay before G2EX
   info-dump           read-only: MCUCTRL, PWRCTRL, INFO0, INFOC, DCU/LCS (when powered), release
   link-soak           read-only: stream N bytes of the app region out through the loader (dump), as
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
-  install-wisp        write a pinned Wisp native image to MRAM through the loader (rung4.md, R4-1);
-                      refuses every image until Jan approves R4-1 and an image is pinned
+  install-wisp        write a pinned Wisp native image to MRAM through the loader (rung4.md, R4-1,
+                      approved 2026-11-08); refuses every image until W23 pins one
 
 Two watchdogs limit a session, one in the case and one in the temple (recovery.md, "Long relay
 sessions" and "The temple's watchdog"):
@@ -34,13 +41,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import struct
 import sys
 import time
 import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import image, native, pins
+from . import image, native, pins, status
 from .links import CaseRelayLink, PogoNotIdle, SocketLink
 from .session import BLOCK, AppImage, AppWriter, Session, SessionError
 
@@ -346,15 +354,240 @@ def with_session(args, name: str, body) -> int:
     return run_sessions(args, name, lambda session, patched, index: (True, body(session, patched)))
 
 
+def hello_checks(session, side: str) -> dict:
+    """loader-hello's reads after the first bootloader CRC: the CRC again and the update flag."""
+    second = session.bootloader_crc()
+    flag = session.flag()
+    print(f"OK: patched loader answers on the {side} temple; bootloader CRC-32 {second:08x} twice; "
+          f"update flag {flag:#010x}")
+    return {"bootloader_crc32": f"{second:08x}", "flag": f"{flag:#010x}"}
+
+
 def cmd_hello(args) -> int:
     def body(session, patched):
-        second = session.bootloader_crc()
-        flag = session.flag()
-        print(f"OK: patched loader answers on the {args.side} temple; bootloader CRC-32 {second:08x} twice; "
-              f"update flag {flag:#010x}")
-        return {"bootloader_crc32": f"{second:08x}", "flag": f"{flag:#010x}"}
+        fields = hello_checks(session, args.side)
+        if args.no_release:
+            session.hold = True  # no CONT: the temple stays in its loader until a reset or the PMIC
+            fields["held"] = True
+            print(f"HELD: the {args.side} temple stays in its loader (no CONT). It boots again at the next case "
+                  f"reset, or about {pins.PMIC_WATCHDOG_S:g} s after the last PMIC kick if the stock app had armed "
+                  "the watchdog. For the reset test use held-reset-test, which times the second session.")
+        return fields
 
     return with_session(args, "loader-hello", body)
+
+
+# The held-temple reset test (rung4.md §4, W21): session 2 must reset the temple before the PMIC's
+# watchdog could have, or the test proves nothing (a PMIC power cycle also brings HELO back). The
+# relay's reset comes 0.5-0.9 s after the relay starts; keep 5 s of margin.
+HELD_RESET_MARGIN_S = 5.0
+
+
+def cmd_held_reset(args) -> int:
+    held: dict = {}
+
+    def step(session, patched, index):
+        fields = hello_checks(session, args.side)
+        if index == 0:
+            session.hold = True
+            held.update(last_kick=session.last_kick, side=args.side)
+            print(f"session 0: the {args.side} temple is held in its loader (no CONT); next: a new session must "
+                  "reset it", flush=True)
+            return False, {"held_session": fields}
+        gap = session.started - held["last_kick"] if held.get("last_kick") is not None else None
+        limit = pins.PMIC_WATCHDOG_S - HELD_RESET_MARGIN_S
+        verdict = {"held_reset_s_after_last_kick": round(gap, 2) if gap is not None else None, "limit_s": limit}
+        if gap is None or gap >= limit:
+            raise SessionError(f"INCONCLUSIVE: the second relay started {gap} s after the held session's last PMIC "
+                               f"kick (limit {limit:g} s): the PMIC's watchdog may have reset the temple first. "
+                               "Nothing was written; rerun held-reset-test.")
+        print(f"OK: held-temple reset test passed on the {args.side} temple: the case reset a temple held in its "
+              f"loader and its HELO came back ({gap:.1f} s after the held session's last PMIC kick, before the "
+              "PMIC's watchdog could have reset it)", flush=True)
+        return True, {"reset_session": fields, "verdict": verdict}
+
+    def on_stop(report):
+        if held and len(report["sessions"]) > 1:
+            print("STOP (rung4.md §8): if the held temple did not come back with HELO, the case reset does not work "
+                  "without a running stock app. Do not go on with rung 4; report this.", file=sys.stderr)
+
+    return run_sessions(args, "held-reset-test", step, on_stop)
+
+
+def describe_peek(name: str, data: bytes) -> dict:
+    out = {"address": f"{pins.PEEK_REGIONS[name][0]:#x}", "hex": data.hex()}
+    if name == "nor":
+        pointer = struct.unpack("<I", data)[0]
+        out["record"] = f"{pointer:#x}"
+        out["part"] = pins.PEEK_NOR.get(pointer, "neither record: stop (rung4.md §8)")
+    elif name == "board":
+        cls, _pad, code, millivolts = struct.unpack_from("<BBHh", data)
+        out.update(bootloader_class=cls, bootloader_code=code, strap_mV=millivolts)
+        bins = ((950, 1050, 6), (550, 650, 3), (300, 400, 4), (100, 250, 5))
+        out["app_hw_version"] = next((hw for low, high, hw in bins if low <= millivolts <= high),
+                                     "out of range: the app falls back by the board serial")
+    elif name == "uart2":
+        handle, pins_table = struct.unpack_from("<II", data, 4)
+        callback, awake = struct.unpack_from("<II", data, 20)
+        out.update(handle=f"{handle:#x}", pin_table=f"{pins_table:#x}", rx_callback=f"{callback:#x}",
+                   irq_mode=awake & 0xFF)
+        out["loader_precondition"] = bool(handle) and pins_table == 0x434210 and not awake & 0xFF and not callback
+    elif name == "power-callbacks":
+        out["zero"] = data == bytes(8)
+    elif name == "flag":
+        out["word0"] = f"{struct.unpack_from('<I', data)[0]:#010x}"
+    return out
+
+
+def cmd_peek(args) -> int:
+    names = args.what or list(pins.PEEK_REGIONS)
+
+    def body(session, patched):
+        found = {}
+        for name in names:
+            found[name] = describe_peek(name, session.peek(name))
+            print(f"{name}: {json.dumps(found[name])}", flush=True)
+        return {"peek": found}
+
+    return with_session(args, "peek", body)
+
+
+def pmic_table(registers: dict[int, int]) -> dict:
+    return {f"{address:#06x}": {"name": name, "kind": kind, "value": f"{registers[address]:#04x}"}
+            for address, name, kind in pins.PMIC_READ_REGISTERS}
+
+
+def pmic_diff(now: dict[int, int], before: dict) -> dict:
+    """Config registers that differ from an earlier snapshot (a pmic-read report's `pmic`), and
+    separately the watchdog timer's and the live status registers' changes."""
+    out: dict = {"config": {}, "watchdog": {}, "status": {}}
+    for address, name, kind in pins.PMIC_READ_REGISTERS:
+        old = before.get(f"{address:#06x}", {}).get("value")
+        new = f"{now[address]:#04x}"
+        if old != new:
+            out[kind][name] = {"before": old, "now": new}
+    return out
+
+
+def cmd_pmic_read(args) -> int:
+    before = None
+    if args.compare:
+        try:
+            before = json.loads(Path(args.compare).read_text())["pmic"]
+        except (OSError, KeyError, ValueError) as error:
+            print(f"REFUSED: --compare {args.compare}: not a pmic-read report ({error!r})", file=sys.stderr)
+            return 2
+    differs = [False]
+
+    def body(session, patched):
+        registers = session.pmic_read()
+        table = pmic_table(registers)
+        for address, entry in table.items():
+            print(f"{address} {entry['name']:<28} {entry['value']}  ({entry['kind']})")
+        fields = {"pmic": table}
+        if before is not None:
+            diff = pmic_diff(registers, before)
+            fields["diff"] = diff
+            differs[0] = bool(diff["config"])
+            print(f"compared with {args.compare}: {len(diff['config'])} config register(s) differ, "
+                  f"{len(diff['watchdog'])} watchdog, {len(diff['status'])} status", flush=True)
+            for name, change in diff["config"].items():
+                print(f"  DIFFERS {name}: {change['before']} -> {change['now']}", file=sys.stderr)
+        return fields
+
+    code = with_session(args, "pmic-read", body)
+    if code == 0 and differs[0]:
+        print("STOP (rung4.md §8): the PMIC configuration differs from the snapshot beyond the watchdog timer",
+              file=sys.stderr)
+        return 3
+    return code
+
+
+def known_images(extra: list[str]) -> list[dict]:
+    """Images app-check compares the app region with: the pinned stock main, every pinned Wisp
+    image with a CRC, and any --image files (a bundle or a raw image)."""
+    out = [{"name": f"stock {pins.STOCK_MAIN_VERSION} main", "bytes": pins.STOCK_MAIN_BYTES,
+            "crc32": pins.STOCK_MAIN_CRC32}]
+    for name, pin in pins.WISP_IMAGES.items():
+        if "crc32" in pin:
+            out.append({"name": f"Wisp {name}", "bytes": pin["image_bytes"], "crc32": pin["crc32"]})
+    for path in extra:
+        data = Path(path).read_bytes()
+        if data[:8] == b"EVENOTA\0":
+            data = image.main_from_bundle(data)
+        out.append({"name": path, "bytes": len(data), "crc32": zlib.crc32(data), "sha256": image.sha(data)})
+    return out
+
+
+FLAG_VALUES = {0xFFFFFFFF: "clear", 0x55555555: "install pending (the bootloader installs the staged file)"}
+
+
+def cmd_app_check(args) -> int:
+    try:
+        images = known_images(args.image or [])
+    except (OSError, image.ImageError) as error:
+        print(f"REFUSED: {error}", file=sys.stderr)
+        return 2
+    verdict: dict = {}
+
+    def body(session, patched):
+        fields = hello_checks(session, args.side)
+        flag = int(fields["flag"], 16)
+        fields["flag_meaning"] = FLAG_VALUES.get(flag, "undocumented: stop (rung4.md §8)")
+        vectors = session.dump(pins.APP_BASE, 16)
+        fields["vectors"] = vectors.hex()
+        fields["vectors_zero"] = vectors == bytes(16)
+        crcs: dict[int, int] = {}
+        for entry in images:
+            if entry["bytes"] not in crcs:
+                session.step = f"CRC of the app region, {entry['bytes']} bytes"
+                crcs[entry["bytes"]] = session.checksum(pins.APP_BASE, entry["bytes"])
+            entry["region_crc32"] = f"{crcs[entry['bytes']]:08x}"
+            entry["matches"] = crcs[entry["bytes"]] == entry["crc32"]
+            entry["crc32"] = f"{entry['crc32']:08x}"
+        matched = [e["name"] for e in images if e["matches"]]
+        fields.update(images=images, matches=matched)
+        print(f"vectors at {pins.APP_BASE:#x}: {vectors.hex()}" + (" (zero: an interrupted write; the bootloader "
+                                                                   "does not hand off)" if fields["vectors_zero"] else ""))
+        for entry in images:
+            print(f"  {entry['name']}: region CRC-32 {entry['region_crc32']} over {entry['bytes']} B, image "
+                  f"{entry['crc32']}: {'MATCH' if entry['matches'] else 'no match'}")
+        print(f"update flag {flag:#010x}: {fields['flag_meaning']}")
+        print("OK: app region holds " + (" and ".join(matched) if matched else "NONE of the known images"), flush=True)
+        verdict.update(matched=bool(matched), flag_ok=flag in FLAG_VALUES)
+        return fields
+
+    code = with_session(args, "app-check", body)
+    if code == 0 and not (verdict.get("matched") and verdict.get("flag_ok")):
+        return 3
+    return code
+
+
+def cmd_boot_watch(args) -> int:
+    factory = status.PROTOCOLS.get(args.protocol)
+    if factory is None:
+        print(f"REFUSED: no case-UART status protocol {args.protocol!r} (registered: {sorted(status.PROTOCOLS)}). "
+              "The Wisp protocol comes with G10 (apps/wisp-fw); nothing was sent", file=sys.stderr)
+        return 2
+    protocol = factory()
+
+    def body(session, patched):
+        fields = hello_checks(session, args.side)
+        if int(fields["flag"], 16) not in FLAG_VALUES:
+            raise SessionError(f"update flag {fields['flag']} is undocumented; not releasing into it")
+        session.step = "release (CONT) and watch the boot"
+        session.release()
+        print(f"boot released; watching for {args.watch_s:g} s with {protocol.name!r}", flush=True)
+        events = status.watch(session.link, protocol, args.watch_s, args.interval_s, clock=session.clock,
+                              sleep=WATCH_SLEEP, log=lambda m: print(m, flush=True))
+        print(f"boot-watch: {len(events['answers'])} answer(s), {events['unanswered']} unanswered quer(ies), "
+              f"{len(events['reboots_s'])} reboot(s) seen in {events['seconds']} s")
+        return {**fields, "boot_watch": events}
+
+    return with_session(args, "boot-watch", body)
+
+
+WATCH_SLEEP = time.sleep  # tests replace it with the relay model's virtual clock
 
 
 def cmd_info(args) -> int:
@@ -624,8 +857,32 @@ def main(argv=None) -> int:
     sp.add_argument("--battery", type=int, help="battery % read in the Even app; must be >= 80")
     sp.add_argument("--case-profile", choices=sorted(pins.RELAY_SHA256), default=pins.DEFAULT_CASE_PROFILE)
     sp.add_argument("--go", required=True, help="the token bootloader-plan prints")
-    common(sub.add_parser("loader-hello", help="read-only loader check through the case"))
+    sp = sub.add_parser("loader-hello", help="read-only loader check through the case")
+    common(sp)
+    sp.add_argument("--no-release", action="store_true",
+                    help="end the session without CONT: the temple stays held in its loader (G25; the "
+                         "held-temple reset test, normally run as held-reset-test)")
+    common(sub.add_parser("held-reset-test", help="read-only: hold the temple in its loader, then reset it from a "
+                                                   "second session and require its HELO (rung4.md W21)"))
     common(sub.add_parser("info-dump", help="read-only INFO0/INFOC/debug-lock dump"))
+    sp = sub.add_parser("peek", help="read-only: allowlisted reads of the patched bootloader's RAM and MRAM")
+    common(sp)
+    sp.add_argument("--what", nargs="+", choices=sorted(pins.PEEK_REGIONS),
+                    help="regions to read (default: all of pins.PEEK_REGIONS)")
+    sp = sub.add_parser("pmic-read", help="read-only: nPM1300 register snapshot (pmic_read.bin)")
+    common(sp)
+    sp.add_argument("--compare", help="an earlier pmic-read report: list and stop on config registers that differ")
+    sp = sub.add_parser("app-check", help="read-only: bootloader CRC, flag, app region CRC against known images")
+    common(sp)
+    sp.add_argument("--image", nargs="+", help="more images to compare with (a bundle or a raw main image)")
+    sp = sub.add_parser("boot-watch", help="release the boot (CONT), then ask the booting app for its status "
+                                            "through the relay before ending the session")
+    common(sp)
+    sp.add_argument("--protocol", default="listen",
+                    help="the status protocol (wisp_w18/status.py PROTOCOLS; default listen: send nothing, record "
+                         "what the temple sends)")
+    sp.add_argument("--watch-s", type=float, default=60.0, help="how long to watch after CONT (default 60)")
+    sp.add_argument("--interval-s", type=float, default=1.0, help="at most one query this often (default 1)")
     sp = sub.add_parser("link-soak", help="read-only: stream the app region out through the loader")
     common(sp)
     sp.add_argument("--bytes", type=lambda v: int(v, 0), default=1 << 20,
@@ -649,7 +906,7 @@ def main(argv=None) -> int:
                     help="body bytes an earlier recover run wrote and verified (it prints the value); "
                          "they are CRC-checked against the image before anything is written")
     sp = sub.add_parser("install-wisp", help="write a pinned Wisp native image through the loader (rung4.md "
-                                              "R4-1; refuses every image until R4-1 is approved and one is pinned)")
+                                              "R4-1; refuses every image until W23 pins one)")
     common(sp)
     sp.add_argument("--image", required=True, help="the combined native image (Wisp Boot slot + app), linked at 0x438000")
     sp.add_argument("--elf", required=True, help="the app's ELF the image was built from (pinned)")
@@ -664,5 +921,6 @@ def main(argv=None) -> int:
                     help="body bytes an earlier install-wisp run of the same image wrote and verified")
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
-            "info-dump": cmd_info, "link-soak": cmd_soak, "recover": cmd_recover,
-            "install-wisp": cmd_install_wisp}[a.command](a)
+            "held-reset-test": cmd_held_reset, "info-dump": cmd_info, "peek": cmd_peek, "pmic-read": cmd_pmic_read,
+            "app-check": cmd_app_check, "boot-watch": cmd_boot_watch, "link-soak": cmd_soak,
+            "recover": cmd_recover, "install-wisp": cmd_install_wisp}[a.command](a)

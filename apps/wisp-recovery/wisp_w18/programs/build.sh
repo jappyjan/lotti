@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Builds the W18 RAM programs of this repository (feed, dump_fed, recover_fed) into ../data/ and
+# Builds the W18 RAM programs of this repository (feed, dump_fed, recover_fed, pmic_read) into ../data/ and
 # prints their SHA-256, which wisp_w18/pins.py pins. docs/wisp/recovery.md, "The temple's
 # watchdog". Nothing here talks to hardware.
 #
@@ -16,7 +16,7 @@ set -euo pipefail
 NIXPKGS="github:NixOS/nixpkgs/c59305bab2065cfecc4944690d9eedbb56f3a9fa"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA="$HERE/../data"
-PROGRAMS=(feed dump_fed recover_fed)
+PROGRAMS=(feed dump_fed recover_fed pmic_read)
 
 if [[ "${WISP_PROGRAMS_SHELL:-}" != 1 ]]; then
 	exec env WISP_PROGRAMS_SHELL=1 nix shell "$NIXPKGS#llvmPackages_21.clang-unwrapped" \

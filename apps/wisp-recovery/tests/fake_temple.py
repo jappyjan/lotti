@@ -3,8 +3,9 @@
 fake MRAM, and a stand-in for the stock app's BLE OTA service. No hardware, no emulator.
 
 The RAM programs are recognised by their pinned SHA-256 and run as Python equivalents of
-drdaeman's checksum.c, dump.c and recover.c, and of ours: feed.c, dump_fed.c and recover_fed.c
-(tests/test_temple_watchdog.py checks the real binaries against the same behaviour under Unicorn).
+drdaeman's checksum.c, dump.c and recover.c, and of ours: feed.c, dump_fed.c, recover_fed.c and
+pmic_read.c (tests/test_temple_watchdog.py and tests/test_pmic_read.py check the real binaries
+against the same behaviour under Unicorn). `pmic_registers` is what pmic_read reads.
 
 With a `FakePmicWatchdog`, the temple has the nPM1300 watchdog the stock app leaves running: the
 relay's reset restarts the loader but not the PMIC, and when the watchdog has not been kicked for
@@ -204,6 +205,19 @@ class FakeLoaderLink:
             status = self.pmic.kick()
             return status == 0x10 or status >> 8 == 1
         return False
+
+    def _prog_pmic_read(self, _a0, _a1):
+        """pmic_read.c: one kick (its failures end the program with the kick's code, nothing
+        read), then every register of pins.PMIC_READ_REGISTERS, sent as one byte each."""
+        if self.pmic is not None:
+            status = self.pmic.kick()
+            if status:
+                return status
+        registers = getattr(self, "pmic_registers", {})
+        data = bytes(registers.get(address, (address * 7) & 0xFF) for address, _n, _k in pins.PMIC_READ_REGISTERS)
+        for i in range(0, len(data), 16):
+            yield "out", data[i : i + 16]
+        return 0
 
     def _prog_feed(self, _a0, _a1):
         return self.pmic.kick() if self.pmic is not None else 0

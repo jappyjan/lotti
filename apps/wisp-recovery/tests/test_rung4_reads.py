@@ -1,0 +1,287 @@
+# SPDX-License-Identifier: MIT
+"""The rung-4 read-only tools (rung4.md §4 and §7: G2, G3, G25) against fakes. No hardware.
+
+  - `peek`: only pins.PEEK_REGIONS, read through dump/dump_fed after the bootloader CRC; decoded.
+  - `app-check`: bootloader CRC twice, the flag, the vectors, the app region's CRC against the
+    pinned stock image, pinned Wisp images and --image files; exit 3 when nothing matches.
+  - `loader-hello --no-release`: the session ends without CONT, the temple stays held.
+  - `held-reset-test`: a held session, then a second one whose relay reset must bring the HELO
+    back before the PMIC's watchdog could have; it stops when the reset does not.
+  - `boot-watch`: CONT, then the status hook through the relay model; the relay's framing rules,
+    the loader's HELO after a reboot, the listen-only protocol, the refusal without a protocol.
+"""
+
+import struct
+import sys
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import fake_status
+from fake_temple import FakeClock, FakeLoaderLink
+from test_session_guard import Case, run_cli
+from test_w18 import FAKE_PATCHED, temple
+from wisp_w18 import cli, image, links, loader, pins, relay_model, session, status
+
+
+def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF) -> dict:
+    """What the patched bootloader leaves in RAM at the hold, as the fake temple's readable memory."""
+    uart2 = struct.pack("<7I", 2, 0x2001_9000, 0x0043_4210, 0, 0, 0, 0)
+    return {"nor": struct.pack("<I", nor), "board": struct.pack("<BBHhH", 0, 0, 3, millivolts, 0),
+            "uart2": uart2, "power-callbacks": bytes(8)}
+
+
+def ram_temple(app=b"", **ram):
+    mram = temple(app)
+    for name, data in bootloader_ram(**ram).items():
+        mram.io[pins.PEEK_REGIONS[name][0]] = data
+    return mram  # the NOR records (MRAM) are inside FAKE_PATCHED
+
+
+class Peek(unittest.TestCase):
+    def test_peek_reads_and_decodes_the_allowlisted_regions(self):
+        case = Case(ram_temple())
+        code, report = run_cli(["peek", "--side", "left"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        peek = report["peek"]
+        self.assertEqual(set(peek), set(pins.PEEK_REGIONS))
+        self.assertTrue(peek["nor"]["part"].startswith("MX25U25643G"))
+        self.assertEqual((peek["board"]["strap_mV"], peek["board"]["app_hw_version"]), (180, 5))
+        self.assertTrue(peek["uart2"]["loader_precondition"])
+        self.assertTrue(peek["power-callbacks"]["zero"])
+        self.assertEqual(peek["flag"]["word0"], "0xffffffff")
+        self.assertEqual(case.mram.writes, [])
+        reads = {(a0, a1) for a0, a1 in case.programs}
+        for address, length, _what in pins.PEEK_REGIONS.values():
+            self.assertIn((address, length), reads)
+
+    def test_gd_and_unknown_records(self):
+        for pointer, part in ((0x0043_36B0, "GD25LE256H"), (0x1234, "neither record")):
+            code, report = run_cli(["peek", "--side", "left", "--what", "nor"], Case(ram_temple(nor=pointer)))
+            self.assertEqual(code, 0)
+            self.assertTrue(report["peek"]["nor"]["part"].startswith(part))
+
+    def test_anything_else_is_refused_before_the_temple(self):
+        link = FakeLoaderLink(ram_temple())
+        with session.Session(link, log=lambda m: None) as s:
+            with self.assertRaises(session.RefusedError):
+                s.peek("nor")  # bootloader not checked yet
+            s.require_patched_bootloader(FAKE_PATCHED)
+            with self.assertRaises(session.RefusedError):
+                s.peek("otp")
+        loads = [f for f in link.sent if len(f) == 32 and f[8] == loader.LOAD]
+        self.assertEqual(len(loads), 1)  # the bootloader CRC only
+        with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+            cli.main(["peek", "--side", "left", "--what", "otp"])
+
+
+class AppCheck(unittest.TestCase):
+    def test_stock_matches_by_its_pinned_crc(self):
+        stock = bytes((i * 3 + 1) & 255 for i in range(5000))
+        with mock.patch.object(pins, "STOCK_MAIN_BYTES", len(stock)), \
+                mock.patch.object(pins, "STOCK_MAIN_CRC32", zlib.crc32(stock)):
+            case = Case(temple(stock))
+            code, report = run_cli(["app-check", "--side", "left"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertEqual(report["matches"], [f"stock {pins.STOCK_MAIN_VERSION} main"])
+        self.assertEqual((report["flag"], report["flag_meaning"]), ("0xffffffff", "clear"))
+        self.assertFalse(report["vectors_zero"])
+        self.assertEqual(report["bootloader_crc32"], f"{zlib.crc32(FAKE_PATCHED):08x}")
+        self.assertEqual(case.mram.writes, [])
+
+    def test_a_wisp_pin_and_an_image_file_are_compared_too_and_no_match_is_exit_3(self):
+        app = bytes((i * 5 + 2) & 255 for i in range(3000))
+        pin = {"image_sha256": image.sha(app), "image_bytes": len(app), "crc32": zlib.crc32(app)}
+        with mock.patch.dict(pins.WISP_IMAGES, {"native-x": pin}):
+            code, report = run_cli(["app-check", "--side", "left"], Case(temple(app)))
+        self.assertEqual(code, 0)
+        self.assertEqual(report["matches"], ["Wisp native-x"])
+        with tempfile.TemporaryDirectory() as tmp:
+            other = Path(tmp) / "other.bin"
+            other.write_bytes(app[:-1] + b"\x00")
+            code, report = run_cli(["app-check", "--side", "left", "--image", str(other)], Case(temple(app)))
+        self.assertEqual(code, 3)
+        self.assertEqual(report["matches"], [])
+        self.assertEqual(report["images"][-1]["name"], str(other))
+
+    def test_zero_vectors_and_a_set_flag_are_reported(self):
+        app = bytes(16) + bytes(range(200))
+        mram = temple(app, {0x7FE000: struct.pack("<4I", 0x55555555, ~0 & 0xFFFFFFFF, ~0 & 0xFFFFFFFF,
+                                                  ~0 & 0xFFFFFFFF)})
+        code, report = run_cli(["app-check", "--side", "left"], Case(mram))
+        self.assertEqual(code, 3)
+        self.assertTrue(report["vectors_zero"])
+        self.assertTrue(report["flag_meaning"].startswith("install pending"))
+
+
+class HeldTemple(unittest.TestCase):
+    def test_no_release_ends_without_cont(self):
+        case = Case(temple())
+        code, report = run_cli(["loader-hello", "--side", "left", "--no-release"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertTrue(report["held"])
+        sent = case.relays[0].temple.sent
+        self.assertNotIn(loader.cont(), sent)
+
+    def test_an_error_still_releases(self):
+        link = FakeLoaderLink(temple())
+        with self.assertRaises(session.SessionError), session.Session(link, log=lambda m: None) as s:
+            s.hold = True
+            s.require_patched_bootloader(FAKE_PATCHED[:-1] + b"\0")
+        self.assertIn(loader.cont(), link.sent)
+
+    def test_held_reset_test_passes_when_the_reset_brings_helo_back(self):
+        case = Case(temple())
+        code, report = run_cli(["held-reset-test", "--side", "left"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertNotIn(loader.cont(), case.relays[0].temple.sent)  # session 0 held it
+        self.assertIn(loader.cont(), case.relays[1].temple.sent)  # session 1 released it
+        self.assertLess(report["verdict"]["held_reset_s_after_last_kick"], report["verdict"]["limit_s"])
+
+    def test_held_reset_test_stops_when_the_held_temple_does_not_answer(self):
+        case = Case(temple())
+        made = case.link
+        count = [0]
+
+        def link(args=None):
+            made_link = made(args)
+            count[0] += 1
+            if count[0] == 2:  # the relay's reset does not reach a temple held in its loader
+                made_link.port.temple.start = lambda: b""
+            return made_link
+
+        case.link = link
+        code, report = run_cli(["held-reset-test", "--side", "left"], case)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(report["sessions"]), 2)
+        self.assertNotIn("verdict", report)
+
+    def test_held_reset_test_is_inconclusive_when_the_pmic_could_have_reset_it(self):
+        case = Case(temple())
+        made = case.link
+        count = [0]
+
+        def link(args=None):
+            count[0] += 1
+            if count[0] == 2:
+                case.clock.advance(pins.PMIC_WATCHDOG_S)  # the second session came too late
+            return made(args)
+
+        case.link = link
+        code, report = run_cli(["held-reset-test", "--side", "left"], case)
+        self.assertEqual(code, 1)
+        self.assertIn("INCONCLUSIVE", report["error"])
+
+
+class BootCase(Case):
+    """Case whose temple boots an app after CONT (fake_status.BootingTemple)."""
+
+    def __init__(self, mram, **temple_kw):
+        super().__init__(mram)
+        self.temple_kw = temple_kw
+
+    def link(self, _args=None):
+        backend = fake_status.BootingTemple(self.mram, self.clock, **self.temple_kw)
+        relay = relay_model.RelayModel(backend, clock=self.clock, idle_s=2.0)
+        self.relays.append(relay)
+        made = links.RelayPortLink(relay, "left", clock=self.clock)
+        self.links.append(made)
+        return made
+
+
+def watch_cli(argv, case):
+    with mock.patch.dict(status.PROTOCOLS, {"fake": fake_status.FakeStatus}), \
+            mock.patch.object(cli, "WATCH_SLEEP", case.clock.advance):
+        return run_cli(argv, case)
+
+
+class BootWatch(unittest.TestCase):
+    def test_cont_then_status_answers_until_the_app_is_up(self):
+        case = BootCase(temple(), boot_s=3.0)
+        code, report = watch_cli(["boot-watch", "--side", "left", "--protocol", "fake", "--watch-s", "30"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        events = report["boot_watch"]
+        self.assertTrue(events["complete"])
+        self.assertEqual(events["answers"][-1]["stage"], 3)
+        self.assertGreaterEqual(events["answers"][0]["t"], 3.0)
+        self.assertGreater(events["unanswered"], 0)  # the app was still booting
+        temple_ = case.relays[0].temple
+        self.assertIsNotNone(temple_.released_at)
+        self.assertTrue(all(f == fake_status.frame_9(fake_status.QUERY) for f in temple_.app_frames))
+        self.assertEqual(case.mram.writes, [])
+
+    def test_a_reboot_shows_as_the_loaders_helo(self):
+        case = BootCase(temple(), boot_s=30.0, reboot_at_s=5.0)
+        code, report = watch_cli(["boot-watch", "--side", "left", "--protocol", "fake", "--watch-s", "12"], case)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(report["boot_watch"]["reboots_s"]), 1)
+        self.assertEqual(report["boot_watch"]["answers"], [])
+
+    def test_listen_only_sends_nothing_and_records_what_comes(self):
+        chatter = fake_status.answer(1, 0)
+        case = BootCase(temple(), boot_s=0.0, chatter=chatter)
+        code, report = watch_cli(["boot-watch", "--side", "left", "--watch-s", "10"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        events = report["boot_watch"]
+        self.assertEqual(events["protocol"], "listen")
+        self.assertEqual(case.relays[0].temple.app_frames, [])  # nothing reached the app
+        self.assertTrue(events["answers"])
+        self.assertEqual(events["answers"][0]["frame"], chatter.hex())
+
+    def test_without_a_registered_protocol_nothing_is_sent(self):
+        def no_case(_args):
+            raise AssertionError("touched the case")
+
+        with mock.patch.object(cli, "make_link", no_case), mock.patch("sys.stderr"), mock.patch("sys.stdout"):
+            self.assertEqual(cli.main(["boot-watch", "--side", "left", "--protocol", "wisp"]), 2)
+
+    def test_only_the_listen_protocol_ships_until_g10(self):
+        self.assertEqual(set(status.PROTOCOLS), {"listen"})
+
+    def test_frames_the_relay_cannot_carry_are_refused(self):
+        self.assertTrue(status.relay_request_ok(fake_status.frame_9(b"WSTQ")))
+        self.assertTrue(status.relay_request_ok(b""))
+        self.assertFalse(status.relay_request_ok(bytes.fromhex("240001 00a7")))  # the stock version query
+        self.assertFalse(status.relay_request_ok(bytes((0x7E, 0, 1, 5)) + bytes(6)))  # 10 bytes
+        self.assertTrue(status.relay_reply_ok(fake_status.answer(1, 2)))
+        self.assertFalse(status.relay_reply_ok(bytes.fromhex("5aa5ff0924000000020400180536")))  # 14 bytes
+
+        class Bad(fake_status.FakeStatus):
+            def request(self, index):
+                return bytes.fromhex("24000100a7")
+
+        case = BootCase(temple(), boot_s=0.0)
+        with mock.patch.dict(status.PROTOCOLS, {"bad": Bad}), mock.patch.object(cli, "WATCH_SLEEP",
+                                                                                 case.clock.advance):
+            code, report = run_cli(["boot-watch", "--side", "left", "--protocol", "bad"], case)
+        self.assertEqual(code, 1)
+        self.assertIn("not a frame the case relay forwards", report["error"])
+        self.assertEqual(case.relays[0].temple.app_frames, [])
+
+    def test_an_undocumented_flag_is_not_released_into(self):
+        mram = temple(b"", {0x7FE000: struct.pack("<I", 0x12345678)})
+        case = BootCase(mram)
+        code, report = watch_cli(["boot-watch", "--side", "left", "--protocol", "fake"], case)
+        self.assertEqual(code, 1)
+        self.assertIn("undocumented", report["error"])
+
+
+class Clock(unittest.TestCase):
+    def test_watch_ends_on_time_without_answers(self):
+        clock = FakeClock()
+
+        class Silent:
+            def query(self, frame):
+                clock.advance(2.0)
+                return 2, b"", 2.0
+
+        out = status.watch(Silent(), status.ListenOnly(), 10.0, 1.0, clock=clock, sleep=clock.advance,
+                           log=lambda m: None)
+        self.assertEqual(out["unanswered"], out["queries"])
+        self.assertLessEqual(out["seconds"], 12.0)

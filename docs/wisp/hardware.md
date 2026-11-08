@@ -148,7 +148,7 @@ What the native drivers in `apps/wisp-fw` need from the hardware, and what stock
 
 ### microLED panel (JBD4010 / Hongshi A6N-G)
 
-**Which panel** [C]: stock keeps two drivers (option records ROM `0x71097C` JBD, type 0; `0x71086C` A6N-G, type 1) and picks one in `uled_mspi_init` (`0x4EE1AE`) from the board's **hw_version** byte: 6 → A6N-G, anything else → JBD4010. hw_version comes from a resistor strap on GPIO16 (ADC slot 3, 3 samples, mV = raw × 1190 >> 12; bins 950–1050 mV → 6, 550–650 → 3, 300–400 → 4, 100–250 → 5). New in 2.4: an out-of-range ADC falls back by the board serial (BSN[6..7] = "SS" → 6, "fallback to DVT3/Hongshi"; else 5, "fallback to DVT2/JBD"). So hw 5 = DVT2/JBD, hw 6 = DVT3/Hongshi; retail units are probably A6N-G [I]. The board DTS defaults to `panel = "a6n-g"`; `tests/drivers/jbd4010.overlay` selects the JBD. One stock log line from a temple (`[BSP]hw_version: %d`) settles it.
+**Which panel** [C]: stock keeps two drivers (option records ROM `0x71097C` JBD, type 0; `0x71086C` A6N-G, type 1) and picks one in `uled_mspi_init` (`0x4EE1AE`) from the board's **hw_version** byte: 6 → A6N-G, anything else → JBD4010. hw_version comes from a resistor strap on GPIO16 (ADC slot 3, 3 samples, mV = raw × 1190 >> 12; bins 950–1050 mV → 6, 550–650 → 3, 300–400 → 4, 100–250 → 5). New in 2.4: an out-of-range ADC falls back by the board serial (BSN[6..7] = "SS" → 6, "fallback to DVT3/Hongshi"; else 5, "fallback to DVT2/JBD"). So hw 5 = DVT2/JBD, hw 6 = DVT3/Hongshi; retail units are probably A6N-G [I]. The board DTS defaults to `panel = "a6n-g"`; `tests/drivers/jbd4010.overlay` selects the JBD. **Settled for Jan's temples (W20):** step 0's "hardware 5" is this same byte ([below](#hardware-5-is-the-panels-hw_version)), so both run the JBD4010.
 
 **Bus** [C] (`.data` device configs at RAM `0x2000252C/44` JBD, `0x200024FC/14` A6N-G; init `0x5C118A`): MSPI0, SPI mode 0, IRQ 20 priority 4, interrupt mask `0x1A80`. Pads: CE0 GPIO199 (MNCE0_0), D0 GPIO64, D1 GPIO65, SCK GPIO72, plus D2 GPIO66 / D3 GPIO67 for quad. Commands and reads are blocking PIO, serial; pixels are quad 1-1-4 (instruction and address on one line, data on four). Full frames go by DMA, and stock waits for completion.
 
@@ -247,6 +247,82 @@ Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, 
 - The ICM-45608's per-mode currents; whether the OPT3007 is fitted on the left temple; which mic PDM0 carries.
 - Everything timing-related: Renode completes every bus transfer at once.
 
+## Rung-4 static analysis (W20, 2026-11-08)
+
+What [rung4.md](rung4.md#7-steps-and-gaps) step W20 asked before the first loader session of rung 4. Method: capstone over the git-ignored copies in `.wisp-cache/` (never committed): the patched bootloader `87e2d4e0…` rebuilt from the 2.3.2.14 bundle (run addresses), the stock 2.4.0.24 main app (run addresses, `payload[0x20:]` at `0x438000`) and the case firmware 1.2.57 (`firmware/box.bin`, `payload[0x20:]` at `0x08000000`). The patched bootloader's start-up was also run in Unicorn up to its `main` to read the RAM it initialises. drdaeman's sources at `1d22097` (MIT) for his part. No hardware. Tags as above.
+
+### `bootloader_error_reset` in the patched bootloader
+
+**`0x42E156`** (Thumb entry `0x42E157`), the 2.4.0.24 function at `0x42E166` moved by −0x10 [C]. It logs `Bootloader ota fail, system reset!!!`, masks interrupts, copies `{0xFFFFFFFF ×4}` from `0x434310`, writes them to `0x7FE000` through the MRAM wrapper `0x42E83C` (key `0x12344321`, 4 words; the wrapper `recover.bin` uses), restores PRIMASK and calls `0x42E85C(0)`: `RSTGEN.SWPOR = 0xD4` (`0x40000008`), never returning. Its only callers are the install task's three error paths (`0x42E1E2`, `0x42E254`, `0x42E352`). Pinned as `pins.BOOTLOADER_ERROR_RESET_2_3_2_14` for G26's `flag-clear`; nothing calls it yet.
+
+### The loader's UART2 precondition
+
+drdaeman's `boot_task_then_flag` (`0x43511C`, his `src/bootloader.c`) only starts the loader if [C]:
+
+| Slot | Must be | What it is in the bootloader |
+| --- | --- | --- |
+| `0x20000494` | non-zero | UART2's HAL handle, in the bootloader's UART table (`0x20000458`, 28-byte entries, UART2 at `0x20000490`) |
+| `0x20000498` | `0x434210` | UART2's pin table |
+| `0x200004A4` | 0 | UART2's RX callback |
+| `0x200004A8` (byte) | 0 | UART2's interrupt-mode flag (the UART ISR at `0x41F5E6` serves UART2 only when it is 1) |
+| `0x20026E44`, `0x20026E48` | 0 | two entries of the power-callback table at `0x20026E38` |
+
+then UART2's wake (`0x41F847`) must return 0 and `DEVPWRSTATUS` bit 11 must be set. Otherwise it returns to the stock flag check: no `HELO`, and the boot goes on as stock.
+
+**Every input is the bootloader's own state, rebuilt at every boot** [C]. The UART table is initialised data: the start-up run in Unicorn leaves entry 2 as `{2, handle 0, pin table 0x434210, …, callback 0, interrupt mode 0}`, and the bootloader's UART init `0x41F612`, called from its board init `0x430526` before the DFU task, fills in the handle. The callback table is `.bss` (zero after the start-up) and is cleared again by `0x41CE52` (60 bytes); the bootloader reads it only through accessors at `0x41CD1A`–`0x41CE4A` [C]; no store to the two slots by a literal address exists [C]; a store through a computed pointer was not searched for exhaustively [I]. Nothing the main app does can reach this RAM: the boot ROM, the SBL and the bootloader's start-up run first. What survives an Apollo510 reset is clock gen, RTC, STIMER and PMU state (hal_ambiq `am_hal_reset.h`); UART2's power is requested again by the wake call either way [I]. In Renode, where no app has ever run before the bootloader, the loader answered in every `w18-test` case [C, emulation]. So the loader's availability does not depend on what ran before the reset. Whether the case's reset reaches a temple that is not running stock is the other half (next section).
+
+### The case's temple reset (case 1.2.57)
+
+**`reset_gls(left, right)` at `0x08009A9C`** [C]. It skips with `Cannot reset gls since 2510 is busy.` when a reset is already running or the YHM2510 is busy. Otherwise it makes PB9 an output (`GPIOB`, `0x50000400`, init record `0x0800D36C`) and, per side:
+
+1. selects that side's pogo route in the YHM2510: regs 5 = `0x03`, 6 = `0xC1`, 3 (left) or 4 (right) = `0xA6`, 30 ms, 7 = `0x03`;
+2. runs the 372-byte waveform `0x0800B678` (the one drdaeman's relay copies);
+3. restores the route: 7 = `0x20`, 6 = `0x81`, 5 = `0x03`, 3/4 = `0xFF`; 10 ms.
+
+Then PB9 goes back to an input.
+
+**The waveform** [C]. Its `reset_gpio` (`0x08004E9E`) is `HAL_GPIO_WritePin`: `BSRR` (`+0x18`) to set, `BRR` (`+0x28`) to clear. It drives only two pins. PA3 goes high (the level shifter, as in step 0), then PB9 carries three pulse-coded frames: high 10 ms, then low ~29 µs, high ~242 µs, 5 × (low ~120 µs, high ~120 µs), high ~242 µs; low for 40 ms; high 1 ms, then the same frame with 7 pulses; high 1 ms, the 7-pulse frame again. Durations are delay-loop turns (620, 5,160 and 2,560) at about three cycles each at 64 MHz, as drdaeman's `case_reset_delay_ms` assumes [I]. It sends nothing over USART3, reads nothing back and waits for nothing from the temple.
+
+**So the reset is a signal on the selected pogo line, not a UART command** [C]. What decodes it on the temple side is unknown [?]: no schematic is public, and the pattern reaches the temple through the YHM2510. That it works without the temple's software is inferred [I] from three facts:
+
+- the case itself uses it to recover a temple that has stopped answering for 180 s (below);
+- every W18 relay reset restarted the Apollo510 but left the nPM1300's timer running (the reboot came 30.3–31.4 s after the app's last kick, [recovery.md](recovery.md#the-temples-watchdog-the-npm1300)), so it is not a PMIC power cycle;
+- nothing in the stock app's strings points at a decoder of such a pattern: its case-UART code is the `box_uart_mgr` / `pt_protocol_procsr` frame protocol (not exhaustive).
+
+On hardware it has only ever reset a temple running stock. **W21's held-temple reset test is what proves it** (`w18.py held-reset-test`).
+
+**How case 1.2.57 treats a temple that does not answer** [C, the loop around `0x080079A0` and the poll at `0x080018E4`]:
+
+- The case app polls each seated temple with request opcode `0x13` (7 bytes, `13 00 01 00 xx yy sum`, template at `0x08001BCC`). A reply with opcode `0x13` clears that side's miss counter (`0x2000087C + 0x40` left, `+ 0x5C` right). Anything else counts a miss (`Fail to get GLS_L status, cnt:%d`).
+- After 8 misses, that side is polled once every 15 counts and the case logs `No reply from GLS_L, wait for %ds`.
+- **Every 180 counts it resets that temple with `reset_gls`** (`No reply from GLS_L for %ds, reset GLS_L`; callers `0x08007A44` left, `0x08007A88` right), unless the flag byte `0x200000C0` is set (`…, do not reset.`; its meaning [?]).
+- A separate path shows the error LED after 210 s without a reply.
+- The counts are seconds [I: the log strings print them as `%ds`].
+- The other two callers (`0x08006FE6`, `0x0800700E`) are the console command `reset gls L & R, reason: cmd` [I].
+
+**The case never updates a temple** [C, strings; I, completeness]. Its 55,752-byte firmware holds no temple image. Its temple commands are status (`0x13`), charging, aging, serial number, reset and its own update. That update runs the other way: the case asks the temple for `/firmware/box.bin` (`ota check (0x58)`, then the file in chunks; the temple's `pt_box_ota_*` handlers serve it and refuse it when the file is missing or the battery is below 50 %), and with no answer it logs `[OTA_BOX]: GLS not ready.` and does nothing.
+
+**For a Wisp temple seated in the case** [I]: while the case app runs (between relay sessions, and whenever the case is not on our relay) a temple that ignores `0x13` is reset about every 3 minutes. No case-UART OTA starts, and the case's own update does not start either. During a relay session the case runs our relay, not its app, so none of this happens. G10's case-UART protocol should answer `0x13` as stock does (reply format from the stock handler in the main app's `pt_protocol_procsr` table), or the bench sessions accept the 3-minute resets. They are harmless (the loader runs first), but they end every native boot within about 3 minutes.
+
+### NOR classifier and board detect in the patched bootloader's RAM
+
+- **NOR** [C]: the classifier `0x41FE0A` returns 0 for RDID `C2 25 39` (or a 3-byte ID whose upper 16 bits are `25 39`), 1 for `C8 60 19` (or `60 19`) and 2 for anything else. Its caller (the NOR init around `0x420552`) stores a pointer to the part's ops record in **`0x2000023C`**: `0x4336A0` (`MX25U25643G`) or `0x4336B0` (`GD25LE256H`). With class 2 it keeps the initialised value and logs `Unknown nor flash ID 0x%06X, fallback to %s semantics`. If the RDID read itself fails, it logs the error and skips both the classification and the part's init. The initialised value is `0x4336A0` (start-up in Unicorn). So `peek nor` reading `0x4336B0` means GD for certain. Reading `0x4336A0` means MX, an unknown ID or a failed RDID read: all three run with MX semantics. The raw ID is held only on the stack and is gone by the time the loader runs. Telling MX from "unknown" needs a RAM program that reads RDID (rung4.md §4, the alternative it names) [?].
+- **Board detect** [C]: the HwConfig ADC routine (`0x430440`–`0x430524`) samples GPIO16 three times and computes mV = raw × 1190 >> 12 on the third sample, the app's formula. It stores a record at **`0x20027018`**: u8 class (1 for 900–1000 mV, else 0), u16 code (1 or 3), i16 mV at `+4`. No other code references it. The bootloader's two classes are not the app's hw_version, but the stored mV puts the strap in one of the app's bins (100–250 mV = 5, 950–1050 mV = 6). `peek board` decodes it.
+- `pins.PEEK_REGIONS` allowlists these two, the UART2 table entry and the power callbacks (the loader's precondition, read back), the flag record and the two NOR ops records. Nothing else can be peeked.
+
+### "Hardware 5" is the panel's hw_version
+
+[C] The stock 2.4.0.24 case-UART handler `get_version` (`0x48A526`, in the `pt_protocol_procsr` dispatch) builds its reply as `24 01 03 05`, then the four version numbers (parsed from the version string with `%d.%d.%d.%d`), then `board_info(1)` (`0x4FB7A4`), the byte at **`0x20076D9D`**, logged as `hw_version version is:%d`. That is byte 12 of the `5A A5 FF` frame step 0 decodes. `uled_mspi_init` (`0x4EE1AE`) reads the same `board_info(1)` byte and chooses the A6N-G only for 6. **Both of Jan's temples reported 5, so both run the JBD4010 path** (BUCK1 npmx code 1). The build should select `jbd4010` for them (G11).
+
+### Stock 2.4.0.24 at boot with `/firmware/*.bin` missing or wrong
+
+- **Touch** [C] (`0x583DE8`, `drv.touchdfu`, mode "Filesystem"): it reads the PSoC's version (a failure sets "force upgrade"), then the package version from `firmware/touch.bin` (`0x583366`). If the file cannot be opened (`Cannot open Touch firmware package file`, `Failed to get package Touch version`) it returns with **no upgrade: the PSoC is not touched**. If the file opens, it reprograms the PSoC when the versions differ or the PSoC's version could not be read. Whether the file's content is integrity-checked before programming is [?].
+- **Codec** [C, strings and calls; I, ordering]: a failed version query forces an upgrade (`0x59B150`), whose first step opens `firmware/codec.bin` (`Cannot open firmware package file`, `0x5992CC`). Otherwise it compares versions (`same … no upgrade` / `different … starting upgrade`). A missing file ends the upgrade at the open, before any transfer to the codec [I].
+- **EM9305** [C, strings]: `srv.em9305` loads `firmware/ble_em9305.bin`, parses its header and records, and abandons the load on an open, size or read failure. When the app decides to update the EM9305 at all was not traced [?].
+- **Case** [C]: `firmware/box.bin` is read only when the case asks for its own update; if it is missing, `pt_box_ota_begin` refuses (`firmware/box.bin file not exist`).
+
+So a lost file makes stock skip that part (touch for certain). A present but wrong file is the dangerous case: stock reprograms the PSoC from it, and probably the codec. This is why G19 writes only under `wisp/` and never `/firmware/*`.
+
 ## Image formats
 
 - **EVENOTA:** `EVENOTA\0`, count `+0x08`, `+0x0C` = 0, date/time/version strings `+0x10/0x20/0x30` (16 B each, NUL-padded; version `s200_v<x.y.z.w>`), TOC at `0x40` (16-B entries `{id, off, size, crc32c}`, `size` = 128 + payload), trailer `evenota\0` + 8 zero bytes. Components follow contiguously (unaligned) and close exactly at EOF. Each component = 128-B header (`+0/+4/+0x10/+0x20` = 0, size `+8`, CRC32C `+0xC`, magic `EVEN` `+0x14`, `+0x18/+0x1C/+0x2C` = `0xFFFFFFFF`, type `+0x24`, storage type `+0x28`, path `+0x30`, 80 B) + payload [C, `firmware-formats.md`; all 19 official bundles 2.0.1.14–2.4.0.24 checked with `wisp-ota`].
@@ -274,11 +350,12 @@ Stock for comparison: about 7.5 %/h worn, i.e. ≈ 7 mA from 96 mAh (damage-wm, 
 
 ## Open hardware questions
 
-- Which NOR part our temples have (MX25U25643G or GD25LE256H). It decides whether any main app older than 2.2.9.22 is safe to install (Even app device info or a stock log line `Nor flash chip: %s` might tell).
+- Which NOR part our temples have (MX25U25643G or GD25LE256H). It decides whether any main app older than 2.2.9.22 is safe to install. `w18.py peek nor` (W21) tells GD from "MX or unknown" ([W20](#nor-classifier-and-board-detect-in-the-patched-bootloaders-ram)); only an RDID program would separate MX from an unknown part.
+- What on the temple decodes the case's reset waveform, and whether it resets a temple that is not running stock ([W20](#the-cases-temple-reset-case-1257); W21's held-temple reset test).
 - How long 2.4.0.24's RESULT_CHECK readback of the staged 3.6 MB file takes (its log line `fs readback verify … cost %d ms`).
 - SWD pad location and a working attach: unlabelled, unmapped, behind a glued pod; see [recovery.md](recovery.md#1-swd-on-the-temples).
 - INFO0/INFOC provisioning (does SBL UART recovery exist on retail units?).
-- Which panel variant our units have (JBD4010 = hw_version 5, A6N-G = hw_version 6). Answered by one stock log line (`[BSP]hw_version: %d`); the init sequences are in [Native drivers](#native-drivers-stock-24024). The power board is answered: stock 2.4.0.24 only drives the nPM1300.
+- ~~Which panel variant our units have.~~ JBD4010 on both of Jan's temples: step 0 read hw_version 5, the byte `uled_mspi_init` uses ([W20](#hardware-5-is-the-panels-hw_version)). The power board is answered: stock 2.4.0.24 only drives the nPM1300.
 - ~~Whether the nPM1300 watchdog that stock arms (30.72 s, reset mode) is still running when a new image boots after an Apollo reset.~~ It is [I, strong; recovery.md, "The temple's watchdog"]: an Apollo510 reset does not stop it, so any code that runs longer than ~30 s after stock (the patched loader, Wisp Boot, a new image) must kick or stop it. Wisp kicks and stops it at boot; the W18 RAM programs kick it.
 - EM9305: firmware patch load at boot needed? Wire format of its DFU.
 - Inter-temple UART: baud rate, real throughput.
