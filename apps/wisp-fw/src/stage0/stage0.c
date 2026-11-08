@@ -163,9 +163,10 @@ static uint32_t wdt_divider(uint32_t cfg)
 }
 
 /* ---- the LFRC measurement: 16 watchdog ticks, edge to edge, without a feed in between --------- */
-/* Every change of COUNT is one tick, whichever way it counts (the header does not say; ticks come
- * at about 14 Hz, so the loop sees each one). The first change after the feed is not used: the
- * restart may land between ticks. */
+/* COUNT may count either way (the header does not say): each change adds the smaller of the two
+ * modular distances, so a slow pass that misses a tick still counts it. The PMIC is not kicked
+ * during a measurement (at most 3.6 s, against its 30.72 s), so no slow kick sits inside it. The
+ * first 100 ms after the feed are not used: the restart may land between ticks. */
 
 static enum { M_IDLE, M_SETTLE, M_SYNC, M_RUN } m_state;
 static uint32_t m_next = MEASURE_FIRST, m_deadline, m_t0, m_ticks, m_count;
@@ -218,8 +219,10 @@ static void measure_step(uint32_t t)
 	case M_RUN:
 		c = WDT_COUNT & 0xFFu;
 		if (c != m_count) {
-			clk.direction |= c < m_count ? 1u : 2u;
-			m_ticks++;
+			uint32_t down = (m_count - c) & 0xFFu, up = (c - m_count) & 0xFFu;
+
+			clk.direction |= down <= up ? 1u : 2u;
+			m_ticks += down <= up ? down : up;
 			m_count = c;
 			if (m_ticks >= MEASURE_TICKS) {
 				uint32_t dt = (xt ? wisp_stimer_now() : t) - m_t0;
@@ -233,13 +236,15 @@ static void measure_step(uint32_t t)
 				clk.wdt_ms = clk.lfrc_mhz ? (uint32_t)((uint64_t)resval * wdt_divider(clk.wdt_cfg) *
 								      1000000u / clk.lfrc_mhz)
 							  : 0;
-				if (!clk.lfrc_min || clk.lfrc_mhz < clk.lfrc_min) {
+				bool plausible = clk.lfrc_mhz >= 500000u && clk.lfrc_mhz <= 2000000u;
+
+				if (plausible && (!clk.lfrc_min || clk.lfrc_mhz < clk.lfrc_min)) {
 					clk.lfrc_min = clk.lfrc_mhz;
 				}
-				if (clk.lfrc_mhz > clk.lfrc_max) {
+				if (plausible && clk.lfrc_mhz > clk.lfrc_max) {
 					clk.lfrc_max = clk.lfrc_mhz;
 				}
-				measure_done(clk.lfrc_mhz < 500000u || clk.lfrc_mhz > 2000000u ? 4 : 0, t);
+				measure_done(plausible ? 0 : 4, t);
 			}
 		} else if ((int32_t)(t - m_deadline) >= 0) {
 			measure_done(2, t);
@@ -440,7 +445,7 @@ static _Noreturn void stage0_main(void)
 			feed();
 			last_feed = t;
 		}
-		if (t - last_kick >= SECOND) {
+		if (m_state == M_IDLE && t - last_kick >= SECOND) {
 			kick();
 			last_kick = t;
 		}

@@ -155,7 +155,7 @@ Rule 6's case-session threshold for a native temple (battery ≥ 3,900 mV, [safe
 
 ## stage-0's blocks 3 and 4
 
-**Block 3, the clock measurements** (version 1, 52 bytes; `case_uart.py decode_clock`). stage-0 times 16 watchdog ticks (1,024 LFRC cycles at Wisp Boot's LFRC/64) edge to edge against the STIMER (the 32 kHz crystal) and SysTick (the core clock), without feeding the watchdog in between, 2 s after it started and every 15 s after that. Every change of the watchdog's COUNT is one tick, whichever way it counts (the header does not say; the block records what it saw), and the first change after the feed is skipped (100 ms settle).
+**Block 3, the clock measurements** (version 1, 52 bytes; `case_uart.py decode_clock`). stage-0 times 16 watchdog ticks (1,024 LFRC cycles at Wisp Boot's LFRC/64) edge to edge against the STIMER (the 32 kHz crystal) and SysTick (the core clock), without feeding the watchdog in between, 2 s after it started and every 15 s after that. The watchdog's COUNT may count either way (the header does not say): each change adds the smaller of its two modular distances, and the block records which way it saw it move. The first 100 ms after the feed are skipped, and the PMIC is not kicked during a measurement (at most 3.6 s).
 
 | Offset | Type | Field |
 | --- | --- | --- |

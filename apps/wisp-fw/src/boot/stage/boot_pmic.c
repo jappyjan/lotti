@@ -47,7 +47,9 @@ uint32_t boot_pmic_kick(void)
 	GPIO_PADKEY = 0;
 	if (PWRCTRL_DEVPWREN & PWR_IOM7) {
 		/* Someone left IOM7 on: start from its reset state. (DEVPWRSTATUS reports power
-		 * domains, IOM4-7 together, so it cannot show IOM7 alone going off: wait a while.) */
+		 * domains, IOM4-7 together, so it cannot show IOM7 alone going off: wait a while. The
+		 * wait is a guess; if the domain is still going down, the kick below fails with 0x200
+		 * or 0x400 and sends nothing. Neither the bootloader nor Wisp leaves IOM7 on.) */
 		PWRCTRL_DEVPWREN &= ~PWR_IOM7;
 		for (volatile uint32_t i = 0; i < 2000u; i++) {
 		}
@@ -71,7 +73,10 @@ uint32_t boot_pmic_kick(void)
 	}
 	IOM7(INTEN) = 0;
 	IOM7(INTCLR) = 0xFFFFFFFFu;
-	IOM7(FIFOCTRL) &= ~2u; /* FIFORSTN: reset the FIFOs, as the HAL's error path does */
+	/* FIFORSTN pulsed. Simpler than the HAL's reset (am_hal_iom.c internal_iom_reset_on_error
+	 * also stops the submodule and forces the IO clock on), so it may not take effect; the
+	 * empty-FIFO check below is what guarantees that nothing goes out ahead of the kick. */
+	IOM7(FIFOCTRL) &= ~2u;
 	IOM7(FIFOCTRL) |= 2u;
 	if ((IOM7(FIFOPTR) & 0xFFu) != 0 || ((IOM7(FIFOPTR) >> 8) & 0xFFu) < 4u) {
 		result = 0x300u;

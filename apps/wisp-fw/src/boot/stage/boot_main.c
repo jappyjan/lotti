@@ -421,7 +421,8 @@ static int report(void *ctx, uint8_t *out)
 }
 
 /* STIMER ticks at 32768 Hz (CLKSEL 3, the crystal the bootloader starts), or, without the crystal,
- * a count of poll-loop iterations / 32 (rough: a poll is about 1 us at the hand-off clock [I]). */
+ * a count of poll-loop iterations / 32 (rough: a poll takes about 0.1-0.5 us at the hand-off
+ * clock [I], so without the crystal the window is shorter, about 30-150 ms idle). */
 #define WINDOW_IDLE  (32768u * 3u / 10u) /* 300 ms with no request */
 #define WINDOW_AFTER (32768u / 10u)      /* 100 ms after an answer */
 #define WINDOW_MAX   32768u              /* 1 s in all */
