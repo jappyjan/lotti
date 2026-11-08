@@ -197,24 +197,54 @@ SIDES = ("left", "right")
 # --- Wisp native images through the loader (docs/wisp/rung4.md §3, decision R4-1) -------------
 # `install-wisp` writes only an image listed in WISP_IMAGES, and only while R4_1_APPROVED is True.
 # Jan approved R4-1 on 2026-11-08 (rule 1's W18 exception extended to pinned Wisp images; commit
-# 9181c94). WISP_IMAGES and WISP_BOOT_PASSED stay empty until W23: a reviewed commit pins a built
-# native-0 image and its Wisp Boot. Until then the command refuses every image before it touches
-# the case (safety.md rule 1); tests/test_install_wisp.py keeps both tables empty.
+# 9181c94). W23 pinned native-0 after its independent review: the build of commit 8374f9a, rebuilt
+# on t3-worker and byte-identical to the reviewed one (image and app map); the committed files are
+# in data/native-0/ (README.md there). Every other image is refused before the case is touched.
 R4_1_APPROVED = True
 WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
 # Wisp Boot builds that passed rung 3, by the SHA-256 of the padded 64 KiB slot, with the suites
 # they passed (wisp-fw:boot-test, `.wisp-cache/rung3/<bootloader>/report.md`). R4-1 asks for both
 # suites in WISP_BOOT_SUITES; the observe-only build has its own suite with its own outcomes.
-# Empty: the build that passed 26/26 on 2026-11-06 (wisp_boot.bin 8dd8fd69ef4b...) ran on the
-# stock 2.2.6.10 and 2.4.0.24 bootloaders only, not yet on the patched one.
+# The fallback build that passed 26/26 on 2026-11-06 (wisp_boot.bin 8dd8fd69ef4b...) ran on the
+# stock 2.2.6.10 and 2.4.0.24 bootloaders only, and is not listed.
 WISP_BOOT_SUITES = ("stock-2.4.0.24", "patched-87e2d4e0")
-WISP_BOOT_PASSED: dict[str, dict] = {}
+WISP_BOOT_PASSED: dict[str, dict] = {
+    # native-0's observe-only Wisp Boot (wisp_boot.bin d793a93e02ba18f7..., 8,256 B, padded with
+    # 0xFF to 64 KiB). `wisp-fw:boot-test --suite observe`, PR #77 (rung4.md "native-0 status").
+    "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816": {
+        "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)",
+        "wisp_boot_bin_sha256": "d793a93e02ba18f7e1fb087f3a1f00452de1aef6a9267bd84ff42d78e954f334",
+        "suites": {
+            "stock-2.4.0.24": "observe suite 6/6 pass",
+            "patched-87e2d4e0": "observe suite 6/6 pass",
+        },
+    },
+}
 # Post-link gates a Wisp image's build must have passed (rung4.md R4-1): the rule-8 gate and the
 # no-MRAM-write gate over [0x448000, end) (G13).
 WISP_GATES = ("check_rule8", "no-mram-write")
 # name -> {"image_sha256", "image_bytes", "elf_sha256", "map_sha256", "gates": (...)}, plus
-# optionally "crc32" (zlib CRC-32 of the image), which `app-check` compares the app region with.
-WISP_IMAGES: dict[str, dict] = {}
+# optionally "crc32" (zlib CRC-32 of the image's own bytes), which `app-check` compares with the
+# app region's CRC over image_bytes.
+WISP_IMAGES: dict[str, dict] = {
+    # W23: native-0 at commit 8374f9a (wisp-fw:build-native). The ELF is the app's zephyr.elf after
+    # `objcopy --strip-debug` (no paths; every loaded section unchanged), the map the build's own
+    # (it holds the reviewed checkout's absolute paths, so it is pinned as built, not rebuilt).
+    "native-0": {
+        "commit": "8374f9a",
+        "image_sha256": "5d373fd8874275a3a59d18306536a4b73a4f4361e92050ee22583faedfd60bba",
+        "image_bytes": 230_428,
+        "elf_sha256": "4411c3ada90ea09a40c97986c8f957b6ba7419676b9da893e723e78312877510",
+        "map_sha256": "28fcb218edaeb3302c1bc226b3483fa64393760d4eaf03e92491f87a4d4647c0",
+        "gates": ("check_rule8", "no-mram-write"),
+        "crc32": 0xC0DD_9DC0,
+        # install-wisp's final CRC (crc_after) is over the 16-byte-aligned region [0x438000,
+        # 0x470420), whose last 4 bytes keep what MRAM held there. Written over the stock 2.4.0.24
+        # main (W24 on the left temple) it reads efde0857: the value the W24 report must show.
+        "crc32_aligned_over_stock": 0xEFDE_0857,
+        "wisp_boot_slot_sha256": "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816",
+    },
+}
 BATTERY_MIN_PERCENT = 80
 BATTERY_MIN_MV = 3900  # rung4.md R4-4, while native (Wisp's status reports mV)
 

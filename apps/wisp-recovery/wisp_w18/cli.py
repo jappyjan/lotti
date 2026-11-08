@@ -12,12 +12,13 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   pmic-read           read-only: the nPM1300 register snapshot (pmic_read.bin; first run: Jan's go)
   app-check           read-only: bootloader CRC, update flag, vectors, app region CRC vs known images
   boot-watch          CONT, then status queries to the booting app through the relay before G2EX
+  ble-scan            read-only, no case: which Wisp and Even temples advertise near this machine
   info-dump           read-only: MCUCTRL, PWRCTRL, INFO0, INFOC, DCU/LCS (when powered), release
   link-soak           read-only: stream N bytes of the app region out through the loader (dump), as
                       long and as dense a session as recover's write, and check them against its CRC
   recover             write the pinned stock 2.4.0.24 main app to MRAM through the loader
   install-wisp        write a pinned Wisp native image to MRAM through the loader (rung4.md, R4-1,
-                      approved 2026-11-08); refuses every image until W23 pins one
+                      approved 2026-11-08); pinned: native-0 (W23, wisp_w18/data/native-0/)
 
 Two watchdogs limit a session, one in the case and one in the temple (recovery.md, "Long relay
 sessions" and "The temple's watchdog"):
@@ -594,11 +595,31 @@ def cmd_app_check(args) -> int:
     return code
 
 
+def cmd_ble_scan(args) -> int:
+    """rung4.md W24: listen for adverts from the Mac; never connects, touches no case."""
+    from . import ble
+
+    result = asyncio.run(ble.scan(args.seconds, args.adapter))
+    wisp = [d for d in result["devices"] if d["kind"] == "wisp"]
+    for d in result["devices"]:
+        gaps = f", gaps {d['gaps_s']}" if d["gaps_s"] else ""
+        print(f"{d['kind']:11} {d['address']} {d['name']!r} RSSI max {d['rssi_max']}, {d['adverts']} adverts, seen "
+              f"{d['first_s']}-{d['last_s']} s{gaps}")
+    report = {"command": "ble-scan", "side": args.side, **result, "wisp_seen": bool(wisp)}
+    print(f"report: {save(report, f'w18-ble-scan-{args.side}')}")
+    if not wisp:
+        print(f"no Wisp advertiser in {result['seconds']} s (service {ble.WISP_SERVICE_UUID}, name 'Wisp')",
+              file=sys.stderr)
+        return 3
+    print(f"OK: {len(wisp)} Wisp advertiser(s)")
+    return 0
+
+
 def cmd_boot_watch(args) -> int:
     factory = status.PROTOCOLS.get(args.protocol)
     if factory is None:
         print(f"REFUSED: no case-UART status protocol {args.protocol!r} (registered: {sorted(status.PROTOCOLS)}). "
-              "The Wisp protocol comes with G10 (apps/wisp-fw); nothing was sent", file=sys.stderr)
+              "Nothing was sent", file=sys.stderr)
         return 2
     protocol = factory()
     if not status.relay_request_ok(protocol.request(0)):
@@ -620,12 +641,38 @@ def cmd_boot_watch(args) -> int:
                               sleep=WATCH_SLEEP, log=lambda m: print(m, flush=True))
         print(f"boot-watch: {len(events['answers'])} answer(s), {events['unanswered']} unanswered quer(ies), "
               f"{len(events['reboots_s'])} reboot(s) seen in {events['seconds']} s")
+        if "summary" in events:
+            print_summary(events["summary"])
         return {**fields, "boot_watch": events}
 
     return with_session(args, "boot-watch", body)
 
 
 WATCH_SLEEP = time.sleep  # tests replace it with the relay model's virtual clock
+
+
+def print_summary(summary: dict) -> None:
+    """The decoded Wisp status (case_uart.WispStatus.summary), the lines W24's runbook reads."""
+    ident, st, boot = summary.get("ident"), summary.get("status"), summary.get("boot")
+    if ident:
+        print(f"  IDENT: Wisp {'.'.join(map(str, ident['version']))} kind {ident['image_kind']}, stage "
+              f"{ident['stage']}, bt_enable {ident['bt_result']}, battery {ident['battery_mv']} mV, flags "
+              f"{','.join(ident['flags'])}")
+    if st:
+        print(f"  app status: rev {st['rev']}, uptime {st['uptime_ms']} ms, reset cause {st['reset_cause']:#010x}, PMIC "
+              f"kicks {st['pmic_kicks']} (errors {st['pmic_errors']}), Apollo feeds {st['apollo_feeds']}, VBUS "
+              f"{st['vbus_status']:#04x}, charger {st['charger_status']:#04x}, sessions {st['sessions']}")
+    for key in ("status_error", "boot_error"):
+        if key in summary:
+            print(f"  {key}: {summary[key]}")
+    if boot:
+        print(f"  Wisp Boot: observe {boot['observe']}, NOR id {boot['nor_id']:#08x} (result {boot['nor_result']}), "
+              f"mount {boot['mount_result']}, action {boot['action']} (would: {boot['would_action']}), staging "
+              f"{'present' if boot['staging_present'] else 'absent'} {boot['staging_id']:08x} ({boot['staging_size']} B"
+              f"{', = stock 2.4.0.24' if summary.get('staging_is_stock_2_4_0_24') else ''}), rescue.bin ok "
+              f"{boot['rescue_ok']}")
+        for name, f in summary.get("inventory", {}).items():
+            print(f"    /firmware: {name} {f['size']} B crc {f['crc32']} (result {f['result']})")
 
 
 def cmd_info(args) -> int:
@@ -917,10 +964,16 @@ def main(argv=None) -> int:
                                             "through the relay before ending the session")
     common(sp)
     sp.add_argument("--protocol", default="listen",
-                    help="the status protocol (wisp_w18/status.py PROTOCOLS; default listen: send nothing, record "
-                         "what the temple sends)")
+                    help="the status protocol (wisp_w18/status.py PROTOCOLS): wisp = native-0's case-UART status "
+                         "(IDENT, the app's and Wisp Boot's blocks; use --interval-s 0.1); default listen: send "
+                         "nothing, record what the temple sends")
     sp.add_argument("--watch-s", type=float, default=60.0, help="how long to watch after CONT (default 60)")
     sp.add_argument("--interval-s", type=float, default=1.0, help="at most one query this often (default 1)")
+    sp = sub.add_parser("ble-scan", help="read-only, no case: listen for Wisp and Even temple adverts from this "
+                                          "machine (rung4.md W24); never connects")
+    common(sp, link=False)
+    sp.add_argument("--seconds", type=float, default=60.0, help="how long to listen (default 60)")
+    sp.add_argument("--adapter", help="Linux BlueZ adapter (not used on macOS)")
     sp = sub.add_parser("link-soak", help="read-only: stream the app region out through the loader")
     common(sp)
     sp.add_argument("--bytes", type=lambda v: int(v, 0), default=1 << 20,
@@ -944,7 +997,7 @@ def main(argv=None) -> int:
                     help="body bytes an earlier recover run wrote and verified (it prints the value); "
                          "they are CRC-checked against the image before anything is written")
     sp = sub.add_parser("install-wisp", help="write a pinned Wisp native image through the loader (rung4.md "
-                                              "R4-1; refuses every image until W23 pins one)")
+                                              "R4-1; pinned: native-0, wisp_w18/data/native-0/)")
     common(sp)
     sp.add_argument("--image", required=True, help="the combined native image (Wisp Boot slot + app), linked at 0x438000")
     sp.add_argument("--elf", required=True, help="the app's ELF the image was built from (pinned)")
@@ -960,5 +1013,5 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
             "held-reset-test": cmd_held_reset, "info-dump": cmd_info, "peek": cmd_peek, "pmic-read": cmd_pmic_read,
-            "app-check": cmd_app_check, "boot-watch": cmd_boot_watch, "link-soak": cmd_soak,
+            "app-check": cmd_app_check, "boot-watch": cmd_boot_watch, "ble-scan": cmd_ble_scan, "link-soak": cmd_soak,
             "recover": cmd_recover, "install-wisp": cmd_install_wisp}[a.command](a)

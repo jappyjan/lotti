@@ -30,14 +30,24 @@ Cases (end states):
   install-wisp-cut  the same write cut by a power loss half way: the vectors read zero, the
                 bootloader does not hand off to the half-written image, the loader answers again,
                 and a second session completes the image, which boots
-  native-0      rung4.md W22/G15: install-wisp writes the real native-0 image (built by
-                scripts/build_native.sh, pinned in this process only) over a running stock app through
+  native-0      rung4.md W22/G15/W23: install-wisp writes the pinned native-0 (the committed files in
+                apps/wisp-recovery/wisp_w18/data/native-0/, accepted first by install-wisp's own
+                gate, native.resolve, with the repository's pins) over a running stock app through
                 the patched loader, under the armed (scaled) PMIC watchdog with the temple feed; CONT;
                 then the patched bootloader hands off to Wisp Boot (observe-only), which runs the
-                app. Checked: the image in MRAM and the write order, the app's arming writes and
-                kicks (no PMIC power cycle, nothing else written), Wisp Boot's NOR commands
-                (RDID/RDSR/reads only), the case-UART version/status/boot block, and a case-UART
-                reset that ends in the loader's HELO and a second native boot
+                app. Checked: the image in MRAM and the write order, the final CRC the W24 report
+                must show (pins: crc32_aligned_over_stock), the app's arming writes and kicks (no
+                PMIC power cycle, nothing else written), Wisp Boot's NOR commands (RDID/RDSR/reads
+                only), the case-UART version/status/boot block, boot-watch's own `wisp` protocol
+                (wisp_w18/case_uart.py) against the real app, and a case-UART reset that ends in the
+                loader's HELO and a second native boot
+  native-0-recover  rung4.md W24's way back, exit item 4 from a running native image: native-0 in MRAM
+                (as install-wisp leaves it over stock) boots behind the patched loader and runs; a
+                case reset (the temple's reset line; in Renode a machine reset, `rstgen Request`);
+                the loader's HELO is claimed (HOLD, the temple held); the loader-hello checks; the
+                app region holds native-0 (its pinned CRC); `recover` writes the full stock 2.4.0.24
+                main in one session with recover_fed.bin under the armed PMIC watchdog; the region's
+                CRC over the stock image equals the stock pin (9c66404b); CONT; stock boots
   temple-wdt-*  the temple's nPM1300 watchdog (renode/models/WispPmicWdt.cs on IOM7), armed at the
                 start as the stock app leaves it, with a period scaled to Renode's virtual time
                 (PMIC_PERIOD_S): `-unfed` runs drdaeman's programs and is power-cycled mid-session
@@ -73,6 +83,7 @@ import case_uart
 sys.path.insert(0, str(APP_DIR / "scripts"))
 import pmic_baseline  # noqa: E402
 from rung3 import FIRMWARE_FILES, STOCK_MARK, Lfs, Renode, build_lfs_tool, evenota_components
+from wisp_w18 import case_uart as recovery_case_uart
 from wisp_w18 import image, native, pins
 from wisp_w18.links import RelayPortLink, SocketLink
 from wisp_w18.relay_model import RelayModel
@@ -652,38 +663,19 @@ class Harness:
     # --- native-0 behind the patched loader (rung4.md W22, G15) ---
     def native_zero(self):
         """install-wisp of the real native-0 over a running stock app, then the native boot."""
-        native = self.cache / "build/native-0/native-0.bin"
-        if not native.exists():
-            self.record("native-0", False, f"{native} missing: run scripts/build_native.sh native-0", "")
+        try:
+            data, facts = self.native_0_pinned()
+        except native.NativeRefused as error:
+            self.record("native-0", False, f"install-wisp's gate refused the committed native-0: {error}", "")
             return
-        data = native.read_bytes()
-        boot_elf = self.cache / "build/native-0/boot/wisp_boot.elf"
-        # Pinned in this process only (Renode, never a case); the repository's table stays empty.
-        pins.R4_1_APPROVED = True
-        pins.WISP_IMAGES = {"renode-native-0": {"image_sha256": image.sha(data)}}
-        app = AppImage("native-0", data, image.sha(data), pins.APP_BASE + ((len(data) + 15) & ~15),
-                       check=native_rule3)
-        nor_dir = self.work / "native-0-nor"   # Run() empties its own run dir
-        nor_dir.mkdir(parents=True, exist_ok=True)
-        nor = nor_dir / "nor-before.bin"
-        lfs = Lfs(build_lfs_tool(self.cache))
-        files = {"ota/s200_firmware_ota.bin": self.stock_payload, **self.firmware}
-        lfs.build(nor, files, nor_dir)
+        app = AppImage("native-0", data, facts["image_sha256"], int(facts["end"], 16), check=native_rule3)
+        nor = self.native_nor()
         run = Run(self.work, "native-0", self.patched, self.app, nor=nor)
         run_dir = run.dir
         log = []
         t0 = time.time()
         try:
-            syms = {}
-            out = subprocess.run(["arm-none-eabi-nm", str(boot_elf)], capture_output=True, text=True, check=True).stdout
-            for line in out.splitlines():
-                p_ = line.split()
-                if len(p_) == 3 and p_[2] in ("wisp_boot_main", "hw_jump"):
-                    syms[p_[2]] = int(p_[0], 16) & ~1
-            # Wisp Boot's milestones count only once its services table is in MRAM (WispProbe).
-            for name, addr in syms.items():
-                run.r.cmd(f'probe Milestone {addr:#x} "{name}"')
-            run.r.cmd("nor WatchCode 0x438000 0x448000")
+            self.native_probes(run)
             run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
 
             def host(link):
@@ -721,6 +713,19 @@ class Harness:
             q["status"] = case_uart.decode_status(raw) if raw else {}
             block = case_uart.read_block(ask, case_uart.BLOCK_BOOT) or b""
             boot = case_uart.decode_boot_status(block) if len(block) == case_uart.BOOT_STATUS_SIZE else {}
+            # boot-watch's own protocol (apps/wisp-recovery wisp_w18/case_uart.py) against the real app.
+            hook = recovery_case_uart.WispStatus()
+            answers = []
+            for i in range(200):  # both blocks, then IDENT until the BLE bring-up has ended
+                decoded = hook.decode(ask(hook.request(i)))
+                if decoded is not None:
+                    answers.append(decoded)
+                if hook.complete(answers):
+                    break
+                if hook.block(case_uart.BLOCK_STATUS) is not None and hook.block(case_uart.BLOCK_BOOT) is not None:
+                    run.r.cmd('emulation RunFor "0.25"')
+            hook_summary = hook.summary(answers)
+            q["boot_watch"] = {"complete": hook.complete(answers), "queries": i + 1}
             # The reset command: the reply, then the patched loader's HELO at the reboot (nobody
             # answers it), then a second native boot.
             helo_before = sum(f.startswith(HELO_PREFIX) for f in run.frames())
@@ -742,6 +747,13 @@ class Harness:
         fails = []
         if mram[0x38000:0x38000 + len(data)] != data:
             fails.append("native-0 not in MRAM")
+        want_crc = f"{pins.WISP_IMAGES['native-0']['crc32_aligned_over_stock']:08x}"
+        if v.get("crc_after") != want_crc:
+            fails.append(f"final CRC {v.get('crc_after')}, pinned for W24 {want_crc}")
+        hb = hook_summary.get("boot") or {}
+        if not (q["boot_watch"]["complete"] and hook_summary.get("status", {}).get("rev") == q["status"].get("rev")
+                and hb.get("staging_id") == boot.get("staging_id") and hb.get("inventory") == boot.get("inventory")):
+            fails.append(f"boot-watch's wisp protocol disagrees with the reference: {q['boot_watch']} {hook_summary}")
         if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
             fails.append("bootloader region changed")
         if not (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
@@ -797,7 +809,143 @@ class Harness:
                  f"native boot" if ok else f"{'; '.join(fails)} {result.get('error')!r}")
         self.record("native-0", ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run_dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
-        (run_dir / "case-uart.json").write_text(json.dumps({"query": q, "boot": boot}, indent=2, default=str))
+        (run_dir / "case-uart.json").write_text(json.dumps({"query": q, "boot": boot, "boot_watch": hook_summary},
+                                                           indent=2, default=str))
+
+    # --- the pinned native-0 (W23) and its way back (W24) ---
+    def native_0_pinned(self) -> tuple[bytes, dict]:
+        """The committed native-0 through install-wisp's own gate (native.resolve, the repository's
+        pins: image, ELF, map, gates, Wisp Boot's suites, rule 3 in both implementations)."""
+        files = native.NATIVE_0_FILES
+        data = files["image"].read_bytes()
+        pin = pins.WISP_IMAGES["native-0"]
+        facts = native.resolve(data, files["elf"].read_bytes(), files["map"].read_bytes(), pin["image_sha256"][:12])
+        return data, facts
+
+    def native_nor(self) -> Path:
+        """The NOR as the left temple holds it: the stock 2.4.0.24 staging file and /firmware."""
+        nor_dir = self.work / "native-0-nor"   # Run() empties its own run dir
+        nor_dir.mkdir(parents=True, exist_ok=True)
+        nor = nor_dir / "nor-before.bin"
+        lfs = Lfs(build_lfs_tool(self.cache))
+        files = {"ota/s200_firmware_ota.bin": self.stock_payload, **self.firmware}
+        lfs.build(nor, files, nor_dir)
+        return nor
+
+    @staticmethod
+    def native_probes(run) -> None:
+        """Wisp Boot's milestones (from the committed, debug-stripped wisp_boot.elf) and its NOR window."""
+        boot_elf = native.NATIVE_0_DIR / "wisp_boot.elf"
+        syms = {}
+        out = subprocess.run(["arm-none-eabi-nm", str(boot_elf)], capture_output=True, text=True, check=True).stdout
+        for line in out.splitlines():
+            p_ = line.split()
+            if len(p_) == 3 and p_[2] in ("wisp_boot_main", "hw_jump"):
+                syms[p_[2]] = int(p_[0], 16) & ~1
+        if set(syms) != {"wisp_boot_main", "hw_jump"}:
+            raise RuntimeError(f"{boot_elf}: milestones {syms}")
+        # Wisp Boot's milestones count only once its services table is in MRAM (WispProbe).
+        for name, addr in syms.items():
+            run.r.cmd(f'probe Milestone {addr:#x} "{name}"')
+        run.r.cmd("nor WatchCode 0x438000 0x448000")
+
+    def native_zero_recover(self):
+        """W24's way back: native-0 running, a case reset, HELO claimed with the temple held,
+        recover writes stock in one session, stock boots."""
+        name = "native-0-recover"
+        try:
+            data, facts = self.native_0_pinned()
+        except native.NativeRefused as error:
+            self.record(name, False, f"install-wisp's gate refused the committed native-0: {error}", "")
+            return
+        pin = pins.WISP_IMAGES["native-0"]
+        # MRAM as install-wisp leaves it over stock: native-0, then stock's bytes after it.
+        start = data + self.app[len(data):]
+        run = Run(self.work, name, self.patched, start, nor=self.native_nor())
+        log = []
+        t0 = time.time()
+        banner = "*** Wisp native "
+        try:
+            self.native_probes(run)
+            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+            uart = run.uart
+            # The patched loader's HELO goes unanswered, Wisp Boot runs the app, the app runs.
+            t = run.run_until(lambda: uart().count(banner) >= 1 and
+                              uart().count("wisp: heartbeat", uart().rfind(banner)) >= 3, 40, step=0.1)
+            native_up = uart().count(banner) == 1 and uart().count("wisp: heartbeat") >= 3
+            helo_before = sum(f.startswith(HELO_PREFIX) for f in run.frames())
+
+            def host(link):
+                with Session(link, log=log.append, temple_feed=True) as s:
+                    s.require_patched_bootloader(self.patched)
+                    want = __import__("zlib").crc32(self.patched)
+                    out = {"crc": [s.bootloader_crc(), s.bootloader_crc()], "flag": s.flag()}
+                    if out["crc"] != [want, want] or out["flag"] != 0xFFFFFFFF:
+                        raise SessionError(f"loader-hello gate failed: {out}")
+                    out["native_crc"] = s.checksum(pins.APP_BASE, pin["image_bytes"])
+                    if out["native_crc"] != pin["crc32"]:
+                        raise SessionError(f"app region is not native-0 before recover: {out['native_crc']:08x}")
+                    t1 = time.time()
+                    out.update(s.write_app(self.app))
+                    out["host_s"] = round(time.time() - t1, 1)
+                    out["stock_crc"] = s.checksum(pins.APP_BASE, pins.STOCK_MAIN_BYTES)
+                    out["feeds"] = s.feeds
+                    return out
+            thread, result = run.attach(host)
+            # The case's reset of the running temple (on hardware: the pogo reset waveform at the
+            # relay's start; here the machine reset, which also clears SRAM, as rstgen does).
+            run.r.cmd('rstgen Request "case-reset"')
+            steps = 0.0
+            while thread.is_alive() and steps < 900:
+                run.step(1)
+                steps += 1
+            t += steps
+            host_stuck = thread.is_alive()
+            resets = run.r.cmd("rstgen ResetLog")
+            t += run.run_until(run.stock_running, 60)
+            helo_after = sum(f.startswith(HELO_PREFIX) for f in run.frames())
+            pm = self.pmic(run)
+            mram = run.mram()
+            rep = run.r.cmd("probe Report").splitlines()
+            boots = sum(l.startswith("wisp_boot_main ") for l in rep)
+        finally:
+            run.close()
+        v = result.get("value") or {}
+        fails = []
+        if host_stuck:
+            fails.append("the recover session did not end within 900 s virtual")
+        if not native_up:
+            fails.append("native-0 did not come up before the case reset")
+        if boots != 1:
+            fails.append(f"{boots} Wisp Boot runs (want 1: native-0 once, then stock)")
+        if "case-reset" not in resets:
+            fails.append(f"no case reset in {resets!r}")
+        if helo_after != helo_before + 1:
+            fails.append(f"HELO {helo_before} -> {helo_after}")
+        if not v:
+            fails.append(f"recover session: {result.get('error')!r}")
+        else:
+            if v.get("native_crc") != pin["crc32"]:
+                fails.append("app region was not native-0")
+            if v.get("stock_crc") != pins.STOCK_MAIN_CRC32:
+                fails.append(f"stock CRC {v.get('stock_crc')}")
+        if mram[0x38000:0x38000 + len(self.app)] != self.app:
+            fails.append("stock not in MRAM")
+        if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
+            fails.append("bootloader region changed")
+        if pm["expiries"]:
+            fails.append(f"PMIC watchdog expired {pm['expiries']}x")
+        if not run.stock_running():
+            fails.append("stock not running")
+        ok = not fails
+        state = (f"native-0 ran ({uart().count('wisp: heartbeat')} heartbeats); case reset -> HELO claimed (temple held); "
+                 f"loader-hello: CRC twice, flag clear; region CRC {pin['crc32']:08x} = native-0; recover wrote stock "
+                 f"in one session ({v.get('bytes')} B, final CRC {v.get('crc_after')}, {v.get('host_s')} s host, "
+                 f"{v.get('feeds')} temple feeds, no PMIC power cycle); CRC over {pins.STOCK_MAIN_BYTES} B "
+                 f"{pins.STOCK_MAIN_CRC32:08x} = stock pin; bootloader unchanged; stock app running" if ok
+                 else "; ".join(fails))
+        self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+        (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
 
     def install_wisp_cut(self, fraction=0.5):
         """Power lost half way through install-wisp over a running stock app."""
@@ -895,7 +1043,7 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
                                                    "recover-relay", "recover-cut", "recover-split", "temple-wdt",
-                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0",
+                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0", "native-0-recover",
                                                    "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
@@ -932,6 +1080,8 @@ def main() -> int:
         h.install_wisp_cut()
     if "native-0" in only:
         h.native_zero()
+    if "native-0-recover" in only:
+        h.native_zero_recover()
     if "install" in only:
         ks = [int(k) for k in a.install_chunks.split(",")]
         if "2.4.0.24" in a.install_old:

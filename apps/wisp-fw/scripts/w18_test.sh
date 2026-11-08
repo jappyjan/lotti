@@ -3,9 +3,9 @@
 # wisp-fw:w18-test — W18 emulation proof: drdaeman's patched bootloader (rebuilt by
 # apps/wisp-recovery from the git-ignored .wisp-cache) in Renode, driven by the real w18.py host
 # code through the WispCaseLink UART2 model. Emulation only; nothing here talks to hardware.
-# Needs .wisp-cache/stock/g2-2.3.2.14.bin and g2-2.4.0.24.bin (wisp-ota fetch). The native-0 case
-# needs the image: scripts/build_native.sh runs first (WISP_W18_SKIP_NATIVE_BUILD=1 reuses the last
-# one). Extra args go to tests/boot/w18.py (e.g. --only hello recover). The table goes to
+# Needs .wisp-cache/stock/g2-2.3.2.14.bin and g2-2.4.0.24.bin (wisp-ota fetch). The native-0 cases
+# use the pinned native-0 committed in apps/wisp-recovery/wisp_w18/data/native-0/ (W23), not a
+# build of this tree. Extra args go to tests/boot/w18.py (e.g. --only hello recover). The table goes to
 # .wisp-cache/w18/report.md.
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
@@ -16,8 +16,4 @@ for v in 2.3.2.14 2.4.0.24; do
 		(cd "$REPO_ROOT" && node "$ota" fetch "$v")
 	fi
 done
-if [[ "${WISP_W18_SKIP_NATIVE_BUILD:-}" != 1 ]]; then
-	wisp_require_setup
-	"$APP_DIR/scripts/build_native.sh" native-0 >/dev/null
-fi
 python3 -I "$APP_DIR/tests/boot/w18.py" --cache "$CACHE_DIR" "$@"

@@ -5,10 +5,11 @@ After CONT the patched loader hands off to the app in MRAM, and the case relay s
 G2EX: every G2TX hands one frame to the temple and returns the first temple frame within the
 relay's poll bound. `boot-watch` uses that to watch the boot before it ends the session.
 
-The questions are a pluggable `StatusProtocol`. The Wisp case-UART status protocol (the version
-answer, the status query, the reset command) is G10's, defined in apps/wisp-fw; when it exists,
-it registers itself in PROTOCOLS. This module only fixes what any protocol must respect, because
-the pinned relay (drdaeman's case_exchange.c) enforces it in the case:
+The questions are a pluggable `StatusProtocol`. The Wisp case-UART status protocol is G10's
+(docs/wisp/case-uart.md, firmware in apps/wisp-fw): `wisp`, in case_uart.py, asks IDENT, reads the
+app's status and Wisp Boot's block, and never sends RESET. This module only fixes what any
+protocol must respect, because the pinned relay (drdaeman's case_exchange.c) enforces it in the
+case:
 
   - a request is empty (listen only) or 9, 25 or 32 bytes starting 7E 00 01 n-5 (the loader's
     request framing); the stock version query `24 00 01 00 a7` cannot be sent this way;
@@ -27,7 +28,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from . import loader
+from . import case_uart, loader
 
 RELAY_REQUEST_LENGTHS = (9, 25, 32)
 RELAY_REPLY_LENGTHS = (13, 21, 29, 32)
@@ -77,8 +78,8 @@ class ListenOnly(StatusProtocol):
         return {"frame": frame.hex()}
 
 
-# name -> factory. G10 adds the Wisp protocol here, with its tests; nothing else belongs here.
-PROTOCOLS: dict[str, Callable[[], StatusProtocol]] = {"listen": ListenOnly}
+# name -> factory. `wisp` is native-0's case-UART status (G10; tests/test_case_uart.py).
+PROTOCOLS: dict[str, Callable[[], StatusProtocol]] = {"listen": ListenOnly, "wisp": case_uart.WispStatus}
 
 
 def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float = 1.0, clock=time.monotonic,
@@ -102,6 +103,9 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
             raise RuntimeError(f"the relay could not send query {index - 1} to the temple (status 1)")
         if status == 0 and is_loader_hello(reply):
             out["reboots_s"].append(t)
+            if hasattr(protocol, "reset"):  # what it read so far belongs to the boot that ended
+                protocol.reset()
+                protocol.reboots = getattr(protocol, "reboots", 0) + 1
             log(f"boot-watch: t = {t:.1f} s: the loader's HELO, the temple rebooted")
         elif status == 0:
             decoded = protocol.decode(reply)
@@ -122,4 +126,6 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
             sleep(wait)
     out["seconds"] = round(clock() - started, 1)
     out["queries"] = index
+    if hasattr(protocol, "summary"):
+        out["summary"] = protocol.summary(out["answers"])
     return out

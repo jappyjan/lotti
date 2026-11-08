@@ -60,7 +60,7 @@ IDENT reply (0.1.2, kind 0, stage 5, 3,987 mV, bt -5):
                             5a a5 ff 10 57 53 50 81 00 00 01 02 00 05 3b 93 0f fb ff 00 68
 ```
 
-**boot-watch hook.** `tests/boot/case_uart.py` `WispStatus` has the shape of `status.py`'s `StatusProtocol` (`name`, `request(i)`, `decode(frame)`, `complete(answers)`): IDENT until the app answers, then the two blocks once, then IDENT again; `decode` returns `None` for anything that is not a Wisp reply (the loader's `HELO` is handled by `watch()` itself). Registering it is `PROTOCOLS["wisp"] = WispStatus` (with the module copied or imported into `apps/wisp-recovery`); `tests/case/test_case_uart.py` runs it against a fake temple.
+**boot-watch hook.** `tests/boot/case_uart.py` `WispStatus` has the shape of `status.py`'s `StatusProtocol` (`name`, `request(i)`, `decode(frame)`, `complete(answers)`): IDENT until the app answers, then the two blocks once, then IDENT again; `decode` returns `None` for anything that is not a Wisp reply (the loader's `HELO` is handled by `watch()` itself). `tests/case/test_case_uart.py` runs it against a fake temple. **Registered since W23** as `boot-watch --protocol wisp`: `apps/wisp-recovery/wisp_w18/case_uart.py` is a port of this module (the codec unchanged and cross-checked against it; its `WispStatus` asks a lost READ again, waits for the end of the BLE bring-up, and decodes both blocks for the report).
 
 ### 2. Stock's version query (step 0's bridge only)
 
@@ -89,7 +89,7 @@ Case 1.2.57 polls each seated temple with `13 00 0s 01 E4 01 c` (s = side) and r
 
 - **During a relay session** (install-wisp, boot-watch, `recover`) the case runs our relay, not its app: no polling, no reset.
 - **With the case app running** (the temple seated, no relay), a native temple is reset about every 3 minutes (after 8 missed polls, then every 180 s). Harmless: the reset is a pogo waveform, the patched loader runs first, then Wisp Boot and the app again. But it ends every native boot within about 3 minutes.
-- **Out of the case** nothing polls. W24's BLE session from the Mac is done with the temple out of the case (or accepts the resets).
+- **Out of the case** nothing polls. W24 only scans for adverts from the Mac, right after `boot-watch` and inside the 3 minutes ([rung4.md, W24 runbook](rung4.md#w24-runbook-first-native-flash-left)); W25's BLE session from the Mac is done with the temple out of the case (or accepts the resets).
 
 Answering `0x13` like stock is gap **G10b** in [rung4.md](rung4.md#gaps): it needs the reply layout from stock's handler (static analysis, W20 follow-up) and an emulation check against the case's parser.
 
