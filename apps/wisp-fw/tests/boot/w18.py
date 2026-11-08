@@ -827,10 +827,9 @@ class Harness:
         nor_dir = self.work / "native-0-nor"   # Run() empties its own run dir
         nor_dir.mkdir(parents=True, exist_ok=True)
         nor = nor_dir / "nor-before.bin"
-        if not nor.exists():
-            lfs = Lfs(build_lfs_tool(self.cache))
-            files = {"ota/s200_firmware_ota.bin": self.stock_payload, **self.firmware}
-            lfs.build(nor, files, nor_dir)
+        lfs = Lfs(build_lfs_tool(self.cache))
+        files = {"ota/s200_firmware_ota.bin": self.stock_payload, **self.firmware}
+        lfs.build(nor, files, nor_dir)
         return nor
 
     @staticmethod
@@ -901,6 +900,7 @@ class Harness:
                 run.step(1)
                 steps += 1
             t += steps
+            host_stuck = thread.is_alive()
             resets = run.r.cmd("rstgen ResetLog")
             t += run.run_until(run.stock_running, 60)
             helo_after = sum(f.startswith(HELO_PREFIX) for f in run.frames())
@@ -912,6 +912,8 @@ class Harness:
             run.close()
         v = result.get("value") or {}
         fails = []
+        if host_stuck:
+            fails.append("the recover session did not end within 900 s virtual")
         if not native_up:
             fails.append("native-0 did not come up before the case reset")
         if boots != 1:

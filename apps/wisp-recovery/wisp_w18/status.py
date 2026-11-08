@@ -103,6 +103,9 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
             raise RuntimeError(f"the relay could not send query {index - 1} to the temple (status 1)")
         if status == 0 and is_loader_hello(reply):
             out["reboots_s"].append(t)
+            if hasattr(protocol, "reset"):  # what it read so far belongs to the boot that ended
+                protocol.reset()
+                protocol.reboots = getattr(protocol, "reboots", 0) + 1
             log(f"boot-watch: t = {t:.1f} s: the loader's HELO, the temple rebooted")
         elif status == 0:
             decoded = protocol.decode(reply)

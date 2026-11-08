@@ -247,6 +247,30 @@ class BootWatchWisp(unittest.TestCase):
         self.assertEqual(events["answers"], [])
         self.assertIsNone(events["summary"]["ident"])
 
+    def test_the_app_status_is_read_again_after_the_bring_up(self):
+        app = WispApp(bt_s=8.0, boot=boot_block())
+        case = WispCase(temple(), app, boot_s=2.0)
+        code, report = watch(case, "--watch-s", "60")
+        self.assertEqual(code, 0, report.get("error"))
+        summary = report["boot_watch"]["summary"]
+        self.assertEqual(summary["status_early"]["stage"], "bt-start")
+        self.assertEqual(summary["status"]["stage"], "bt-up")
+
+    def test_a_short_reply_is_reported_not_fatal(self):
+        hook = c.WispStatus()
+        out = hook.decode(c.frame(b"WSP\x81\x00" + bytes(3)))  # 13 bytes: too short for IDENT's fields
+        self.assertIn("error", out)
+        self.assertIsNone(hook.ident)
+
+    def test_a_reboot_mid_watch_starts_the_reads_again(self):
+        hook = c.WispStatus()
+        hook.decode(bytes.fromhex(IDENT_REPLY))
+        hook.parts[c.BLOCK_STATUS][0] = bytes(17)
+        hook.reset()
+        self.assertIsNone(hook.ident)
+        self.assertEqual(hook.parts[c.BLOCK_STATUS], {})
+        self.assertEqual(hook.request(0), c.ident_request())
+
     def test_registered(self):
         self.assertIs(status.PROTOCOLS["wisp"], c.WispStatus)
         self.assertTrue(status.relay_request_ok(c.WispStatus().request(0)))

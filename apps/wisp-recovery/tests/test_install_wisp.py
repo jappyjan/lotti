@@ -207,6 +207,17 @@ class Pinned(unittest.TestCase):
             for needle in (b"/home/", b"/nix/store/", b"/tmp/"):
                 self.assertNotIn(needle, raw, f)
 
+    def test_the_crc_install_wisp_reports_over_stock(self):
+        """efde0857: native-0 plus the 4 stock bytes after it, the aligned region install-wisp
+        CRCs at the end of W24. Needs the stock bundle in .wisp-cache (rule 9: not committed)."""
+        try:
+            stock = image.stock_main()
+        except (image.ImageError, OSError) as error:
+            self.skipTest(f"no stock 2.4.0.24 bundle: {error}")
+        data = NATIVE_0["image"].read_bytes()
+        end = (len(data) + 15) & ~15
+        self.assertEqual(zlib.crc32(data + stock[len(data):end]), pins.WISP_IMAGES["native-0"]["crc32_aligned_over_stock"])
+
     def test_resolve_accepts_the_committed_image(self):
         facts = native.resolve(NATIVE_0["image"].read_bytes(), NATIVE_0["elf"].read_bytes(),
                                NATIVE_0["map"].read_bytes(), NATIVE_0_SHA[:12])

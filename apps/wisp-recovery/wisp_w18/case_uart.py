@@ -13,6 +13,12 @@ bt-failed), and `summary` decodes the blocks for the report.
 Every request and reply fits the pinned case relay (status.py): requests of 9, 25 or 32 bytes in
 the loader's host framing `7E 00 01 n`, replies `5A A5 FF` of 13, 21, 29 or 32 bytes. Nothing
 here sends RESET: boot-watch only reads.
+
+Known limits of the reads (the firmware's, not this module's): the app fills its 56-byte block
+afresh for every READ, so `uptime_ms` (bytes 16-19) and `sessions` (32-35), which cross a 17-byte
+boundary, can be torn by a few ms or one count. Wisp Boot's block is copied once per READ at
+offset 0; a lost offset-0 READ asked again later takes a new copy, and the block CRC then shows
+whether the parts belong together.
 """
 
 from __future__ import annotations
@@ -168,7 +174,14 @@ class WispStatus:
     name = "wisp"
 
     def __init__(self):
+        self.reset()
+        self.reboots = 0
+
+    def reset(self) -> None:
+        """Forget everything read so far: status.watch calls it when the loader's HELO shows that
+        the temple rebooted, so the summary never mixes two boots."""
         self.ident: dict | None = None
+        self.early_status: bytes | None = None  # block 1 as read before the BLE bring-up ended
         self.parts: dict[int, dict[int, bytes]] = {BLOCK_STATUS: {}, BLOCK_BOOT: {}}
         self.totals = dict(BLOCK_SIZES)
         self.unavailable: set[int] = set()
@@ -203,12 +216,22 @@ class WispStatus:
             return None
         op, status, data = p[3] & 0x7F, p[4], p[5:]
         out = {"op": op, "status": status}
+        try:
+            if status == OK and op == OP_IDENT:
+                out.update(decode_ident(data))
+            elif op == OP_READ and status == OK:
+                block, offset, total, chunk = decode_read(data)
+        except struct.error:
+            return {**out, "error": f"reply too short: {f.hex()}"}
         if status == OK and op == OP_IDENT:
-            out.update(decode_ident(data))
             self.ident = out
+            if out["stage"] in TERMINAL_STAGES and self.stage not in TERMINAL_STAGES and self.parts[BLOCK_STATUS]:
+                # The app's block was (partly) read during the bring-up: read it again, so the
+                # summary has its counters after the bring-up too (the first read is kept).
+                self.early_status = self.block(BLOCK_STATUS)
+                self.parts[BLOCK_STATUS] = {}
             self.stage = out["stage"]
         elif op == OP_READ and status == OK:
-            block, offset, total, chunk = decode_read(data)
             if block not in self.parts or offset % READ_MAX or offset >= total:
                 return {**out, "error": f"unexpected READ answer: block {block}, offset {offset}, total {total}"}
             n = min(READ_MAX, total - offset)
@@ -233,13 +256,13 @@ class WispStatus:
     def summary(self, answers: list[dict] | None = None) -> dict:
         """What the watch learned, decoded: IDENT, the app's status, Wisp Boot's block (with its
         CRC checked), and the facts W24 compares (rung4.md, the W24 runbook)."""
-        out: dict = {"ident": self.ident}
-        raw = self.block(BLOCK_STATUS)
-        if raw is not None:
-            try:
-                out["status"] = decode_status(raw)
-            except ValueError as error:
-                out["status_error"] = str(error)
+        out: dict = {"ident": self.ident, "reboots_reset": self.reboots}
+        for key, raw in (("status", self.block(BLOCK_STATUS)), ("status_early", self.early_status)):
+            if raw is not None:
+                try:
+                    out[key] = decode_status(raw)
+                except ValueError as error:
+                    out[f"{key}_error"] = str(error)
         if BLOCK_BOOT in self.unavailable:
             out["boot_error"] = "not available on this boot (no Wisp Boot status block)"
         else:

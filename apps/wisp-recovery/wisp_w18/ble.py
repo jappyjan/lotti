@@ -236,7 +236,7 @@ async def scan(seconds: float, adapter: str | None = None, clock=time.monotonic)
         if rssi is not None and (entry["rssi_max"] is None or rssi > entry["rssi_max"]):
             entry["rssi_max"] = rssi
 
-    kwargs = {"bluez": {"adapter": adapter}} if adapter and sys.platform.startswith("linux") else {}
+    kwargs = {"adapter": adapter} if adapter and sys.platform.startswith("linux") else {}
     scanner = BleakScanner(detection_callback=on_advert, **kwargs)
     await scanner.start()
     try:
