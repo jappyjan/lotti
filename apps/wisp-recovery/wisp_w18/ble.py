@@ -183,3 +183,64 @@ class BleakGatt:
 
     async def write(self, characteristic: str, data: bytes) -> None:
         await self.client.write_gatt_char(characteristic, data, response=False)
+
+
+# --- rung 4, W24: is the native temple advertising? (read-only, no connection) -----------------
+
+# native-0's advertising (apps/wisp-fw src/ble/wisp_ble.c): the Wisp service UUID in the
+# advertisement, the name "Wisp" in the scan response (CONFIG_BT_DEVICE_NAME).
+WISP_SERVICE_UUID = "cf099bf1-f34e-49e2-b353-7f20e02243bc"
+WISP_NAME = "Wisp"
+EVEN_NAME = re.compile(r"_([LR])_[0-9A-Za-z]{6}$")  # stock temples: ..._L_xxxxxx / ..._R_xxxxxx
+GAP_S = 5.0  # a pause in a device's adverts longer than this is listed (e.g. the case's reset, G10b)
+
+
+def classify(name: str | None, uuids) -> str | None:
+    """"wisp", "stock-left", "stock-right", or None for anything else."""
+    if WISP_SERVICE_UUID in {str(u).lower() for u in uuids or ()} or name == WISP_NAME:
+        return "wisp"
+    m = EVEN_NAME.search(name or "")
+    return {"L": "stock-left", "R": "stock-right"}[m.group(1)] if m else None
+
+
+async def scan(seconds: float, adapter: str | None = None, clock=time.monotonic) -> dict:
+    """Listen to advertisements for `seconds` (active scan, so scan responses carry names).
+    Never connects. Returns every Wisp or Even temple seen: address, name, kind, RSSI, when it
+    was first and last seen, how many adverts, and the gaps longer than GAP_S."""
+    import sys
+
+    from bleak import BleakScanner
+
+    started = clock()
+    seen: dict[str, dict] = {}
+
+    def on_advert(device, adv) -> None:
+        name = getattr(adv, "local_name", None) or getattr(device, "name", None)
+        entry = seen.get(device.address)
+        kind = classify(name, getattr(adv, "service_uuids", ()))
+        if entry is None:
+            if kind is None:
+                return
+            entry = seen[device.address] = {"address": device.address, "name": name, "kind": kind, "adverts": 0,
+                                            "first_s": round(clock() - started, 1), "rssi_max": None, "gaps_s": []}
+        elif kind and entry["kind"] != "wisp":
+            entry["kind"] = kind  # a name from a later scan response
+        if name and not entry["name"]:
+            entry["name"] = name
+        t = round(clock() - started, 1)
+        if entry["adverts"] and t - entry["last_s"] > GAP_S:
+            entry["gaps_s"].append([entry["last_s"], t])
+        entry["adverts"] += 1
+        entry["last_s"] = t
+        rssi = getattr(adv, "rssi", None)
+        if rssi is not None and (entry["rssi_max"] is None or rssi > entry["rssi_max"]):
+            entry["rssi_max"] = rssi
+
+    kwargs = {"bluez": {"adapter": adapter}} if adapter and sys.platform.startswith("linux") else {}
+    scanner = BleakScanner(detection_callback=on_advert, **kwargs)
+    await scanner.start()
+    try:
+        await asyncio.sleep(seconds)
+    finally:
+        await scanner.stop()
+    return {"seconds": round(clock() - started, 1), "devices": sorted(seen.values(), key=lambda e: e["first_s"])}

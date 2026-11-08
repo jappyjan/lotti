@@ -288,10 +288,10 @@ class BootWatch(unittest.TestCase):
             raise AssertionError("touched the case")
 
         with mock.patch.object(cli, "make_link", no_case), mock.patch("sys.stderr"), mock.patch("sys.stdout"):
-            self.assertEqual(cli.main(["boot-watch", "--side", "left", "--protocol", "wisp"]), 2)
+            self.assertEqual(cli.main(["boot-watch", "--side", "left", "--protocol", "nope"]), 2)
 
-    def test_only_the_listen_protocol_ships_until_g10(self):
-        self.assertEqual(set(status.PROTOCOLS), {"listen"})
+    def test_listen_and_the_wisp_protocol_ship(self):
+        self.assertEqual(set(status.PROTOCOLS), {"listen", "wisp"})
 
     def test_frames_the_relay_cannot_carry_are_refused(self):
         self.assertTrue(status.relay_request_ok(fake_status.frame_9(b"WSTQ")))

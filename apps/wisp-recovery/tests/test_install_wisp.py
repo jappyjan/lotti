@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: MIT
 """install-wisp (docs/wisp/rung4.md §3, G1, decision R4-1) against fakes. No hardware.
 
-R4-1 is approved (2026-11-08), but the repository's pin tables stay empty until W23, so the
-real command refuses every image before it touches the case (checked first). Every other test
-pins a synthetic image for its duration (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small
-"app", an ELF whose segments are those bytes, a map file, and a Wisp Boot entry with both
-rung-3 suites.
+R4-1 is approved (2026-11-08) and W23 pinned exactly one image, the reviewed native-0 of commit
+8374f9a, committed in wisp_w18/data/native-0/. `Pinned` runs the real command's whole gate on
+those files (and a full fake install of them), and shows that a one-byte change to any of them is
+refused before the case is touched. Every other test pins a synthetic image for its duration
+(`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small "app", an ELF whose segments are those
+bytes, a map file, and a Wisp Boot entry with both rung-3 suites.
 """
 
 import hashlib
@@ -139,15 +140,122 @@ def running_app():
     return bytes(data)
 
 
-class Gate(unittest.TestCase):
-    def test_r4_1_is_approved_but_the_pin_tables_stay_empty_until_w23(self):
-        # Jan approved R4-1 on 2026-11-08 (commit 9181c94). Pinning an image or a Wisp Boot is W23's
-        # reviewed commit, not this one: until then both tables are empty and every image is refused.
-        self.assertTrue(pins.R4_1_APPROVED)
-        self.assertEqual(pins.WISP_IMAGES, {})
-        self.assertEqual(pins.WISP_BOOT_PASSED, {})
+NATIVE_0 = native.NATIVE_0_FILES
+NATIVE_0_SHA = "5d373fd8874275a3a59d18306536a4b73a4f4361e92050ee22583faedfd60bba"
 
-    def test_the_real_command_refuses_before_touching_the_case(self):
+
+def native_0_argv(paths=None, expect=NATIVE_0_SHA[:12], battery="95"):
+    paths = paths or NATIVE_0
+    return ["install-wisp", "--side", "left", "--image", str(paths["image"]), "--elf", str(paths["elf"]),
+            "--map", str(paths["map"]), "--expect", expect, "--battery", battery]
+
+
+class ReachedTheCase(Exception):
+    """make_link was called: every check before the case passed."""
+
+
+def run_until_case(argv):
+    """The real command, stopped where it would open the case link. Returns (reached, stderr):
+    reached is True if every check before the case passed, else the exit code."""
+    reached = []
+
+    def stop(_args):
+        reached.append(True)
+        raise ReachedTheCase
+
+    with mock.patch.object(cli, "make_link", stop), mock.patch("sys.stdout"), \
+            mock.patch.object(image, "build_patched_bootloader", lambda cache=None: FAKE_PATCHED), \
+            mock.patch("sys.stderr") as err, mock.patch.object(cli, "save", lambda report, name: Path(name)):
+        code = cli.main(argv)
+    stderr = "".join(str(c.args[0]) for c in err.write.call_args_list if c.args)
+    return (True if reached else code), stderr
+
+
+class Pinned(unittest.TestCase):
+    """W23: the one pinned image, the reviewed native-0, and its committed files."""
+
+    def test_exactly_native_0_and_its_wisp_boot_are_pinned(self):
+        self.assertTrue(pins.R4_1_APPROVED)
+        self.assertEqual(set(pins.WISP_IMAGES), {"native-0"})
+        pin = pins.WISP_IMAGES["native-0"]
+        self.assertEqual(pin["image_sha256"], NATIVE_0_SHA)
+        self.assertEqual(pin["image_bytes"], 230_428)
+        self.assertEqual(pin["map_sha256"][:8], "28fcb218")
+        self.assertEqual(set(pin["gates"]), set(pins.WISP_GATES))
+        slot = "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816"
+        self.assertEqual(set(pins.WISP_BOOT_PASSED), {slot})
+        self.assertEqual(set(pins.WISP_BOOT_PASSED[slot]["suites"]), set(pins.WISP_BOOT_SUITES))
+
+    def test_the_committed_files_are_the_pinned_ones(self):
+        pin = pins.WISP_IMAGES["native-0"]
+        data = NATIVE_0["image"].read_bytes()
+        self.assertEqual(image.sha(data), pin["image_sha256"])
+        self.assertEqual(len(data), pin["image_bytes"])
+        self.assertEqual(zlib.crc32(data), pin["crc32"])
+        self.assertEqual(image.sha(data[: pins.WISP_BOOT_SLOT_BYTES]), pin["wisp_boot_slot_sha256"])
+        self.assertEqual(image.sha(NATIVE_0["elf"].read_bytes()), pin["elf_sha256"])
+        self.assertEqual(image.sha(NATIVE_0["map"].read_bytes()), pin["map_sha256"])
+        manifest = __import__("json").loads((native.NATIVE_0_DIR / "manifest.json").read_text())
+        self.assertEqual((manifest["image_sha256"], manifest["bytes"], manifest["app_map_sha256"]),
+                         (pin["image_sha256"], pin["image_bytes"], pin["map_sha256"]))
+        self.assertEqual(manifest["wisp_boot_slot_sha256"], pin["wisp_boot_slot_sha256"])
+        self.assertEqual(int(manifest["image_crc32"], 16), pin["crc32"])
+        self.assertTrue(manifest["app_hardware_image"] and manifest["wisp_boot_observe_only"])
+        # The debug-stripped ELF names no build machine path.
+        for f in ("elf",):
+            raw = NATIVE_0[f].read_bytes()
+            for needle in (b"/home/", b"/nix/store/", b"/tmp/"):
+                self.assertNotIn(needle, raw, f)
+
+    def test_resolve_accepts_the_committed_image(self):
+        facts = native.resolve(NATIVE_0["image"].read_bytes(), NATIVE_0["elf"].read_bytes(),
+                               NATIVE_0["map"].read_bytes(), NATIVE_0_SHA[:12])
+        self.assertEqual(facts["name"], "native-0")
+        self.assertEqual(facts["end"], "0x470420")
+        self.assertGreaterEqual(facts["elf_segments_checked"], 1)
+        self.assertEqual(facts["wisp_boot"]["wisp_boot_bin_sha256"][:8], "d793a93e")
+
+    def test_the_whole_gate_before_the_case_accepts_it(self):
+        reached, stderr = run_until_case(native_0_argv())
+        self.assertIs(reached, True, stderr)
+        reached, stderr = run_until_case(native_0_argv(battery="3950mV"))
+        self.assertIs(reached, True, stderr)
+
+    def test_a_one_byte_change_to_any_file_is_refused_before_the_case(self):
+        for which, at in (("image", 0x2_0000), ("image", 230_427), ("image", 0x100), ("elf", None),
+                          ("map", None)):
+            with self.subTest(which=which, at=at), tempfile.TemporaryDirectory() as tmp:
+                paths = {k: Path(tmp) / v.name for k, v in NATIVE_0.items()}
+                for k, v in NATIVE_0.items():
+                    paths[k].write_bytes(v.read_bytes())
+                raw = bytearray(paths[which].read_bytes())
+                i = at if at is not None else len(raw) // 2
+                raw[i] ^= 0x01
+                paths[which].write_bytes(raw)
+                code, stderr = run_until_case(native_0_argv(paths))
+                self.assertEqual(code, 2, stderr)
+                self.assertIn("REFUSED", stderr)
+
+    def test_expect_and_battery_are_still_required(self):
+        for argv in (native_0_argv(expect="5d373fd8"), native_0_argv(expect="5d373fd88743"),
+                     native_0_argv(battery="79"), native_0_argv(battery="3800mV")):
+            with self.subTest(argv=argv[-4:]):
+                code, stderr = run_until_case(argv)
+                self.assertEqual(code, 2, stderr)
+
+    def test_a_fake_install_of_native_0_writes_it_whole(self):
+        data = NATIVE_0["image"].read_bytes()
+        mram = temple(running_app())
+        case = Case(mram)
+        code, report, stderr = run(native_0_argv(), case)
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(mram.read(pins.APP_BASE, len(data)), data)
+        self.assertEqual(report["image"]["name"], "native-0")
+        self.assertTrue(all(r["ok"] for r in report["rule3"]))
+
+
+class Gate(unittest.TestCase):
+    def test_an_image_not_in_the_table_is_refused_before_touching_the_case(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "native.bin"
             data = wisp_image()
@@ -158,8 +266,7 @@ class Gate(unittest.TestCase):
         self.assertIsNone(report)
         self.assertIn("REFUSED", stderr)
         self.assertIn("WISP_IMAGES", stderr)
-        self.assertIn("R4-1", stderr)
-        self.assertIn("Nothing was sent", stderr)
+        self.assertIn("nothing was sent", stderr)
 
     def test_a_pinned_table_without_the_approval_still_refuses(self):
         with PinnedWisp(wisp_image(), approved=False) as w:

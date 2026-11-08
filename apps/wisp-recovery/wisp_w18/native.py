@@ -3,8 +3,8 @@
 (docs/wisp/rung4.md §3, G1, decision R4-1). Nothing here talks to hardware.
 
 - `resolve`: the image must be listed in pins.WISP_IMAGES, and R4-1 must be approved
-  (pins.R4_1_APPROVED). R4-1 is approved (2026-11-08) but the table stays empty until W23 pins
-  native-0 after review, so every image is refused. The ELF and
+  (pins.R4_1_APPROVED; approved 2026-11-08). W23 pinned native-0 (the reviewed build of 8374f9a,
+  committed in data/native-0/); every other image is refused. The ELF and
   map files must match their pins, the build must have passed the gates the pin records, and
   the first 64 KiB (Wisp Boot) must be a build that passed both rung-3 suites R4-1 names.
 - `rule3`: safety.md rule 3 on the bytes the writer is about to send, in both implementations
@@ -266,6 +266,12 @@ def elf_matches(elf: bytes, data: bytes) -> int:
 
 # --- the pin gate -------------------------------------------------------------------------------
 
+# The committed files of the pinned native-0 (W23; data/native-0/README.md).
+NATIVE_0_DIR = Path(__file__).resolve().parent / "data/native-0"
+NATIVE_0_FILES = {"image": NATIVE_0_DIR / "native-0.bin", "elf": NATIVE_0_DIR / "zephyr.elf",
+                  "map": NATIVE_0_DIR / "zephyr.map"}
+
+
 def find_pin(sha256: str) -> tuple[str, dict] | None:
     for name, pin in pins.WISP_IMAGES.items():
         if pin["image_sha256"] == sha256:
@@ -280,9 +286,8 @@ def resolve(data: bytes, elf: bytes, map_text: bytes, expect: str) -> dict:
     if not pins.R4_1_APPROVED or not pins.WISP_IMAGES:
         raise NativeRefused(
             "install-wisp writes only Wisp images pinned in wisp_w18/pins.py (WISP_IMAGES), and only with R4-1 "
-            "approved (docs/wisp/rung4.md, safety.md rule 1; approved 2026-11-08). The table stays empty until "
-            f"W23: a reviewed commit pins a built native-0 image. This image ({digest[:16]}...) is not pinned. "
-            "Nothing was sent and the case was not touched.")
+            f"approved (docs/wisp/rung4.md, safety.md rule 1; approved 2026-11-08). This image ({digest[:16]}...) "
+            "is not pinned. Nothing was sent and the case was not touched.")
     found = find_pin(digest)
     if found is None:
         raise NativeRefused(f"image {digest[:16]}... is not in pins.WISP_IMAGES; nothing was sent")
@@ -302,6 +307,8 @@ def resolve(data: bytes, elf: bytes, map_text: bytes, expect: str) -> dict:
     if len(data) <= pins.WISP_BOOT_SLOT_BYTES:
         raise NativeRefused(f"{name}: {len(data)} bytes is no larger than Wisp Boot's 64 KiB slot")
     boot = image.sha(data[: pins.WISP_BOOT_SLOT_BYTES])
+    if pin.get("wisp_boot_slot_sha256", boot) != boot:
+        raise NativeRefused(f"{name}: its Wisp Boot slot ({boot[:16]}...) is not the one pinned with the image")
     passed = pins.WISP_BOOT_PASSED.get(boot)
     if passed is None:
         raise NativeRefused(f"{name}: its Wisp Boot ({boot[:16]}...) is not a build that passed rung 3")
