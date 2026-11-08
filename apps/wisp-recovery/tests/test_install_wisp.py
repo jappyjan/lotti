@@ -56,6 +56,19 @@ def elf32(segments: list[tuple[int, int, bytes]]) -> bytes:
     return bytes(out + blobs)
 
 
+def with_sections(elf: bytes, sections: list[tuple[int, int, int, int]]) -> bytes:
+    """`elf` plus a section header table: (sh_type, sh_flags, file offset, size) per section,
+    after a null section."""
+    out = bytearray(elf)
+    shoff = len(out)
+    out += bytes(40)
+    for sh_type, flags, offset, size in sections:
+        out += struct.pack("<10I", 0, sh_type, flags, 0, offset, size, 0, 0, 4, 0)
+    struct.pack_into("<I", out, 0x20, shoff)
+    struct.pack_into("<HHH", out, 0x2E, 40, len(sections) + 1, 0)
+    return bytes(out)
+
+
 def app_elf(data: bytes) -> bytes:
     app = data[APP_PART:]
     return elf32([(0x0044_8000, 0x0044_8000, app[:3072]), (0x0044_8000 + 3072, 0x2000_0000, app[3072:]),
@@ -295,6 +308,30 @@ class Refusals(unittest.TestCase):
         self.assertIn("outside the image", self.refused(PinnedWisp(data, elf=outside)))
         ram_only = elf32([(0x2000_0000, 0x2000_0000, b"\1" * 16)])
         self.assertIn("no segment in MRAM", self.refused(PinnedWisp(data, elf=ram_only)))
+
+    def test_padding_between_sections_is_not_compared(self):
+        """Zephyr's zephyr.bin fills the alignment gaps between sections with 0xFF, while the ELF's
+        segment holds zeros there (native-0: 4 bytes at 0x469084, before rodata)."""
+        data = bytearray(wisp_image())
+        data[APP_PART + 1000 : APP_PART + 1004] = b"\xff" * 4  # the image's gap fill
+        segment = bytearray(data[APP_PART : APP_PART + 3072])
+        segment[1000:1004] = bytes(4)  # the ELF's padding
+        elf = elf32([(0x448000, 0x448000, bytes(segment))])
+        at = 52 + 32  # the one segment's file offset
+        alloc, progbits, nobits = 0x2, 1, 8
+        sections = [(progbits, alloc, at, 1000), (progbits, alloc, at + 1004, 3072 - 1004),
+                    (nobits, alloc, at + 3072, 512), (progbits, 0, 0, 16)]
+        self.assertEqual(native.elf_matches(with_sections(elf, sections), bytes(data)), 1)
+        # Without section headers the whole segment is compared, padding included.
+        with self.assertRaisesRegex(native.NativeRefused, "differs from the image at 0x4483e8"):
+            native.elf_matches(elf, bytes(data))
+        # A difference inside a section is still refused.
+        data[APP_PART + 2000] ^= 1
+        with self.assertRaisesRegex(native.NativeRefused, "differs from the image at 0x4487d0"):
+            native.elf_matches(with_sections(elf, sections), bytes(data))
+        # A segment that no section covers compares nothing: refused.
+        with self.assertRaisesRegex(native.NativeRefused, "holds no section"):
+            native.elf_matches(with_sections(elf, [(progbits, alloc, at + 3072, 16)]), bytes(data))
 
     def test_the_build_gates_must_be_recorded(self):
         self.assertIn("no-mram-write", self.refused(PinnedWisp(wisp_image(), gates=("check_rule8",))))
