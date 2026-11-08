@@ -526,9 +526,14 @@ Prepared on t3-worker on 2026-11-08, **emulation only**: no hardware was touched
 
 This is H1's candidate list made concrete; it does not say which write (if any) stops the chip. The next step for native-0b is to compare each of these with what stock does at the same point (static analysis of stock 2.4.0.24's start-up), then either allowlist a write with that reason or change it. stage-0 makes none of them (its strict record holds only the pad writes for pins 22, 23, 42 and 44).
 
-**Emulation results** (Wisp Boot observe build `WISP_BOOT_SHA_OBS`, fallback build `WISP_BOOT_SHA_FB`):
+**Emulation results**, t3-worker 2026-11-08 (Wisp Boot observe build `wisp_boot.bin` `b54ee856faaf9b82…`, 11,056 B, the one in stage-0; fallback build `b33da81aff164896…`):
 
-RESULTS_TABLE
+| Suite | Stock 2.4.0.24 bootloader | Patched `87e2d4e0…` bootloader |
+| --- | --- | --- |
+| rung 3 observe (`wisp-fw:boot-test`) | **8/8 pass**: the six earlier cases, `obs-diag-wdt` (a watchdog reset with SRAM kept: the next boot reports prev stage `boot-handoff`, cause `watchdog`), `obs-stage-0` (IDENT kind 16, LFRC 922 Hz, a case-UART RESET, then Wisp Boot's window reports prev `s0-reset-request`, cause `sw-por`) | **8/8 pass** |
+| rung 3 fallback | **28/28 pass** (reference, the 25 fault and power-cut cases, `native-app-runs`, `native-app-unconfirmed`) | PATCHED_FALLBACK |
+| every rung-3 case | Wisp Boot's PMIC writes are only `07 04 01`, once per run (by PC); no Wisp Boot write to an unmodelled power, clock or trim register | same |
+| `w18-test` (patched bootloader) | — | 16 earlier cases **pass** under the new models (control, hello, info, the four `recover` variants, temple watchdog, `rung4-reads`, `install-wisp` and its cut); **`stage-0` passes** (install `3571f525`, boot-watch at 17.5 ms, the reports after RESET and after the case reset, 3 Wisp Boot kicks, no bite, strict clean); **`native-0` and `native-0-recover` FAIL** on the strict record only (the table above) |
 
 In Renode the crystal is 32,000 Hz (Renode's Apollo4 STIMER), so stage-0 reads the 900 Hz LFRC as 922 Hz there and the watchdog period as 8.9 s. On silicon it reads the real figures.
 

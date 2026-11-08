@@ -681,10 +681,11 @@ class Harness:
         """A non-stock image install-wisp may write in emulation: the stock app (it boots) with a
         64-byte marker appended, so the region it fills and its hash differ from stock. The writer
         refuses any image that is not pinned with R4-1 approved, so this process (Renode, never a
-        case) approves R4-1 and pins it in memory; the repository's table stays empty."""
+        case) approves R4-1 and pins it in memory, next to the repository's own pins."""
         data = self.app + b"WISP-RENODE-G1-" * 4 + b"END!"
         pins.R4_1_APPROVED = True
-        pins.WISP_IMAGES = {"renode-synthetic": {"image_sha256": image.sha(data)}}
+        # Added, not replacing the table: later cases (native-0) use the repository's own pins.
+        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "renode-synthetic": {"image_sha256": image.sha(data)}}
         return AppImage("synthetic", data, image.sha(data), pins.APP_BASE + ((len(data) + 15) & ~15),
                         check=native.rule3)
 
