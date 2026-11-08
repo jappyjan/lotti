@@ -19,7 +19,22 @@
 // late). A reset requested from this model's clock entry while a lockstep host was attached left
 // the emulation stalled after the host detached, so the reset goes the harness's well-trodden
 // way. An Apollo510 reset leaves the watchdog as it is: the PMIC is a separate chip. Writes that arm or reconfigure the timer (07 00, 07 01, 07 05, 07 08..0A) are
-// logged, not acted on, so the stock app's own PMIC set-up after a release cannot reset the run.
+// logged, not acted on, so the stock app's own PMIC set-up after a release cannot reset the run,
+// unless a case sets ActOnWrites (rung4.md, "W24 result and analysis", Renode changes): then the
+// timer registers act as on the nPM1300. TIMERCONFIG (07 05) MODE bits 2:0 (1 = watchdog warning,
+// 2 = watchdog reset) and bit 3 the prescaler (2 ms ticks when set, 16 ms when clear: stock's 0x0a
+// with target 0x3c00 is 30.72 s); the target (07 08..0A, MSB first) takes effect on the strobe
+// (07 03 01); 07 00 01 starts the timer (armed if MODE is a watchdog), 07 01 01 stops it.
+//
+// Power cycle (W24): when the watchdog expires the PMIC resets itself, so AckPowerCycle (the
+// harness acknowledges the expiry and cuts the Apollo's power) also writes every register given
+// by SetPowerOn into the PMIC's register file: the nPM1300's power-on values as the W24 snapshot
+// showed them (images/pmic-poweron-w24.json). A pmic_read afterwards sees the charger off and the
+// watchdog disarmed, as on the left temple.
+//
+// PmicPcLog: one line per PMIC data write with the PC that issued its CMD ("<ms> pc 0x<pc>
+// wb=<0|1> write <bytes>"), so a case can prove which code made which write (Wisp Boot's only one is the
+// kick 07 04 01).
 //
 // Reads (for pmic_read.bin, rung4.md G3): G2Iom serves a READ from the register the previous
 // write named and always reports FIFOPTR = 0x00202000. The stock app reads that way (an address
@@ -32,13 +47,14 @@
 // SUBMODCTRL reads its submodule types as on silicon (WispIomTypes.cs explains why).
 //
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
-// PmicLog (one line per PMIC write).
+// PmicLog (one line per PMIC write), PmicPcLog, ActOnWrites, SetPowerOn <reg> <value>, PeriodMs.
 using System;
 using System.Collections.Generic;
 using System.Text;
 using Antmicro.Renode.Core;
 using Antmicro.Renode.Logging;
 using Antmicro.Renode.Peripherals.Bus;
+using Antmicro.Renode.Peripherals.CPU;
 using Antmicro.Renode.Peripherals.G2emu;
 using Antmicro.Renode.Time;
 
@@ -48,6 +64,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
     {
         public WispPmicWdt(IMachine machine)
         {
+            this.machine = machine;
             iom = new G2Iom(machine, 0x1000);
             log = new StringBuilder();
             push = new List<byte>();
@@ -62,9 +79,34 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public long LastKickMs { get; private set; } = -1;
         public bool PowerCyclePending { get; private set; }
 
+        public bool ActOnWrites { get; set; }
+        public long PeriodMs => periodMs;
+
+        public void SetPowerOn(int reg, int value)
+        {
+            powerOn[reg] = (byte)value;
+        }
+
         public void AckPowerCycle()
         {
             PowerCyclePending = false;
+            // The PMIC's own power cycle: its registers back at their power-on values.
+            var saved = iom.ReadDoubleWord(0x2C4);
+            foreach(var kv in powerOn)
+            {
+                iom.WriteDoubleWord(0x2C4, 0x6B);
+                iom.WriteDoubleWord(0x10C, (uint)(((kv.Key >> 8) & 0xFF) | ((kv.Key & 0xFF) << 8) | (kv.Value << 16)));
+                iom.WriteDoubleWord(0x120, (3u << 8) | 1);
+            }
+            iom.WriteDoubleWord(0x2C4, saved);
+            timerConfig = 0;
+            target = latched = 0;
+            log.AppendLine($"{nowMs} ms power-on values restored ({powerOn.Count} registers)");
+        }
+
+        public string PmicPcLog()
+        {
+            return pcLog.ToString();
         }
 
         public void Arm(double seconds)
@@ -189,11 +231,71 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             var hex = BitConverter.ToString(wire.ToArray()).Replace("-", " ").ToLowerInvariant();
             log.AppendLine($"{nowMs} ms write {hex}");
+            if(wire.Count > 2)
+            {
+                var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((ICPUWithRegisters)cpu).PC : 0;
+                // wb=1: Wisp Boot's services table is in MRAM, so a PC in [0x438000, 0x448000) is Wisp
+                // Boot's (stock's own code lives there once stock is installed).
+                var wb = machine.SystemBus.ReadDoubleWord(0x438200) == 0x31534257 ? 1 : 0;
+                pcLog.AppendLine($"{nowMs} pc 0x{pc:X} wb={wb} write {hex}");
+                if(ActOnWrites && wire[0] == 0x07)
+                {
+                    Timer(wire);
+                }
+            }
             if(wire.Count == 3 && wire[0] == 0x07 && wire[1] == 0x04 && wire[2] == 0x01)
             {
                 Kicks++;
                 LastKickMs = nowMs;
                 lastKickMs = nowMs;
+            }
+        }
+
+        // The nPM1300 TIMER block's registers (ActOnWrites).
+        private void Timer(List<byte> wire)
+        {
+            for(var i = 2; i < wire.Count; i++)
+            {
+                var reg = wire[1] + i - 2;
+                var v = wire[i];
+                switch(reg)
+                {
+                case 0x00: // TASKTIMEREN
+                    var mode = timerConfig & 7;
+                    if(v == 1 && (mode == 1 || mode == 2))
+                    {
+                        periodMs = latched * ((timerConfig & 8) != 0 ? 2 : 16);
+                        lastKickMs = nowMs;
+                        Armed = periodMs > 0;
+                        log.AppendLine($"{nowMs} ms armed by a write: {periodMs} ms");
+                    }
+                    break;
+                case 0x01: // TASKTIMERDIS
+                    if(v == 1)
+                    {
+                        Armed = false;
+                        log.AppendLine($"{nowMs} ms disarmed by a write");
+                    }
+                    break;
+                case 0x03: // TASKTIMERTARGETSTROBE
+                    if(v == 1)
+                    {
+                        latched = target;
+                    }
+                    break;
+                case 0x05:
+                    timerConfig = v;
+                    break;
+                case 0x08:
+                    target = (target & 0x00FFFF) | (v << 16);
+                    break;
+                case 0x09:
+                    target = (target & 0xFF00FF) | (v << 8);
+                    break;
+                case 0x0A:
+                    target = (target & 0xFFFF00) | v;
+                    break;
+                }
             }
         }
 
@@ -211,8 +313,12 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
         }
 
+        private readonly IMachine machine;
         private readonly G2Iom iom;
         private readonly StringBuilder log;
+        private readonly StringBuilder pcLog = new StringBuilder();
+        private readonly Dictionary<int, byte> powerOn = new Dictionary<int, byte>();
+        private int timerConfig, target, latched;
         private List<byte> push;
         private uint devcfg, offsetHi, rxBytes;
         private long nowMs, lastKickMs, periodMs;

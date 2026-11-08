@@ -31,6 +31,36 @@ class Codec(unittest.TestCase):
             b = bytes.fromhex(stock)
             self.assertEqual(b[-1], (len(b) + 0x7D + sum(b[:-1])) & 0xFF, stock)
 
+    def test_boot_report(self):
+        """The BOOTREP vectors of tests/case/test_case_proto.c (rung4.md W24 analysis, D2)."""
+        self.assertEqual(c.bootrep_request().hex(), "7e0001045753500407")
+        st, data = c.decode_reply(bytes.fromhex(
+            "5aa5ff1b5753508400000d0318400000008c23000000000000000000000000ae"), c.OP_BOOTREP)
+        r = c.decode_boot_report(data)
+        self.assertEqual((st, r["source"], r["boot"], r["prev_stage"], r["prev_stage_ms"], r["reset_cause_names"],
+                          r["prev_fault"]), (0, "wisp-boot", 3, "boot-handoff", 9100, ["watchdog"], None))
+        self.assertEqual(r["flags"], ["prev-valid", "kick-ok", "stimer-xt"])
+
+    def test_diag_record_and_v2_status(self):
+        rec = bytearray(64)
+        struct.pack_into("<IHHIIIHHIIIIIIIII", rec, 0, c.DIAG_MAGIC, 1, 64, 5, 0x40, 1000, 0x45, 1, 32768,
+                         0x448100, 0x448001, 0x61000000, 0x20000, 0, 0, 0, 0xFFFFFFF9)
+        struct.pack_into("<I", rec, 60, zlib.crc32(bytes(rec[:60])))
+        d = c.decode_diag_record(bytes(rec))
+        self.assertEqual((d["boots"], d["stage"], d["stage_ms"], d["fault"]["pc"]), (5, "s0-loop", 1000, 0x448100))
+        bad = bytearray(rec)
+        bad[10] ^= 1
+        with self.assertRaises(ValueError):
+            c.decode_diag_record(bytes(bad))
+        b = bytearray(c.BOOT_STATUS_SIZE)
+        struct.pack_into("<IHHIIiii", b, 0, 0x54534257, 2, c.BOOT_STATUS_SIZE, 1, 0x3925C2, 0, 0, -2)
+        struct.pack_into("<IIHHBBBB", b, 608, 0x40, 0, 2, 300, 1, 0, 3, 0)
+        b[624:688] = rec
+        struct.pack_into("<I", b, 688, zlib.crc32(bytes(b[:688])))
+        s = c.decode_boot_status(bytes(b))
+        self.assertEqual((s["version"], s["reset_cause_names"], s["window_answers"], s["prev"]["boots"]),
+                         (2, ["watchdog"], 2, 5))
+
     def test_version(self):
         v = c.decode_version(bytes.fromhex("5aa5ff0924575350000102000028"))
         self.assertTrue(v["wisp"])
@@ -73,7 +103,7 @@ class Codec(unittest.TestCase):
             if hook.complete(answers):
                 break
         self.assertTrue(hook.complete(answers))
-        self.assertEqual(i, 1 + 4 + 36 - 1)
+        self.assertEqual(i, 1 + 4 + -(-c.BOOT_STATUS_SIZE // c.READ_MAX) - 1)  # IDENT, 4 + 41 READs
         self.assertIsNone(hook.decode(bytes.fromhex("5aa5ff0924010305020400180557")))
 
     def test_status(self):

@@ -42,14 +42,16 @@ rstgen: Wisp.WispRstGen @ sysbus 0x40000000
 lo0: Wisp.WispTrace @ sysbus 0x40001000
     size: 0x3000
     trace: 0
+    baseAddress: 0x40001000
 
-// CLKGEN (clock-ready status reads 1s) + running RTC. g2emu model.
-clkgen: G2emu.G2ClkgenRtc @ sysbus 0x40004000
+// CLKGEN (clock-ready status reads 1s) + running RTC. g2emu model, behind WispClkgen's strict record.
+clkgen: Wisp.WispClkgen @ sysbus 0x40004000
     size: 0x1000
 
 lo1: Wisp.WispTrace @ sysbus 0x40005000
     size: 0x3000
     trace: 0
+    baseAddress: 0x40005000
 
 // CTIMER: Renode's Apollo4 model, as in g2emu.
 timer: Timers.AmbiqApollo4_Timer @ sysbus 0x40008000
@@ -70,8 +72,10 @@ timer: Timers.AmbiqApollo4_Timer @ sysbus 0x40008000
     14 -> nvic@81
     15 -> nvic@82
 
-// STIMER: the RTOS tick of the stock bootloader and app; Zephyr's system clock. Renode's Apollo4 model.
-stimer: Timers.AmbiqApollo4_SystemTimer @ sysbus 0x40008800
+// STIMER: the RTOS tick of the stock bootloader and app; Zephyr's system clock. Renode's Apollo4 model
+// in WispStimer.cs, which also serves RSTGEN.STAT at 0x4000885C (inside this window).
+stimer: Wisp.WispStimer @ sysbus 0x40008800
+    rstgen: rstgen
     IRQA -> nvic@32
     IRQB -> nvic@33
     IRQC -> nvic@34
@@ -86,15 +90,17 @@ stimer: Timers.AmbiqApollo4_SystemTimer @ sysbus 0x40008800
 lo2: Wisp.WispTrace @ sysbus 0x40009000
     size: 0x18000
     trace: 0
+    baseAddress: 0x40009000
 
-// PWRCTRL: each *STATUS mirrors its *EN. g2emu model.
-pwrctrl: G2emu.G2Pwrctrl @ sysbus 0x40021000
+// PWRCTRL: each *STATUS mirrors its *EN. g2emu model, behind WispPwrctrl's strict record.
+pwrctrl: Wisp.WispPwrctrl @ sysbus 0x40021000
     size: 0x1000
     domainStatus: true
 
 lo3: Wisp.WispTrace @ sysbus 0x40022000
     size: 0x2000
     trace: 0
+    baseAddress: 0x40022000
 
 wdt: Wisp.WispWdt @ sysbus 0x40024000
     rstgen: rstgen
@@ -102,6 +108,7 @@ wdt: Wisp.WispWdt @ sysbus 0x40024000
 lo4: Wisp.WispTrace @ sysbus 0x40025000
     size: 0x13000
     trace: 0
+    baseAddress: 0x40025000
 
 adc: Wisp.WispAdc @ sysbus 0x40038000
 
@@ -119,6 +126,7 @@ uart3: Wisp.WispUartIdle @ sysbus 0x4003C000
 hi0: Wisp.WispTrace @ sysbus 0x4003D000
     size: 0x13000
     trace: 0
+    baseAddress: 0x4003D000
 
 // IOM0..7 as I2C masters with the G2's devices behind them (nPM1300 PMIC, ICM-45608, OPT3007,
 // others ACK + zeros). g2emu model. The stock app's PMIC driver dereferences a NULL ops pointer
@@ -129,10 +137,12 @@ iom: G2emu.G2Iom @ sysbus 0x40050000
 hi1: Wisp.WispTrace @ sysbus 0x40058000
     size: 0x8000
     trace: 0
+    baseAddress: 0x40058000
 
 mspi0: Wisp.WispTrace @ sysbus 0x40060000
     size: 0x1000
     trace: 0
+    baseAddress: 0x40060000
 
 // MSPI1 + MX25U25643G (32 MiB): IRQ 21 as in the stock bootloader's vector table.
 // The image is loaded by boot.resc (`nor LoadImage`).
@@ -142,6 +152,7 @@ nor: Wisp.WispMspiNor @ sysbus 0x40061000
 mspi23: Wisp.WispTrace @ sysbus 0x40062000
     size: 0x2000
     trace: 0
+    baseAddress: 0x40062000
 
 periph_hi: Memory.MappedMemory @ sysbus 0x40064000
     size: 0x0FF9C000

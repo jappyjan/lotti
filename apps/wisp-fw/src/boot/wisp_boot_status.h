@@ -14,8 +14,10 @@
 
 #include <stdint.h>
 
+#include "wisp_diag.h"
+
 #define WISP_BOOT_STATUS_MAGIC   0x54534257u /* "WBST" little-endian */
-#define WISP_BOOT_STATUS_VERSION 1u
+#define WISP_BOOT_STATUS_VERSION 2u /* 2: adds the diagnostics (rstgen_stat .. prev) before crc */
 
 /* build flags */
 #define WISP_BOOT_BUILD_OBSERVE  0x1u /* observe-only: no NOR or MRAM write code, always run-app */
@@ -70,6 +72,16 @@ struct wisp_boot_status {
 	struct wisp_boot_inv_entry inv[WISP_BOOT_INV_MAX];
 	uint32_t confirm_calls;  /* confirm() calls by the app since boot */
 	int32_t confirm_result;  /* the last confirm()'s result */
+	/* version 2: diagnostics (rung4.md W24 analysis, D1/D2) */
+	uint32_t rstgen_stat;    /* RSTGEN.STAT at the start of this boot */
+	uint32_t pmic_kick;      /* the nPM1300 watchdog kick at the start: 0 or boot_pmic.h's code */
+	uint16_t window_answers; /* boot reports answered in the case-UART window */
+	uint16_t window_ms;      /* how long the window stayed open (ms; STIMER, 0 if no crystal) */
+	uint8_t prev_valid;      /* prev holds the previous boot's valid record */
+	uint8_t uart_result;     /* boot_uart_init(): 0 = up */
+	uint8_t stimer_clksel;   /* STCFG CLKSEL as found (3 = the 32 kHz crystal) */
+	uint8_t reserved;
+	struct wisp_diag_record prev; /* the previous boot's record as found (zeros if invalid) */
 	uint32_t crc;            /* zlib CRC-32 of every byte before it; resealed on each change */
 };
 
@@ -79,6 +91,44 @@ _Static_assert(__builtin_offsetof(struct wisp_boot_status, stage) == 44, "status
 _Static_assert(__builtin_offsetof(struct wisp_boot_status, staging_id) == 52, "status layout");
 _Static_assert(__builtin_offsetof(struct wisp_boot_status, inv) == 72, "status layout");
 _Static_assert(__builtin_offsetof(struct wisp_boot_status, confirm_calls) == 600, "status layout");
-_Static_assert(sizeof(struct wisp_boot_status) == 612, "status layout");
+_Static_assert(__builtin_offsetof(struct wisp_boot_status, rstgen_stat) == 608, "status layout");
+_Static_assert(__builtin_offsetof(struct wisp_boot_status, prev) == 624, "status layout");
+_Static_assert(sizeof(struct wisp_boot_status) == 692, "status layout");
+
+/* The boot report (wisp_diag.h, D2) from a version-2 status block: what the previous boot's record
+ * says, and this boot's reset cause. `source` is WISP_REPORT_SRC_BOOT or WISP_REPORT_SRC_APP. */
+static inline void wisp_boot_report_fill(uint8_t out[WISP_BOOT_REPORT_SIZE], uint8_t source,
+					 const struct wisp_boot_status *s)
+{
+	const struct wisp_diag_record *p = &s->prev;
+	uint32_t ms = 0xFFFFu;
+	uint8_t flags = 0;
+
+	for (uint32_t i = 0; i < WISP_BOOT_REPORT_SIZE; i++) {
+		out[i] = 0;
+	}
+	if (s->prev_valid) {
+		flags |= WISP_REPORT_F_PREV_VALID;
+		flags |= (p->flags & WISP_DIAG_F_FAULT) ? WISP_REPORT_F_PREV_FAULT : 0;
+		if (s->stimer_clksel == 3u) {
+			uint64_t t = ((uint64_t)p->stage_ticks * 125u) >> 12; /* ms at 32768 Hz */
+
+			ms = t < 0xFFFFu ? (uint32_t)t : 0xFFFFu;
+		}
+	}
+	flags |= s->pmic_kick == 0 ? WISP_REPORT_F_KICK_OK : 0;
+	flags |= s->stimer_clksel == 3u ? WISP_REPORT_F_STIMER_XT : 0;
+	out[0] = source;
+	out[1] = flags;
+	out[2] = (uint8_t)(s->prev_valid ? p->boots + 1u : 1u);
+	out[3] = s->prev_valid ? (uint8_t)p->stage : 0;
+	wisp_diag_put32(out + 4, s->rstgen_stat);
+	wisp_diag_put16(out + 8, ms);
+	if (flags & WISP_REPORT_F_PREV_FAULT) {
+		wisp_diag_put32(out + 10, p->fault_pc);
+		wisp_diag_put32(out + 14, p->fault_lr);
+		wisp_diag_put32(out + 18, p->cfsr);
+	}
+}
 
 #endif /* WISP_BOOT_STATUS_H */

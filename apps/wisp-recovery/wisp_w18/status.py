@@ -112,6 +112,7 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
             if decoded is None:
                 out["foreign"].append({"t": t, "frame": reply.hex()})
             else:
+                decoded.setdefault("t", t)
                 out["answers"].append({"t": t, **decoded})
                 log(f"boot-watch: t = {t:.1f} s: {decoded}")
                 if protocol.complete(out["answers"]):
@@ -119,7 +120,10 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
                     break
         else:
             out["unanswered"] += 1
-        wait = max(interval_s - (clock() - asked), 0.0)
+        # A protocol that is racing a short window (the boot report: Wisp Boot answers it only for
+        # about 300 ms after each reset) asks again at once.
+        urgent = getattr(protocol, "urgent", None)
+        wait = 0.0 if urgent and urgent() else max(interval_s - (clock() - asked), 0.0)
         if clock() - started + wait >= duration_s:
             break
         if wait:

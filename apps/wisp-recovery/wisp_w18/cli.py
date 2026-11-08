@@ -673,6 +673,34 @@ def print_summary(summary: dict) -> None:
               f"{boot['rescue_ok']}")
         for name, f in summary.get("inventory", {}).items():
             print(f"    /firmware: {name} {f['size']} B crc {f['crc32']} (result {f['result']})")
+        if boot.get("version", 1) >= 2:
+            print(f"  Wisp Boot diagnostics: reset cause {boot['rstgen_stat']:#06x} {boot['reset_cause_names']}, "
+                  f"PMIC kick {boot['pmic_kick']:#x}, boot-report window {boot['window_ms']} ms "
+                  f"({boot['window_answers']} answered), UART2 {boot['uart_result']}, STIMER CLKSEL "
+                  f"{boot['stimer_clksel']}, previous record {'valid' if boot['prev_valid'] else 'none'}")
+            if boot.get("prev"):
+                p = boot["prev"]
+                print(f"    previous boot #{p['boots']}: last stage {p['stage']} at {p['stage_ms']} ms, its reset cause "
+                      f"{p['reset_cause_names']}, fault {p['fault']}")
+    # Every boot report of the watch, one per boot (rung4.md W24 analysis, D2).
+    for r in summary.get("boot_reports", []):
+        if "source" not in r:
+            continue
+        fault = r["prev_fault"]
+        print(f"  boot report (t = {r.get('t', '?')} s, from {r['source']}): boot {r['boot']}, reset cause "
+              f"{r['reset_cause']:#06x} {r['reset_cause_names']}, previous boot's last stage {r['prev_stage']} at "
+              f"{r['prev_stage_ms']} ms" + (f", FAULT pc {fault['pc']:#010x} lr {fault['lr']:#010x} cfsr "
+                                            f"{fault['cfsr']:#010x}" if fault else ""))
+    clock = summary.get("clock")
+    if clock:
+        print(f"  stage-0 clocks: LFRC {clock['lfrc_hz']} Hz (min {clock['lfrc_hz_min']}, max {clock['lfrc_hz_max']}, "
+              f"{clock['measurements']} measurement(s), {clock['result']}), so the watchdog's period is "
+              f"{clock['wdt_period_ms']} ms; core {clock['core_hz']} Hz; timebase {clock['timebase']}; STCFG "
+              f"{clock['stcfg']:#x}, WDT CFG {clock['wdt_cfg']:#x}")
+    diag = summary.get("diag")
+    if diag:
+        print(f"  diagnostics record now: boot #{diag['boots']}, stage {diag['stage']} at {diag['stage_ms']} ms, "
+              f"reset cause {diag['reset_cause_names']}")
 
 
 def cmd_info(args) -> int:

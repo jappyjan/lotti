@@ -16,6 +16,14 @@
  * Every boot also lists /firmware (names, sizes, CRCs) and leaves what it saw in a status block in
  * its own RAM (wisp_boot_status.h), which the services table points at.
  *
+ * Diagnostics (rung4.md, "W24 result and analysis", D1/D2), first thing on every boot, before the
+ * NOR: the previous boot's record (wisp_diag.h) is kept in the status block and a fresh one is
+ * started with RSTGEN.STAT; the nPM1300 watchdog is kicked once (boot_pmic.c, the only PMIC write
+ * Wisp Boot makes: 07 04 01), so an Apollo reboot loop keeps re-kicking it and the PMIC never
+ * power-cycles back to its reset values; then a short window on the case UART answers the boot
+ * report (case-uart.md op 0x04): about 300 ms with no request, 100 ms after the last answered
+ * one, never more than 1 s. Breadcrumbs mark every stage up to the hand-off.
+ *
  * Observe-only build (WISP_BOOT_OBSERVE=1, rung4.md native-0): the same code with every write
  * compiled out. littlefs is built LFS_READONLY, the NOR driver has no program or erase, there is
  * no flag write, the record is read but never written, and the action is always run-app. The
@@ -27,11 +35,15 @@
 
 #include "boot_hw.h"
 #include "boot_nor.h"
+#include "boot_pmic.h"
 #include "boot_services.h"
+#include "boot_uart.h"
 #include "lfs.h"
 #include "wisp_boot.h"
 #include "wisp_boot_layout.h"
 #include "wisp_boot_status.h"
+#include "wisp_case_proto.h"
+#include "wisp_diag.h"
 
 /* ---- status block ------------------------------------------------------------------------ */
 
@@ -120,6 +132,7 @@ static int fs_up(void)
 	if (mounted) {
 		return 0;
 	}
+	wisp_diag_mark(WISP_DIAG_BOOT_NOR);
 	st.nor_result = nor_init(&id);
 	st.nor_id = id;
 	if (st.nor_result != 0) {
@@ -131,6 +144,7 @@ static int fs_up(void)
 		return -1;
 	}
 	st.stage = WISP_BOOT_STAGE_MOUNTED;
+	wisp_diag_mark(WISP_DIAG_BOOT_MOUNTED);
 	mounted = 1;
 	return 0;
 }
@@ -370,6 +384,100 @@ __attribute__((section(".services"), used)) const struct wisp_boot_services wisp
 	.status = &st,
 };
 
+/* ---- diagnostics (wisp_diag.h) ------------------------------------------------------------ */
+
+/* Keep the previous boot's record, start this boot's. */
+static void diag_begin(void)
+{
+	volatile struct wisp_diag_record *r = wisp_diag();
+	volatile uint32_t *w = (volatile uint32_t *)r;
+	uint32_t boots = 1;
+
+	st.rstgen_stat = REG(WISP_RSTGEN_STAT_ADDR);
+	st.stimer_clksel = (uint8_t)(REG(WISP_STIMER_STCFG) & 0xFu);
+	if (wisp_diag_valid(r)) {
+		st.prev_valid = 1;
+		memcpy(&st.prev, (const void *)r, sizeof(st.prev));
+		boots = r->boots + 1u;
+	}
+	for (uint32_t i = 0; i < sizeof(*r) / 4u; i++) {
+		w[i] = 0;
+	}
+	r->magic = WISP_DIAG_MAGIC;
+	r->version = WISP_DIAG_VERSION;
+	r->size = sizeof(*r);
+	r->boots = boots;
+	r->rstgen_stat = st.rstgen_stat;
+	r->stimer_start = wisp_stimer_now();
+	wisp_diag_mark(WISP_DIAG_BOOT_START);
+}
+
+static int report(void *ctx, uint8_t *out)
+{
+	(void)ctx;
+	wisp_boot_report_fill(out, WISP_REPORT_SRC_BOOT, &st);
+	st.window_answers++;
+	return 0;
+}
+
+/* STIMER ticks at 32768 Hz (CLKSEL 3, the crystal the bootloader starts), or, without the crystal,
+ * a count of poll-loop iterations / 32 (rough: a poll is about 1 us at the hand-off clock [I]). */
+#define WINDOW_IDLE  (32768u * 3u / 10u) /* 300 ms with no request */
+#define WINDOW_AFTER (32768u / 10u)      /* 100 ms after an answer */
+#define WINDOW_MAX   32768u              /* 1 s in all */
+#define WINDOW_GAP   (32768u / 50u)      /* 20 ms gap drops a partial request */
+
+/* The boot-report window on the case UART: only BOOTREP is answered (wisp_case_proto.c with no
+ * status callback); everything else is ignored, so the loader's and the app's protocols see
+ * nothing from Wisp Boot. The watchdog is fed while it is open. */
+static void report_window(void)
+{
+	static struct wisp_case_rx rx;
+	static uint8_t out[WISP_CASE_MAX_FRAME];
+	static const struct wisp_case_ops ops = {.boot_report = report};
+	static const struct wisp_case_version ver;
+	const int xt = st.stimer_clksel == 3u;
+	uint32_t start, now, until, last = 0;
+
+	st.uart_result = (uint8_t)(boot_uart_init() != 0);
+	if (st.uart_result) {
+		return;
+	}
+	wisp_diag_mark(WISP_DIAG_BOOT_WINDOW);
+	wisp_case_rx_init(&rx);
+	start = xt ? wisp_stimer_now() : 0;
+	until = WINDOW_IDLE;
+	for (uint32_t i = 0;; i++) {
+		int ch;
+
+		now = (xt ? wisp_stimer_now() : i >> 5) - start; /* no crystal: ~32 polls a tick [I] */
+		if (now >= until || now >= WINDOW_MAX) {
+			break;
+		}
+		hw_wdt_feed();
+		ch = boot_uart_getc();
+		if (ch == -2) {
+			wisp_case_rx_init(&rx);
+		} else if (ch >= 0) {
+			bool reset = false;
+			size_t n;
+
+			if (rx.len && now - last > WINDOW_GAP) {
+				wisp_case_rx_init(&rx);
+			}
+			last = now;
+			n = wisp_case_rx_byte(&rx, (uint8_t)ch, &ver, &ops, out, &reset);
+			if (n) {
+				boot_uart_write(out, (uint32_t)n);
+				until = now + WINDOW_AFTER;
+			}
+		}
+	}
+	boot_uart_flush();
+	st.window_ms = xt ? (uint16_t)((now * 125u) >> 12) : 0;
+	wisp_diag_mark(WISP_DIAG_BOOT_WINDOW_END);
+}
+
 /* ---- main --------------------------------------------------------------------------------- */
 
 static const char *const action_names[] = {"run-app", "rescue", "run-app-degraded"};
@@ -397,8 +505,10 @@ _Noreturn static void run_app(enum wisp_boot_action action)
 	status_seal();
 	if (!app_vectors_ok()) {
 		hw_log("wisp-boot: no runnable app at 0x448000 -> reset\n");
+		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 		hw_reset();
 	}
+	wisp_diag_mark(WISP_DIAG_BOOT_HANDOFF);
 	hw_jump(WISP_MAIN_BASE);
 }
 
@@ -410,6 +520,11 @@ _Noreturn void wisp_boot_main(void)
 	uint32_t id = 0;
 
 	hw_wdt_arm();
+	diag_begin();
+	st.pmic_kick = boot_pmic_kick();
+	wisp_diag_mark(WISP_DIAG_BOOT_PMIC);
+	hw_wdt_feed();
+	report_window();
 	st.magic = WISP_BOOT_STATUS_MAGIC;
 	st.version = WISP_BOOT_STATUS_VERSION;
 	st.size = sizeof(st);
@@ -441,11 +556,13 @@ _Noreturn void wisp_boot_main(void)
 	st.rescue_id = in.rescue_id;
 	inventory();
 	st.stage = WISP_BOOT_STAGE_INPUTS;
+	wisp_diag_mark(WISP_DIAG_BOOT_INPUTS);
 
 	d = wisp_boot_decide(sp, &in);
 	st.would_action = (uint8_t)d.action;
 	st.reason = (uint8_t)d.reason;
 	st.stage = WISP_BOOT_STAGE_DECIDED;
+	wisp_diag_mark(WISP_DIAG_BOOT_DECIDED);
 	status_seal();
 	hw_log_hex("wisp-boot: rescue.bin ok ", (uint32_t)in.rescue_ok);
 	hw_log_hex("wisp-boot: firmware files ", st.inv_count);
@@ -475,18 +592,22 @@ _Noreturn void wisp_boot_main(void)
 	hw_log("wisp-boot: staging rescue.bin\n");
 	if (rescue_copy() != 0) {
 		hw_log("wisp-boot: copy failed, flag NOT written -> reset\n");
+		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 		hw_reset();
 	}
 	if (!image_verify(WISP_PATH_STAGING, fbuf_a, &id, &st.staging_size) || id != in.rescue_id) {
 		hw_log("wisp-boot: staged copy does not verify, flag NOT written -> reset\n");
+		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 		hw_reset();
 	}
 	hw_log("wisp-boot: staged copy verified, writing update flag\n");
 	if (hw_flag_set_install() != 0) {
 		hw_log("wisp-boot: flag write failed -> reset\n");
+		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 		hw_reset();
 	}
 	hw_log("wisp-boot: flag set, reset into the Even bootloader\n");
+	wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 	hw_reset();
 #endif
 }

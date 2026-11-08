@@ -10,7 +10,9 @@
   - with --app-config: the app is a hardware image (CONFIG_WISP_HW_IMAGE=y, an image kind other
     than 255, no enabled panel, MSPI controller or nPM13xx node);
   - with --boot-elf --observe: Wisp Boot is the observe-only build (no NOR program/erase, no
-    littlefs write path, no flag write among its symbols).
+    littlefs write path, no flag write among its symbols);
+  - with --bare-app-elf (stage-0): the app is bare metal, links none of those writers, and its only
+    PMIC code is boot_pmic_kick (the fixed 07 04 01 kick): no I2C or HAL transfer function.
 
 The manifest (JSON) holds the SHA-256 of the image, of Wisp Boot's binary and of its padded
 64 KiB slot (what rung4.md R4-1 compares against a build that passed rung 3), of the app binary,
@@ -69,6 +71,18 @@ def check_boot_symbols(names: list[str]) -> list[str]:
     return [f"observe-only Wisp Boot links {n}" for n in sorted(set(names)) if n.split(".")[0] in BOOT_WRITERS]
 
 
+BARE_FORBIDDEN = re.compile(r"^(z_|k_|am_hal_|i2c_|nrf|npm)", re.I)
+
+
+def check_bare_app_symbols(names: list[str]) -> list[str]:
+    errors = [f"bare app links {n}" for n in sorted(set(names)) if n.split(".")[0] in BOOT_WRITERS]
+    errors += [f"bare app links {n} (Zephyr, HAL or I2C code)" for n in sorted(set(names))
+               if BARE_FORBIDDEN.match(n)]
+    if "boot_pmic_kick" not in names:
+        errors.append("bare app has no boot_pmic_kick")
+    return errors
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--image", type=Path, required=True)
@@ -80,6 +94,7 @@ def main() -> int:
     ap.add_argument("--app-config", type=Path, help="the app's zephyr/.config: require a hardware image")
     ap.add_argument("--boot-elf", type=Path, help="Wisp Boot's ELF (with --observe)")
     ap.add_argument("--observe", action="store_true", help="require the observe-only Wisp Boot")
+    ap.add_argument("--bare-app-elf", type=Path, help="the app's ELF: require a bare-metal app (stage-0)")
     ap.add_argument("--nm", default="arm-none-eabi-nm")
     a = ap.parse_args()
     image, boot, app = a.image.read_bytes(), a.boot.read_bytes(), a.app.read_bytes()
@@ -92,6 +107,9 @@ def main() -> int:
         else:
             nm = subprocess.run([a.nm, str(a.boot_elf)], check=True, capture_output=True, text=True).stdout
             errors += check_boot_symbols([p[-1] for p in (l.split() for l in nm.splitlines()) if p])
+    if a.bare_app_elf:
+        nm = subprocess.run([a.nm, str(a.bare_app_elf)], check=True, capture_output=True, text=True).stdout
+        errors += check_bare_app_symbols([p[-1] for p in (l.split() for l in nm.splitlines()) if p])
     if errors:
         for e in errors:
             print(f"check_native: FAIL: {e}", file=sys.stderr)
@@ -108,7 +126,8 @@ def main() -> int:
         "wisp_boot_slot_sha256": sha(slot),
         "app_bin_sha256": sha(app),
         "app_bin_bytes": len(app),
-        "app_hardware_image": bool(a.app_config),
+        "app_hardware_image": bool(a.app_config) or bool(a.bare_app_elf),
+        "app_bare_metal": bool(a.bare_app_elf),
         "wisp_boot_observe_only": a.observe,
     }
     for item in a.file:

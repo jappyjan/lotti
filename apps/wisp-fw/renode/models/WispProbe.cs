@@ -8,6 +8,10 @@
 //   probe CutAtMilestone "<name>" <k> cut power when that milestone is hit for the k-th time
 //   probe Report                      all milestone lines
 //   probe Dump <addr> <len> @<file>   save bus memory (MRAM) to a file
+//   probe StrictFrom "<name>"         arm the strict record (WispTrace.cs, WispStrict): it records
+//                                     from each hit of that milestone (Wisp Boot's entry) until
+//                                     the next reset
+//   probe StrictDump                  the record, one line per distinct access
 using System;
 using System.Collections.Generic;
 using Antmicro.Renode.Core;
@@ -65,6 +69,18 @@ namespace Antmicro.Renode.Peripherals.Wisp
             System.IO.File.WriteAllBytes(path, machine.SystemBus.ReadBytes(addr, len));
         }
 
+        public void StrictFrom(string name)
+        {
+            WispStrict.Clear();
+            WispStrict.FromMilestone = name;
+            WispStrict.Armed = true;
+        }
+
+        public string StrictDump()
+        {
+            return WispStrict.Dump();
+        }
+
         public string Report()
         {
             return string.Join("\n", lines);
@@ -77,6 +93,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             if(machine.SystemBus.ReadDoubleWord(0x438200) != 0x31534257)
             {
                 return;
+            }
+            if(WispStrict.Armed && WispStrict.FromMilestone == name)
+            {
+                WispStrict.InWisp = true;
             }
             var pc = (ulong)cpu.PC;
             var lr = cpu.GetRegister(14).RawValue;

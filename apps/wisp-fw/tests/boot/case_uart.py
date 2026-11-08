@@ -23,7 +23,7 @@ READ_MAX = 17
 REQUEST_LENGTHS = (9, 25, 32)
 REPLY_LENGTHS = (13, 21, 29, 32)
 
-STAGES = {1: "kernel", 2: "hal", 3: "bt-start", 4: "bt-up", 5: "bt-failed"}
+STAGES = {1: "kernel", 2: "hal", 3: "bt-start", 4: "bt-up", 5: "bt-failed", 6: "bare-metal"}
 FLAGS = {0x01: "battery", 0x02: "vbus", 0x04: "charging", 0x08: "pmic-wdt", 0x10: "boot-services",
          0x20: "boot-status", 0x40: "boot-observe", 0x80: "session"}
 
@@ -124,19 +124,99 @@ def decode_status(body: bytes) -> dict:
     }
 
 
-# Wisp Boot's status block (src/boot/wisp_boot_status.h), 612 bytes.
-BOOT_STATUS_SIZE = 612
+# --- diagnostics (rung4.md, "W24 result and analysis", D1/D2; src/boot/wisp_diag.h) -------------
+
+OP_BOOTREP = 0x04
+BLOCK_CLOCK, BLOCK_DIAG = 3, 4  # stage-0: its clock measurements, this boot's diagnostics record
+IMAGE_KIND_STAGE0 = 16
+RSTGEN_STAT_BITS = {0x1: "external", 0x2: "power-on", 0x4: "brown-out", 0x8: "sw-por", 0x10: "sw-poi",
+                    0x20: "debugger", 0x40: "watchdog", 0x80: "bo-unregulated", 0x100: "bo-vddc",
+                    0x200: "bo-vddf", 0x400: "bo-vdds", 0x1000: "sysresetreq"}
+DIAG_STAGES = {0x00: "none", 0x10: "boot-start", 0x11: "boot-pmic-kick", 0x12: "boot-window",
+               0x13: "boot-window-end", 0x14: "boot-nor", 0x15: "boot-mounted", 0x16: "boot-inputs",
+               0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1F: "boot-fault",
+               0x40: "s0-reset", 0x41: "s0-init", 0x42: "s0-uart", 0x43: "s0-feed", 0x44: "s0-kick",
+               0x45: "s0-loop", 0x46: "s0-measure", 0x47: "s0-reset-request", 0x4F: "s0-fault"}
+REPORT_SOURCES = {0: "wisp-boot", 1: "app"}
+REPORT_FLAGS = {0x01: "prev-valid", 0x02: "prev-fault", 0x04: "kick-ok", 0x08: "stimer-xt"}
+DIAG_MAGIC = 0x47414457  # "WDAG"
+DIAG_FMT = "<IHHIIIHHIIIIIIIIII"
+DIAG_SIZE = struct.calcsize(DIAG_FMT)  # 64
+CLOCK_FMT = "<BBBBIIIIIIIIIII"
+CLOCK_SIZE = struct.calcsize(CLOCK_FMT)  # 48
+TIMEBASES = {1: "stimer-xt", 2: "systick-assumed-96MHz"}
+CLOCK_RESULTS = {0: "ok", 1: "watchdog COUNT never moved", 2: "16 ticks took over 3 s", 3: "not measured yet"}
+
+
+def bootrep_request() -> bytes:
+    return host_request(OP_BOOTREP)
+
+
+def rstgen_stat_names(v: int) -> list[str]:
+    return [n for bit, n in RSTGEN_STAT_BITS.items() if v & bit]
+
+
+def diag_stage(code: int) -> str:
+    return DIAG_STAGES.get(code, f"{code:#04x}")
+
+
+def decode_boot_report(data: bytes) -> dict:
+    """The 22 data bytes of a BOOTREP reply: why the previous boot ended and how far it got."""
+    src, flags, boot, prev_stage, stat, ms, pc, lr, cfsr = struct.unpack_from("<BBBBIHIII", data, 0)
+    prev_valid = bool(flags & 0x01)
+    return {"source": REPORT_SOURCES.get(src, src), "flags": [n for bit, n in REPORT_FLAGS.items() if flags & bit],
+            "boot": boot, "reset_cause": stat, "reset_cause_names": rstgen_stat_names(stat),
+            "prev_stage": diag_stage(prev_stage) if prev_valid else None,
+            "prev_stage_ms": (None if ms == 0xFFFF else ms) if prev_valid else None,
+            "prev_fault": {"pc": pc, "lr": lr, "cfsr": cfsr} if flags & 0x02 else None}
+
+
+def decode_diag_record(b: bytes, check: bool = True) -> dict:
+    """wisp_diag.h's 64-byte record. With check, a bad magic or CRC raises ValueError."""
+    (magic, version, size, boots, stat, stimer_start, stage, flags, stage_ticks, pc, lr, xpsr, cfsr, hfsr, bfar,
+     mmfar, exc_return, crc) = struct.unpack(DIAG_FMT, b[:DIAG_SIZE])
+    valid = magic == DIAG_MAGIC and version == 1 and size == DIAG_SIZE and zlib.crc32(b[:60]) & 0xFFFFFFFF == crc
+    if check and not valid:
+        raise ValueError(f"diagnostics record not valid (magic {magic:#x}, v{version}, size {size})")
+    out = {"valid": valid, "boots": boots, "reset_cause": stat, "reset_cause_names": rstgen_stat_names(stat),
+           "stimer_start": stimer_start, "stage": diag_stage(stage), "stage_ticks": stage_ticks,
+           "stage_ms": stage_ticks * 1000 // 32768, "fault": None}
+    if flags & 1:
+        out["fault"] = {"pc": pc, "lr": lr, "xpsr": xpsr, "cfsr": cfsr, "hfsr": hfsr, "bfar": bfar, "mmfar": mmfar,
+                        "exc_return": exc_return}
+    return out
+
+
+def decode_clock(b: bytes) -> dict:
+    """stage-0's clock block (READ block 3, version 1, 48 bytes)."""
+    (version, timebase, count, result, stcfg, wdt_cfg, probe, xt_ticks, core_cycles, lfrc_mhz, core_hz, wdt_ms,
+     lfrc_min, lfrc_max, kick_last) = struct.unpack(CLOCK_FMT, b[:CLOCK_SIZE])
+    if version != 1:
+        raise ValueError(f"clock block version {version}")
+    return {"timebase": TIMEBASES.get(timebase, timebase), "measurements": count,
+            "result": CLOCK_RESULTS.get(result, result), "stcfg": stcfg, "stimer_clksel": stcfg & 0xF,
+            "wdt_cfg": wdt_cfg, "wdt_resval": (wdt_cfg >> 8) & 0xFF, "wdt_clksel": (wdt_cfg >> 24) & 7,
+            "stimer_probe_ticks": probe, "window_xt_ticks": xt_ticks, "window_core_cycles": core_cycles,
+            "lfrc_hz": lfrc_mhz / 1000, "core_hz": core_hz, "wdt_period_ms": wdt_ms,
+            "lfrc_hz_min": lfrc_min / 1000, "lfrc_hz_max": lfrc_max / 1000, "pmic_kick_last": kick_last}
+
+
+# Wisp Boot's status block (apps/wisp-fw/src/boot/wisp_boot_status.h): version 1 is 612 bytes
+# (native-0's Wisp Boot), version 2 692 (adds the diagnostics before the CRC).
+BOOT_STATUS_SIZE_V1 = 612
+BOOT_STATUS_SIZE = 692
+BOOT_STATUS_SIZES = {1: BOOT_STATUS_SIZE_V1, 2: BOOT_STATUS_SIZE}
 ACTIONS = {0: "run-app", 1: "rescue", 2: "run-app-degraded"}
 
 
 def decode_boot_status(b: bytes) -> dict:
-    if len(b) != BOOT_STATUS_SIZE:
+    if len(b) not in BOOT_STATUS_SIZES.values():
         raise ValueError(f"boot status is {len(b)} bytes")
     magic, version, size, build, nor_id, nor_res, mount, rec_res = struct.unpack_from("<IHHIIiii", b, 0)
-    if magic != 0x54534257 or version != 1 or size != BOOT_STATUS_SIZE:
+    if magic != 0x54534257 or BOOT_STATUS_SIZES.get(version) != size or size != len(b):
         raise ValueError(f"boot status header {magic:#x} v{version} {size}")
-    crc = struct.unpack_from("<I", b, 608)[0]
-    if zlib.crc32(b[:608]) & 0xFFFFFFFF != crc:
+    crc = struct.unpack_from("<I", b, size - 4)[0]
+    if zlib.crc32(b[:size - 4]) & 0xFFFFFFFF != crc:
         raise ValueError("boot status CRC mismatch")
     record = b[28:44]
     stage, staging_present, rescue_ok, action, would, reason, inv_count, inv_trunc = b[44:52]
@@ -148,15 +228,22 @@ def decode_boot_status(b: bytes) -> dict:
         size_, crc_, res = struct.unpack_from("<IIi", b, o + 32)
         inv.append({"name": name, "size": size_, "crc": crc_, "result": res})
     confirm_calls, confirm_result = struct.unpack_from("<Ii", b, 600)
-    return {
-        "observe": bool(build & 1), "log": bool(build & 2), "nor_id": nor_id, "nor_result": nor_res,
-        "mount_result": mount, "record_result": rec_res, "record": record.hex(), "stage": stage,
+    out = {
+        "version": version, "observe": bool(build & 1), "log": bool(build & 2), "nor_id": nor_id,
+        "nor_result": nor_res, "mount_result": mount, "record_result": rec_res, "record": record.hex(), "stage": stage,
         "staging_present": bool(staging_present), "staging_id": staging_id, "staging_size": staging_size,
         "rescue_ok": bool(rescue_ok), "rescue_id": rescue_id, "rescue_size": rescue_size,
         "action": ACTIONS.get(action, action), "would_action": ACTIONS.get(would, would), "reason": reason,
         "inventory": inv, "inventory_truncated": bool(inv_trunc), "inventory_result": inv_res,
         "confirm_calls": confirm_calls, "confirm_result": confirm_result,
     }
+    if version >= 2:
+        stat, kick, answers, window_ms, prev_valid, uart, clksel, _res = struct.unpack_from("<IIHHBBBB", b, 608)
+        out.update(rstgen_stat=stat, reset_cause_names=rstgen_stat_names(stat), pmic_kick=kick,
+                   window_answers=answers, window_ms=window_ms, uart_result=uart, stimer_clksel=clksel,
+                   prev_valid=bool(prev_valid),
+                   prev=decode_diag_record(b[624:688], check=False) if prev_valid else None)
+    return out
 
 
 class WispStatus:

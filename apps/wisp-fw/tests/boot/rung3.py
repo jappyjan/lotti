@@ -21,7 +21,16 @@ cuts along the rescue path. Every case asserts an end state:
          and reads (the NOR model's code window) and no MRAM write happens at all; its status
          block reports what it found (NOR id, staging, rescue.bin, the /firmware inventory with
          sizes and CRCs, and the decision the fallback build would take). With the real app the
-         case-UART status (docs/wisp/case-uart.md) is queried too.
+         case-UART status (docs/wisp/case-uart.md) is queried too. With stage-0 (the bare-metal app of
+         rung4.md W24b) the whole diagnostics path is exercised: its clock block, the boot report from
+         the app, a case-UART RESET, and the boot report from Wisp Boot's window on the next boot.
+
+Every case also checks, since W24 (docs/wisp/rung4.md, "W24 result and analysis"): Wisp Boot's only
+PMIC write is the watchdog kick 07 04 01 (PC-attributed, WispPmicWdt PmicPcLog), it kicks once per
+boot, and it makes no write to a power, clock or trim register that no model acts on (the strict
+record, tests/boot/strict.py). The real app's such writes are listed in the table, not failed on
+here (wisp-fw:w18-test fails native-0 on them); stage-0 must make none. The watchdog's LFRC runs at
+900 Hz (WispWdt), so Wisp Boot's watchdog is about 9.1 s here, as on silicon.
 
 Two suites (--suite): `fallback` (the Wisp Boot that rescues: the 26 rung-3 cases plus the real app
 behind it) and `observe` (native-0's Wisp Boot). Two bootloaders (--bootloader): `stock` (the
@@ -50,6 +59,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import case_uart  # noqa: E402
+import strict  # noqa: E402
 sys.path.insert(0, str(HERE.parents[1] / "scripts"))
 import pmic_baseline  # noqa: E402
 APP_DIR = HERE.parents[1]
@@ -278,6 +288,7 @@ class Case:
     min_boots: int = 1                # OBSERVE: Wisp Boot runs before the run ends
     rdid: str | None = None           # RDID as Wisp Boot sees it (NOR model code window)
     query: bool = False               # case-UART queries once the real app is up (last boot)
+    retain: bool = False              # Wisp Boot's diagnostics record survives warm resets (rstgen RetainRange)
     status: dict = field(default_factory=dict)  # expected status-block fields (OBSERVE, NATIVE)
     result: dict = field(default_factory=dict)
 
@@ -332,6 +343,17 @@ def observe_cases() -> list[Case]:
              status={**common, "rescue_ok": False, "would_action": "run-app"}),
         Case("obs-erased", "no app behind Wisp Boot (slot erased): it resets at once, every boot",
              "erased", "OBSERVE", flag_initially_set=False, staging="stock", min_boots=5, budget=60),
+        Case("obs-diag-wdt", "app never feeds the watchdog, SRAM kept across warm resets: each boot's status "
+             "carries the previous boot's diagnostics record (D1): it got to the hand-off, the watchdog reset it",
+             "no_feed", "OBSERVE", flag_initially_set=False, staging="stock", rescue="corrupt", min_boots=3,
+             budget=60, retain=True,
+             status={**common, "rescue_ok": False, "prev_valid": True, "prev_stage": "boot-handoff",
+                     "reset_cause_names": ["watchdog"]}),
+        Case("obs-stage-0", "stage-0 (rung4.md W24b) as install-wisp leaves it: IDENT, its clock measurement, the "
+             "boot report, a case-UART RESET, then the boot report from Wisp Boot's window (D1, D2)",
+             "stage0", "OBSERVE", flag_initially_set=False, staging="stock", rescue="missing", firmware=True,
+             min_boots=1, query=True, budget=60, retain=True,
+             status={**common, "rescue_ok": False, "would_action": "run-app", "reason": 1}),
         Case("obs-nor-gd", "Wisp Boot reads another NOR id (GD25LE256H, C8 60 19): no filesystem, app runs",
              "real", "OBSERVE", flag_initially_set=False, staging="stock", firmware=True, rdid="c8 60 19",
              min_boots=1, budget=40,
@@ -411,6 +433,8 @@ class Harness:
         apps = ["good", "hang", "crash_reset", "crash_after", "no_feed", "erased"]
         if (self.build / "native_real.bin").exists():
             apps.append("real")
+        if (self.build / "native_stage0.bin").exists():
+            apps.append("stage0")
         for app in apps:
             self.payloads[app] = wisp_payload(self.build / f"native_{app}.bin", self.work)
 
@@ -468,6 +492,9 @@ class Harness:
             for name in ("wisp_boot_main", "rescue_copy", "image_verify", "hw_flag_set_install", "hw_jump"):
                 if name in self.syms:
                     r.cmd(f'probe Milestone {self.syms[name]:#x} "{name}"')
+            r.cmd('probe StrictFrom "wisp_boot_main"')
+            if case.retain:
+                r.cmd("rstgen RetainRange 0x20370000 0x40")
             if case.cut_nor_op is not None:
                 r.cmd(f"probe CutAtNorOp {case.cut_nor_op}")
             if case.cut_milestone:
@@ -494,6 +521,9 @@ class Harness:
             res["nor_watched"] = r.cmd("nor WatchedLog").splitlines()
             res["nor_watched_writes"] = int(r.cmd("nor WatchedWrites").split()[0], 0)
             res["pmic_log"] = r.cmd("pmicwdt PmicLog")
+            res["pmic_pc_log"] = r.cmd("pmicwdt PmicPcLog")
+            res["strict"] = strict.parse(r.cmd("probe StrictDump"))
+            (d / "strict.txt").write_text(r.cmd("probe StrictDump") + "\n")
             res["pmic_expiries"] = int(r.cmd("pmicwdt Expiries").split()[0], 0)
             (d / "pmic.log").write_text(res["pmic_log"] + "\n")
             res["boot_status_raw"] = self.boot_status(r, d)
@@ -556,6 +586,87 @@ class Harness:
                                                      for k, v in out.items()}, indent=2, default=str))
         return out
 
+    def query_stage0(self, r: Renode, d: Path) -> dict:
+        """stage-0 over the case UART: IDENT, its blocks, the boot report; then RESET, and the boot
+        report from Wisp Boot's window right after the next Wisp Boot entry."""
+        def frames() -> list[str]:
+            return r.cmd("uart2 FrameLog").split()
+
+        def ask(data: bytes, tries: int = 20, step: str = "0.05") -> bytes:
+            before = len(frames())
+            r.cmd(f'uart2 Inject "{data.hex()}"')
+            for _ in range(tries):
+                r.cmd(f'emulation RunFor "{step}"')
+                got = frames()
+                if len(got) > before:
+                    return bytes.fromhex(got[before])
+            raise RuntimeError(f"no case-UART reply to {data.hex()}")
+        out = {}
+        st, data = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
+        out["ident"] = case_uart.decode_ident(data) if st == 0 else {"code": st}
+        raw = case_uart.read_block(ask, case_uart.BLOCK_STATUS)
+        out["status"] = case_uart.decode_status(raw) if raw else None
+        out["boot_block"] = case_uart.read_block(ask, case_uart.BLOCK_BOOT) or b""
+        # Its first measurement starts 2 s after it started and takes about 1.1 s.
+        for _ in range(12):
+            clock = case_uart.decode_clock(case_uart.read_block(ask, case_uart.BLOCK_CLOCK))
+            if clock["measurements"]:
+                break
+            r.cmd('emulation RunFor "0.5"')
+        out["clock"] = clock
+        out["diag"] = case_uart.decode_diag_record(case_uart.read_block(ask, case_uart.BLOCK_DIAG))
+        st, data = case_uart.decode_reply(ask(case_uart.bootrep_request()), case_uart.OP_BOOTREP)
+        out["report_app"] = case_uart.decode_boot_report(data) if st == 0 else {"code": st}
+        runs = self.boots(r)[0]
+        st, _ = case_uart.decode_reply(ask(case_uart.reset_request()), case_uart.OP_RESET)
+        out["reset_code"] = st
+        for _ in range(200):  # until Wisp Boot's entry on the next boot (0.02 s steps)
+            r.cmd('emulation RunFor "0.02"')
+            if self.boots(r)[0] > runs:
+                break
+        st, data = case_uart.decode_reply(ask(case_uart.bootrep_request(), tries=10, step="0.02"), case_uart.OP_BOOTREP)
+        out["report_boot"] = case_uart.decode_boot_report(data) if st == 0 else {"code": st}
+        r.cmd('emulation RunFor "1"')
+        st, data = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
+        out["ident_after"] = case_uart.decode_ident(data) if st == 0 else {"code": st}
+        (d / "case-uart.json").write_text(json.dumps({k: v.hex() if isinstance(v, bytes) else v
+                                                     for k, v in out.items()}, indent=2, default=str))
+        return out
+
+    def check_stage0(self, res: dict, fails: list[str]) -> str:
+        q = res.get("query") or {}
+        ident, clock, rb, ra = q.get("ident", {}), q.get("clock", {}), q.get("report_boot", {}), q.get("report_app", {})
+        if ident.get("image_kind") != case_uart.IMAGE_KIND_STAGE0 or ident.get("stage") != "bare-metal":
+            fails.append(f"stage-0 IDENT {ident}")
+        st = q.get("status") or {}
+        if not {"boot-services", "boot-status", "boot-observe"} <= set(st.get("flags", [])) or st.get("pmic_kicks", 0) < 1:
+            fails.append(f"stage-0 status {st}")
+        if q.get("boot_block") and q["boot_block"] != res.get("boot_status_raw"):
+            pass  # the second boot resealed it; compared through the decoded fields below
+        if clock.get("result") != "ok" or clock.get("timebase") != "stimer-xt" or \
+                not 850 <= clock.get("lfrc_hz", 0) <= 960 or not 8000 <= clock.get("wdt_period_ms", 0) <= 10000:
+            fails.append(f"stage-0 clock {clock}")
+        diag = q.get("diag", {})
+        if diag.get("stage") not in ("s0-loop", "s0-measure"):
+            fails.append(f"stage-0 diag record {diag}")
+        if ra.get("source") != "app" or "kick-ok" not in ra.get("flags", []):
+            fails.append(f"the app's boot report {ra}")
+        if q.get("reset_code") != 0:
+            fails.append(f"RESET reply {q.get('reset_code')}")
+        if rb.get("source") != "wisp-boot" or rb.get("prev_stage") != "s0-reset-request" or \
+                rb.get("reset_cause_names") != ["sw-por"] or "prev-valid" not in rb.get("flags", []):
+            fails.append(f"Wisp Boot's boot report after RESET {rb}")
+        if (q.get("ident_after") or {}).get("image_kind") != case_uart.IMAGE_KIND_STAGE0:
+            fails.append(f"stage-0 did not come back after RESET: {q.get('ident_after')}")
+        app = [e for e in strict.pmic_writes(res["pmic_pc_log"]) if not e["wisp_boot"]]
+        if any(e["bytes"] != strict.KICK for e in app) or len(app) < 3:
+            fails.append(f"stage-0 PMIC writes {sorted({e['bytes'] for e in app})} ({len(app)})")
+        if res["wdt_bites"]:
+            fails.append(f"{res['wdt_bites']} watchdog bites with stage-0")
+        return (f"stage-0: kind {ident.get('image_kind')}, {len(app)} PMIC kicks, LFRC {clock.get('lfrc_hz')} Hz "
+                f"(watchdog {clock.get('wdt_period_ms')} ms), core {clock.get('core_hz')} Hz; after RESET Wisp Boot "
+                f"reported prev {rb.get('prev_stage')} {rb.get('prev_stage_ms')} ms, cause {rb.get('reset_cause_names')}")
+
     def drive(self, r: Renode, case: Case, d: Path) -> dict:
         uart = d / "uart1.txt"
         t = 0.0
@@ -609,7 +720,9 @@ class Harness:
                         (case.app != "real" or (app_up and text.count(APP_BANNER) >= handoffs)) and \
                         (handoffs >= runs or case.app == "erased"):
                     break
-        if case.query:
+        if case.query and case.app == "stage0":
+            out["query"] = self.query_stage0(r, d)
+        elif case.query:
             out["query"] = self.query(r, d)
             r.cmd('emulation RunFor "1"')
         out["virtual_s"] = t
@@ -620,12 +733,8 @@ class Harness:
     def check_pmic(self, res: dict, fails: list[str]) -> str:
         """The real app: stock's arming writes, a kick at least every 1.6 s once it started, nothing
         else written to the PMIC (rung4.md G12, G27), and no PMIC power cycle."""
-        writes = []
-        for line in res["pmic_log"].splitlines():
-            m = re.match(r"(\d+) ms write (.*)", line.strip())
-            if m:
-                writes.append((int(m[1]), m[2].strip()))
-        data = [(t, w) for t, w in writes if len(w.split()) > 2]   # 2 bytes = a read's address phase
+        # The app's data writes (PmicPcLog has data writes only; Wisp Boot's kicks are checked in check()).
+        data = [(e["ms"], e["bytes"]) for e in strict.pmic_writes(res["pmic_pc_log"]) if not e["wisp_boot"]]
         bad = sorted({w for _, w in data if w not in PMIC_ALLOWED})
         if bad:
             fails.append(f"PMIC writes outside the allowlist: {bad}")
@@ -675,6 +784,8 @@ class Harness:
                 fails.append(f"status inventory {got_fw} != {fw}")
             if st["inventory_result"] != (0 if fw else st["inventory_result"]):
                 fails.append(f"inventory result {st['inventory_result']}")
+        if "prev_stage" in want:
+            st = {**st, "prev_stage": (st.get("prev") or {}).get("stage")}
         for k, v in want.items():
             if st.get(k) != v:
                 fails.append(f"status {k} = {st.get(k)!r}, want {v!r}")
@@ -728,7 +839,15 @@ class Harness:
             fails.append(f"Wisp code wrote MRAM other than the flag: {bad}")
         boots = sum(l.startswith("wisp_boot_main ") for l in res["milestones"])
         handoffs = sum(l.startswith("hw_jump ") for l in res["milestones"])
-        detail = (f"{len(res['resets'])} resets, {boots} Wisp Boot runs, {res['wdt_bites']} WDT bites, "
+        wb_kicks, wb_other = strict.wisp_boot_pmic(res["pmic_pc_log"])
+        if wb_other:
+            fails.append(f"Wisp Boot wrote the PMIC other than the kick: {wb_other}")
+        if not boots - 1 <= wb_kicks <= boots:  # one kick per run; a power cut may land before it
+            fails.append(f"{wb_kicks} PMIC kicks by Wisp Boot in {boots} runs")
+        wb_strict = strict.unallowed_writes(res["strict"], owners=("wisp-boot",))
+        if wb_strict:
+            fails.append(f"Wisp Boot wrote unmodelled power/clock/trim registers: {strict.describe(wb_strict)}")
+        detail = (f"{len(res['resets'])} resets, {boots} Wisp Boot runs ({wb_kicks} PMIC kicks), {res['wdt_bites']} WDT bites, "
                   f"{res['virtual_s']:.0f} s virtual")
         extra = []
         if case.expect == "STOCK":
@@ -795,7 +914,15 @@ class Harness:
                     fails.append(f"{res['wdt_bites']} watchdog bites: the app does not feed Wisp Boot's WDT")
                 if boots != case.cuts_running + 1:
                     fails.append(f"{boots} Wisp Boot runs")
+            if case.app == "stage0":
+                extra.append(self.check_stage0(res, fails))
+                app_strict = strict.unallowed_writes(res["strict"], owners=("app", "itcm"))
+                if app_strict:
+                    fails.append(f"stage-0 wrote unmodelled power/clock/trim registers: {strict.describe(app_strict)}")
             if case.app == "real":
+                app_strict = strict.unallowed_writes(res["strict"], owners=("app", "itcm"))
+                extra.append(f"strict: the app wrote {len(app_strict)} unmodelled power/clock/trim register values "
+                             f"(listed in strict.txt; wisp-fw:w18-test fails native-0 on them)")
                 if uart.count(APP_BANNER) < max(1, case.cuts_running + 1):
                     fails.append(f"the app booted {uart.count(APP_BANNER)} times")
                 if case.expect == "OBSERVE" and res["wdt_bites"]:
@@ -803,7 +930,7 @@ class Harness:
                 extra.append(self.check_pmic(res, fails))
             if case.status:
                 extra.append(self.check_status(case, res, fails))
-            if case.query:
+            if case.query and case.app != "stage0":
                 extra.append(self.check_query(case, res, fails))
             kind = "observe-only Wisp Boot" if case.expect == "OBSERVE" else "Wisp Boot"
             state = (f"{kind} ran {boots}x, {'no app (reset at once)' if case.app == 'erased' else 'the app ran each time'}; "
