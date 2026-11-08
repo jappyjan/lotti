@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """install-wisp (docs/wisp/rung4.md §3, G1, decision R4-1) against fakes. No hardware.
 
-The repository's pin table is empty and R4-1 is not approved, so the real command refuses every
-image before it touches the case (checked first). Every other test pins a synthetic image for
-its duration (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small "app", an ELF whose segments
-are those bytes, a map file, and a Wisp Boot entry with both rung-3 suites.
+R4-1 is approved (2026-11-08), but the repository's pin tables stay empty until W23, so the
+real command refuses every image before it touches the case (checked first). Every other test
+pins a synthetic image for its duration (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small
+"app", an ELF whose segments are those bytes, a map file, and a Wisp Boot entry with both
+rung-3 suites.
 """
 
 import hashlib
@@ -126,9 +127,12 @@ def running_app():
 
 
 class Gate(unittest.TestCase):
-    def test_the_pin_table_stays_empty_until_r4_1(self):
-        if not pins.R4_1_APPROVED:
-            self.assertEqual(pins.WISP_IMAGES, {})
+    def test_r4_1_is_approved_but_the_pin_tables_stay_empty_until_w23(self):
+        # Jan approved R4-1 on 2026-11-08 (commit 9181c94). Pinning an image or a Wisp Boot is W23's
+        # reviewed commit, not this one: until then both tables are empty and every image is refused.
+        self.assertTrue(pins.R4_1_APPROVED)
+        self.assertEqual(pins.WISP_IMAGES, {})
+        self.assertEqual(pins.WISP_BOOT_PASSED, {})
 
     def test_the_real_command_refuses_before_touching_the_case(self):
         with tempfile.TemporaryDirectory() as tmp:
