@@ -392,8 +392,7 @@ Written on t3-worker on 2026-11-08, after W24. **No hardware was touched for thi
 - **Consequence while native:** after the power cycle the charger is off and the PMIC watchdog is disarmed. BUCK2 also really moved: `BUCK2.VOUT_STAT 0x15→0x08` is the rail's status, not only its setting [C, W24 snapshot]. What BUCK2 and the load switches supply on the G2 is [?].
   - A temple left on native-0 in this state does not charge in the case [I]. It drains in its 10 s reboot loop, and only the Apollo watchdog resets it.
   - Stock programs the PMIC at boot (Renode: 71 distinct PMIC writes after a release), so `recover` restores it [I].
-  - **`recover` is therefore urgent.** Rule 6's battery check cannot be met the usual way: there is no stock to read 80 % in the Even app, and no Wisp status to read 3,900 mV. Starting `recover` needs Jan's explicit decision on the battery (for example a waiver, given that the temple was full at 16:56 UTC and the session's draw is small), recorded with the go.
-  - **After the return to stock,** run `pmic-read --compare` against W21 once stock has booted. Expect 0 differences.
+  - **Done, 2026-11-08 17:46–18:59 UTC:** `recover` ran on Jan's go ("Both temples cold. You may go on."; the temple had been full at 16:56 UTC) in one session, final CRC `d9864941`. `pmic-read --compare` against W21 about 60 s after the stock boot showed **0 config, 0 watchdog and 0 status differences** [C]: stock reprograms the PMIC at boot, as expected. Both temples advertised at 19:01 UTC (hardware log, W24 row).
   - The next images keep the charger off after a PMIC power cycle too, unless they prevent the power cycle itself (fix plan, item 3). The PMIC's own `ERRLOG` (reset cause) would have confirmed the watchdog reset directly. `pmic_read.bin` does not read it yet (its offsets were never checked, recovery.md).
 
 #### (a) The reboot loop: what the evidence says
