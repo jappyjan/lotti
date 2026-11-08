@@ -80,7 +80,7 @@ RAM              0x20000000         0x00010000         xrw
 Linker script and memory map
 
 
-.text           0x00448000     0x1348
+.text           0x00448000     0x1410
  *(.vectors)
  .vectors       0x00448000       0x40 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
                 0x00448000                stage0_vectors
@@ -109,109 +109,110 @@ Linker script and memory map
  .text.fill_status
                 0x00448220       0xb8 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .text.extra_block
-                0x004482d8       0xd4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004482d8       0xd8 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .text.boot_report
-                0x004483ac       0xe0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004483b0       0xe0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .text.wisp_diag_mark
-                0x0044848c       0x34 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x00448490       0x34 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .text.measure_done
-                0x004484c0       0x38 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004484c4       0x38 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .text.stage0_start
-                0x004484f8      0x390 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
-                0x004484f8                stage0_start
+                0x004484fc      0x3e4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004484fc                stage0_start
  .text.stage0_fault_record
-                0x00448888       0x94 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
-                0x00448888                stage0_fault_record
+                0x004488e0       0x94 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004488e0                stage0_fault_record
  .text.boot_pmic_kick
-                0x0044891c      0x108 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
-                0x0044891c                boot_pmic_kick
- .text.boot_uart_init
-                0x00448a24       0x64 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
-                0x00448a24                boot_uart_init
+                0x00448974      0x158 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+                0x00448974                boot_pmic_kick
  .text.boot_uart_getc
-                0x00448a88       0x28 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
-                0x00448a88                boot_uart_getc
+                0x00448acc       0x28 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00448acc                boot_uart_getc
  .text.boot_uart_write
-                0x00448ab0       0x28 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
-                0x00448ab0                boot_uart_write
+                0x00448af4       0x28 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00448af4                boot_uart_write
  .text.boot_uart_flush
-                0x00448ad8       0x20 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
-                0x00448ad8                boot_uart_flush
- .text.put32    0x00448af8       0x10 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448b1c       0x20 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00448b1c                boot_uart_flush
+ .text.boot_uart_init
+                0x00448b3c       0x84 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00448b3c                boot_uart_init
+ .text.put32    0x00448bc0       0x10 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
  .text.wisp_case_frame
-                0x00448b08       0x46 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00448b08                wisp_case_frame
- .text.reply    0x00448b4e       0x6e CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448bd0       0x46 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448bd0                wisp_case_frame
+ .text.reply    0x00448c16       0x6e CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
  .text.wisp_case_version_frame
-                0x00448bbc       0x34 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00448bbc                wisp_case_version_frame
+                0x00448c84       0x34 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448c84                wisp_case_version_frame
  .text.wisp_case_status_encode
-                0x00448bf0       0xb4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00448bf0                wisp_case_status_encode
+                0x00448cb8       0xb4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448cb8                wisp_case_status_encode
  .text.wisp_case_rx_init
-                0x00448ca4        0x6 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00448ca4                wisp_case_rx_init
- *fill*         0x00448caa        0x2 
+                0x00448d6c        0x6 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448d6c                wisp_case_rx_init
+ *fill*         0x00448d72        0x2 
  .text.wisp_case_rx_byte
-                0x00448cac      0x2a4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00448cac                wisp_case_rx_byte
- .text          0x00448f50       0x30 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_aeabi_uldivmod.o)
-                0x00448f50                __aeabi_uldivmod
+                0x00448d74      0x2a4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00448d74                wisp_case_rx_byte
+ .text          0x00449018       0x30 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_aeabi_uldivmod.o)
+                0x00449018                __aeabi_uldivmod
  .text.__udivmoddi4
-                0x00448f80      0x338 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
-                0x00448f80                __udivmoddi4
- .text          0x004492b8        0x4 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_dvmd_tls.o)
-                0x004492b8                __aeabi_ldiv0
-                0x004492b8                __aeabi_idiv0
- .text.memcmp   0x004492bc       0x20 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcmp.o)
-                0x004492bc                memcmp
- .text.memset   0x004492dc       0x10 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memset.o)
-                0x004492dc                memset
- .text.memcpy   0x004492ec       0x1a /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcpy-stub.o)
-                0x004492ec                memcpy
+                0x00449048      0x338 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
+                0x00449048                __udivmoddi4
+ .text          0x00449380        0x4 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_dvmd_tls.o)
+                0x00449380                __aeabi_ldiv0
+                0x00449380                __aeabi_idiv0
+ .text.memcmp   0x00449384       0x20 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcmp.o)
+                0x00449384                memcmp
+ .text.memset   0x004493a4       0x10 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memset.o)
+                0x004493a4                memset
+ .text.memcpy   0x004493b4       0x1a /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcpy-stub.o)
+                0x004493b4                memcpy
  *(.rodata*)
  .rodata.fill_status.str1.1
-                0x00449306       0x16 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
-                                 0x11 (size before relaxing)
- .rodata.CSWTCH.70
-                0x0044931c        0x8 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .rodata.ops.1  0x00449324       0x14 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .rodata.ver.2  0x00449338        0x5 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x004493ce       0x10 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                                  0xb (size before relaxing)
+ .rodata.CSWTCH.73
+                0x004493de        0x8 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ *fill*         0x004493e6        0x2 
+ .rodata.ops.1  0x004493e8       0x14 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .rodata.ver.2  0x004493fc        0x5 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .rodata.wisp_case_rx_byte.str1.1
-                0x0044933d        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00449401        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
                                   0x5 (size before relaxing)
  .rodata.marker
-                0x0044933d        0x3 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00449401        0x3 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
  .rodata.stock_version_query
-                0x00449340        0x5 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
-                0x00449348                        . = ALIGN (0x8)
- *fill*         0x00449345        0x3 
+                0x00449404        0x5 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00449410                        . = ALIGN (0x8)
+ *fill*         0x00449409        0x7 
 
-.glue_7         0x00449348        0x0
- .glue_7        0x00449348        0x0 linker stubs
+.glue_7         0x00449410        0x0
+ .glue_7        0x00449410        0x0 linker stubs
 
-.glue_7t        0x00449348        0x0
- .glue_7t       0x00449348        0x0 linker stubs
+.glue_7t        0x00449410        0x0
+ .glue_7t       0x00449410        0x0 linker stubs
 
-.vfp11_veneer   0x00449348        0x0
- .vfp11_veneer  0x00449348        0x0 linker stubs
+.vfp11_veneer   0x00449410        0x0
+ .vfp11_veneer  0x00449410        0x0 linker stubs
 
-.v4_bx          0x00449348        0x0
- .v4_bx         0x00449348        0x0 linker stubs
+.v4_bx          0x00449410        0x0
+ .v4_bx         0x00449410        0x0 linker stubs
 
-.iplt           0x00449348        0x0
- .iplt          0x00449348        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+.iplt           0x00449410        0x0
+ .iplt          0x00449410        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
 
-.ARM.exidx      0x00449348        0x8
+.ARM.exidx      0x00449410        0x8
  *(.ARM.exidx*)
  .ARM.exidx.text.__udivmoddi4
-                0x00449348        0x8 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
-                0x00449350                        __data_load = LOADADDR (.data)
+                0x00449410        0x8 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
+                0x00449418                        __data_load = LOADADDR (.data)
 
-.rel.dyn        0x00449350        0x0
- .rel.iplt      0x00449350        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+.rel.dyn        0x00449418        0x0
+ .rel.iplt      0x00449418        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
 
-.data           0x20000000       0x30 load address 0x00449350
+.data           0x20000000       0x30 load address 0x00449418
                 0x20000000                        __data_start = .
  *(.data*)
  .data.m_next   0x20000000        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
@@ -219,10 +220,10 @@ Linker script and memory map
                 0x20000030                        . = ALIGN (0x8)
                 0x20000030                        __data_end = .
 
-.igot.plt       0x20000030        0x0 load address 0x00449380
+.igot.plt       0x20000030        0x0 load address 0x00449448
  .igot.plt      0x20000030        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
 
-.bss            0x20000030      0x3b8 load address 0x00449380
+.bss            0x20000030      0x3b8 load address 0x00449448
                 0x20000030                        __bss_start = .
  *(.bss*)
  .bss.out.0     0x20000030       0x20 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
@@ -243,21 +244,20 @@ Linker script and memory map
                 0x20000384        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .bss.m_state   0x20000388        0x1 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .bss.clock_block
-                0x20000389       0x30 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- *fill*         0x200003b9        0x3 
+                0x20000389       0x34 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ *fill*         0x200003bd        0x3 
  .bss.kick_last
-                0x200003bc        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .bss.kick_errors
                 0x200003c0        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .bss.kicks     0x200003c4        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .bss.feeds     0x200003c8        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .bss.kick_errors
+                0x200003c4        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .bss.kicks     0x200003c8        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .bss.feeds     0x200003cc        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .bss.reset_cause
-                0x200003cc        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .bss.t_start   0x200003d0        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .bss.xt        0x200003d4        0x1 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- *fill*         0x200003d5        0x3 
- .bss.last_cvr  0x200003d8        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- *fill*         0x200003dc        0x4 
+                0x200003d0        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .bss.t_start   0x200003d4        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .bss.xt        0x200003d8        0x1 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ *fill*         0x200003d9        0x3 
+ .bss.last_cvr  0x200003dc        0x4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .bss.cycles    0x200003e0        0x8 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  *(COMMON)
                 0x200003e8                        . = ALIGN (0x8)
@@ -289,28 +289,28 @@ END GROUP
 OUTPUT(stage0.elf elf32-littlearm)
 LOAD linker stubs
 
-.debug_info     0x00000000     0x2c04
- .debug_info    0x00000000     0x1aff CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .debug_info    0x00001aff      0x17c CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
- .debug_info    0x00001c7b      0x1db CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
- .debug_info    0x00001e56      0xdae CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+.debug_info     0x00000000     0x2c79
+ .debug_info    0x00000000     0x1b44 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .debug_info    0x00001b44      0x19f CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+ .debug_info    0x00001ce3      0x1e8 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+ .debug_info    0x00001ecb      0xdae CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
-.debug_abbrev   0x00000000      0xb45
+.debug_abbrev   0x00000000      0xb78
  .debug_abbrev  0x00000000      0x640 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .debug_abbrev  0x00000640       0xd7 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
- .debug_abbrev  0x00000717      0x125 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
- .debug_abbrev  0x0000083c      0x309 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+ .debug_abbrev  0x00000640       0xf8 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+ .debug_abbrev  0x00000738      0x137 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+ .debug_abbrev  0x0000086f      0x309 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
 .debug_loclists
-                0x00000000     0x1076
+                0x00000000     0x10e8
  .debug_loclists
-                0x00000000      0x861 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x00000000      0x8d1 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .debug_loclists
-                0x00000861       0x44 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+                0x000008d1       0x46 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
  .debug_loclists
-                0x000008a5       0x6b CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00000917       0x6b CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
  .debug_loclists
-                0x00000910      0x766 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x00000982      0x766 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
 .debug_aranges  0x00000000      0x150
  .debug_aranges
@@ -323,42 +323,42 @@ LOAD linker stubs
                 0x00000100       0x50 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
 .debug_rnglists
-                0x00000000      0x288
+                0x00000000      0x28e
  .debug_rnglists
-                0x00000000      0x15a CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                0x00000000      0x15f CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
  .debug_rnglists
-                0x0000015a       0x14 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+                0x0000015f       0x14 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
  .debug_rnglists
-                0x0000016e       0x3d CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+                0x00000173       0x3e CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
  .debug_rnglists
-                0x000001ab       0xdd CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+                0x000001b1       0xdd CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
-.debug_line     0x00000000     0x1cff
- .debug_line    0x00000000      0xf5c CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .debug_line    0x00000f5c      0x276 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
- .debug_line    0x000011d2      0x29f CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
- .debug_line    0x00001471      0x88e CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+.debug_line     0x00000000     0x1e21
+ .debug_line    0x00000000      0xfef CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+ .debug_line    0x00000fef      0x2d9 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+ .debug_line    0x000012c8      0x2cb CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+ .debug_line    0x00001593      0x88e CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
 
-.debug_str      0x00000000      0xc7b
- .debug_str     0x00000000      0xc7b CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
-                                0xac1 (size before relaxing)
- .debug_str     0x00000c7b        0x0 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
-                                0x27c (size before relaxing)
- .debug_str     0x00000c7b        0x0 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+.debug_str      0x00000000      0xca7
+ .debug_str     0x00000000      0xca7 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
+                                0xae4 (size before relaxing)
+ .debug_str     0x00000ca7        0x0 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+                                0x285 (size before relaxing)
+ .debug_str     0x00000ca7        0x0 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
                                 0x255 (size before relaxing)
- .debug_str     0x00000c7b        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+ .debug_str     0x00000ca7        0x0 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
                                 0x44a (size before relaxing)
 
-.debug_frame    0x00000000      0x400
+.debug_frame    0x00000000      0x410
  .debug_frame   0x00000000      0x1bc CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/stage0/stage0.c.obj
- .debug_frame   0x000001bc       0x28 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
- .debug_frame   0x000001e4       0x58 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
- .debug_frame   0x0000023c       0xf4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
- .debug_frame   0x00000330       0x2c /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_aeabi_uldivmod.o)
- .debug_frame   0x0000035c       0x34 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
- .debug_frame   0x00000390       0x28 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcmp.o)
- .debug_frame   0x000003b8       0x20 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memset.o)
- .debug_frame   0x000003d8       0x28 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcpy-stub.o)
+ .debug_frame   0x000001bc       0x30 CMakeFiles/stage0.elf.dir/stage/boot_pmic.c.obj
+ .debug_frame   0x000001ec       0x60 CMakeFiles/stage0.elf.dir/stage/boot_uart.c.obj
+ .debug_frame   0x0000024c       0xf4 CMakeFiles/stage0.elf.dir/home/jappy/.t3/worktrees/lotti/t3-83947e4e/apps/wisp-fw/src/case/wisp_case_proto.c.obj
+ .debug_frame   0x00000340       0x2c /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_aeabi_uldivmod.o)
+ .debug_frame   0x0000036c       0x34 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/thumb/v8-m.main/nofp/libgcc.a(_udivmoddi4.o)
+ .debug_frame   0x000003a0       0x28 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcmp.o)
+ .debug_frame   0x000003c8       0x20 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memset.o)
+ .debug_frame   0x000003e8       0x28 /nix/store/9d4j0zk0192bhddx5qvvljcz0wv6vbxk-gcc-arm-embedded-15.2.rel1/bin/../lib/gcc/arm-none-eabi/15.2.1/../../../../arm-none-eabi/lib/thumb/v8-m.main/nofp/libc_nano.a(libc_a-memcpy-stub.o)
 
 .debug_line_str
                 0x00000000       0xcf
