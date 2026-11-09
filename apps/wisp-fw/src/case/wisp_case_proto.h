@@ -25,15 +25,19 @@
 
 #define WISP_CASE_MAX_FRAME 32u /* the longest request and reply the relay passes */
 #define WISP_CASE_READ_MAX  17u /* data bytes in one READ reply (L = 27) */
+#define WISP_CASE_BOOT_REPORT_SIZE 22u /* data bytes in a BOOTREP reply (L = 27) */
 
 /* ops (the reply carries op | 0x80) */
 #define WISP_CASE_OP_IDENT 0x01u /* 9-byte request: version, stage, flags, battery, bt result */
 #define WISP_CASE_OP_READ  0x02u /* 25-byte request: block u8, offset u16, length u8 */
 #define WISP_CASE_OP_RESET 0x03u /* 25-byte request: "RSET" */
+#define WISP_CASE_OP_BOOTREP 0x04u /* 9-byte request: the boot report (wisp_diag.h, 22 bytes) */
 
 /* READ blocks */
 #define WISP_CASE_BLOCK_STATUS 1u /* the app's status (WISP_CASE_STATUS_SIZE bytes) */
 #define WISP_CASE_BLOCK_BOOT   2u /* Wisp Boot's status block (wisp_boot_status.h) */
+#define WISP_CASE_BLOCK_CLOCK  3u /* stage-0: its clock measurements (stage0.c) */
+#define WISP_CASE_BLOCK_DIAG   4u /* stage-0: this boot's diagnostics record (wisp_diag.h) */
 
 /* reply status byte */
 #define WISP_CASE_OK         0u
@@ -91,13 +95,19 @@ struct wisp_case_version {
 	uint8_t major, minor, patch, image_kind, hw;
 };
 
-/* What the codec needs from the target to answer. */
+/* What the codec needs from the target to answer. With `status` NULL (Wisp Boot's boot-report
+ * window) only BOOTREP is answered: IDENT, READ, RESET and stock's version query are ignored. */
 struct wisp_case_ops {
 	void (*status)(void *ctx, struct wisp_case_status *out);
 	/* Wisp Boot's status block, or NULL (len = 0). offset = where this READ starts (the target
 	 * may take a fresh snapshot at 0). */
 	const uint8_t *(*boot_block)(void *ctx, size_t offset, size_t *len);
 	void *ctx;
+	/* Optional. The boot report (WISP_BOOT_REPORT_SIZE bytes); returns 0, or nonzero if there is
+	 * none (status 3). NULL: BOOTREP gets status 1 (unknown op), as before it existed. */
+	int (*boot_report)(void *ctx, uint8_t *out);
+	/* Optional. READ blocks 3 and up, or NULL (len = 0): status 2, as for an unknown block. */
+	const uint8_t *(*extra_block)(void *ctx, uint8_t block, size_t offset, size_t *len);
 };
 
 /* Byte-wise request parser. */

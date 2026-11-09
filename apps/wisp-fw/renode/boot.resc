@@ -16,6 +16,7 @@ include $ORIGIN/models/WispUartIdle.cs
 include $ORIGIN/models/WispAdc.cs
 include $ORIGIN/models/WispMspiNor.cs
 include $ORIGIN/models/WispRstGen.cs
+include $ORIGIN/models/WispStimer.cs
 include $ORIGIN/models/WispWdt.cs
 include $ORIGIN/models/WispBootRom.cs
 include $ORIGIN/models/WispProbe.cs

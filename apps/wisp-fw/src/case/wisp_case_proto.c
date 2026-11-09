@@ -116,10 +116,24 @@ static size_t handle(const uint8_t *req, size_t n, const struct wisp_case_versio
 	uint8_t op = req[7];
 	const uint8_t *args = req + 8;
 	size_t nargs = n - 9;
-	uint8_t d[WISP_CASE_READ_MAX + 5];
+	uint8_t d[WISP_CASE_READ_MAX + 5]; /* also holds the 22-byte boot report */
 	struct wisp_case_status st = {0};
 
+	if (!ops->status && op != WISP_CASE_OP_BOOTREP) {
+		return 0; /* Wisp Boot's window answers only the boot report */
+	}
 	switch (op) {
+	case WISP_CASE_OP_BOOTREP:
+		if (nargs != 0) {
+			return reply(out, op, WISP_CASE_E_ARGS, NULL, 0);
+		}
+		if (!ops->boot_report) {
+			return reply(out, op, WISP_CASE_E_UNKNOWN, NULL, 0);
+		}
+		if (ops->boot_report(ops->ctx, d) != 0) {
+			return reply(out, op, WISP_CASE_E_NOTAVAIL, NULL, 0);
+		}
+		return reply(out, op, WISP_CASE_OK, d, WISP_CASE_BOOT_REPORT_SIZE);
 	case WISP_CASE_OP_IDENT:
 		if (nargs != 0) {
 			return reply(out, op, WISP_CASE_E_ARGS, NULL, 0);
@@ -155,6 +169,11 @@ static size_t handle(const uint8_t *req, size_t n, const struct wisp_case_versio
 			blk = ops->boot_block(ops->ctx, off, &total);
 			if (!blk || total == 0) {
 				return reply(out, op, WISP_CASE_E_NOTAVAIL, NULL, 0);
+			}
+		} else if (args[0] >= WISP_CASE_BLOCK_CLOCK && ops->extra_block) {
+			blk = ops->extra_block(ops->ctx, args[0], off, &total);
+			if (!blk || total == 0) {
+				return reply(out, op, WISP_CASE_E_ARGS, NULL, 0);
 			}
 		} else {
 			return reply(out, op, WISP_CASE_E_ARGS, NULL, 0);
@@ -204,7 +223,7 @@ size_t wisp_case_rx_byte(struct wisp_case_rx *rx, uint8_t b, const struct wisp_c
 				return 0;
 			}
 			rx->len = 0;
-			return wisp_case_version_frame(out, ver);
+			return ops->status ? wisp_case_version_frame(out, ver) : 0;
 		}
 		/* 7E 00 01 n, n = 4 / 20 / 27; then 'W' 'S' 'P' */
 		if ((rx->len == 1 && b != 0x00) || (rx->len == 2 && b != 0x01) ||

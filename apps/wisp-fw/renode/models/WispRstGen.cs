@@ -5,6 +5,12 @@
 //   CFG   0x000  WDREN (bit 1): a watchdog expiry only resets the chip when this is set
 //   SWPOI 0x004  write 0x1B -> software POI reset
 //   SWPOR 0x008  write 0xD4 -> software POR reset
+//   STAT  0x885C the reset cause (apollo510.h RSTGEN_Type; the address falls inside the STIMER's
+//                window, so WispStimer serves it from Stat below). Set by every reset from its
+//                cause: power-cut -> POASTAT, SWPOR -> SWRSTAT, SWPOI -> POIRSTAT, watchdog ->
+//                WDRSTAT, SYSRESETREQ -> AIRCRSTAT, a case reset (the pogo reset line) -> EXRSTAT.
+//                Whether the real register accumulates across resets is open [?]; here it holds
+//                the last cause only. Writes are stored (the HAL clears BORSTAT after a POA).
 // Other offsets are plain storage.
 //
 // Every reset, whatever its source (SWPOI/SWPOR, AIRCR.SYSRESETREQ through Renode's NVIC,
@@ -12,7 +18,10 @@
 //   * kept:   MRAM (0x400000-0x800000) and the NOR array (WispMspiNor) — both non-volatile
 //   * lost:   every register, the CPU, and all of SRAM: DTCM+SSRAM are filled with 0xA5 after the
 //             reset, so nothing may rely on SRAM surviving (pessimistic on purpose: retained SRAM
-//             after a warm reset is not guaranteed on the real chip, and a power loss clears it)
+//             after a warm reset is not guaranteed on the real chip, and a power loss clears it).
+//             Exception, only when a case asks (`rstgen RetainRange <base> <size>`): that range
+//             keeps its contents across every reset but a power cut, so the diagnostics record
+//             (wisp_diag.h) can be tested end to end. Whether silicon keeps it is open [?].
 //   * restart: the Ambiq SBL is not available, so the model performs its hand-off: VTOR =
 //             0x410000, MSP = word 0, PC = word 1 of the Even bootloader's vector table
 // The harness reads Resets / LastCause and the reset log (one line per reset) from the monitor.
@@ -45,6 +54,26 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public string LastCause { get; private set; } = "power-on";
         public List<string> Log { get; }
 
+        // RSTGEN.STAT (0x4000885C), served through WispStimer.
+        public uint Stat { get; set; } = 0x2; // POASTAT
+
+        public void RetainRange(ulong start, ulong length)
+        {
+            retainStart = start;
+            retainLength = length;
+        }
+
+        public static uint StatFor(string cause)
+        {
+            if(cause.StartsWith("power")) return 0x2;          // POASTAT
+            if(cause.StartsWith("SWPOR")) return 0x8;          // SWRSTAT
+            if(cause.StartsWith("SWPOI")) return 0x10;         // POIRSTAT
+            if(cause.StartsWith("watchdog")) return 0x40;      // WDRSTAT
+            if(cause.StartsWith("case-reset")) return 0x1;     // EXRSTAT (the reset line)
+            if(cause.StartsWith("external")) return 0x1000;    // AIRCRSTAT (SYSRESETREQ)
+            return 0;                                          // unknown: no bit, so no check passes by accident
+        }
+
         // CFG.WDREN, read by WispWdt.
         public bool WatchdogResetEnabled => (Get(0x000) & 2) != 0;
 
@@ -70,6 +99,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 Request("SWPOR");
                 return;
+            }
+            if(o != 0x000)
+            {
+                WispStrict.Note(machine, 0x40000000 + (ulong)o, v, true); // no behaviour behind it
             }
             regs[o] = v;
         }
@@ -104,7 +137,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             Resets++;
             LastCause = cause;
             Log.Add($"{Resets} {cause} at {machine.ElapsedVirtualTime.TimeElapsed}");
+            Stat = StatFor(cause);
+            WispStrict.InWisp = false;
             var bus = machine.SystemBus;
+            var keep = retainLength > 0 && !cause.StartsWith("power") ? bus.ReadBytes(retainStart, (int)retainLength) : null;
             var fill = new byte[0x10000];
             for(var i = 0; i < fill.Length; i++)
             {
@@ -113,6 +149,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             for(var a = sramBase; a < sramBase + sramSize; a += (ulong)fill.Length)
             {
                 bus.WriteBytes(fill, a);
+            }
+            if(keep != null)
+            {
+                bus.WriteBytes(keep, retainStart);
             }
             foreach(var cpu in bus.GetCPUs())
             {
@@ -134,6 +174,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly ulong bootVector, sramBase, sramSize;
         private Dictionary<long, uint> regs;
         private bool resetPending;
+        private ulong retainStart, retainLength;
         private string pendingCause;
     }
 }

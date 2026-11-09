@@ -1,0 +1,4 @@
+{
+  "what": "Writes Wisp code may make, during start-up, to power, clock or trim registers that no Renode model acts on (tests/boot/strict.py). Each entry names what stock does with the same register and why the write is safe; an entry needs review like code. Empty on purpose: Wisp Boot and stage-0 make no such write, and native-0's are the open question of W24 (docs/wisp/rung4.md, 'W24 result and analysis'), to be reviewed one by one for native-0b against stock's own start-up.",
+  "entries": []
+}

@@ -19,6 +19,7 @@ set(LITTLEFS_DIR "" CACHE PATH "littlefs source (west module modules/fs/littlefs
 option(WISP_BOOT_TEST_APPS "build the rung-3 fault-injection apps" OFF)
 option(WISP_BOOT_OBSERVE "observe-only build: every write compiled out, always run-app" OFF)
 option(WISP_BOOT_LOG "UART1 debug log" ON)
+option(WISP_STAGE0 "also build stage-0, the bare-metal app (src/stage0/)" OFF)
 set(WISP_REAL_APP "" CACHE FILEPATH "the real Wisp app (zephyr.bin at 0x448000) for native_real.bin")
 if(NOT EXISTS ${LITTLEFS_DIR}/lfs.c)
   message(FATAL_ERROR "LITTLEFS_DIR must point at littlefs (got '${LITTLEFS_DIR}')")
@@ -31,8 +32,9 @@ set(COMMON_FLAGS ${CPU_FLAGS} -Os -g -ffreestanding -ffunction-sections -fdata-s
 add_executable(wisp_boot.elf
   wisp_boot.c
   stage/boot_start.c stage/boot_main.c stage/boot_hw.c stage/boot_nor.c
+  stage/boot_pmic.c stage/boot_uart.c ../case/wisp_case_proto.c
   ${LITTLEFS_DIR}/lfs.c ${LITTLEFS_DIR}/lfs_util.c)
-target_include_directories(wisp_boot.elf PRIVATE . stage ${LITTLEFS_DIR})
+target_include_directories(wisp_boot.elf PRIVATE . stage ../case ${LITTLEFS_DIR})
 # littlefs: static buffers only, no logging/asserts (no printf in Wisp Boot).
 target_compile_definitions(wisp_boot.elf PRIVATE LFS_NO_MALLOC LFS_NO_DEBUG LFS_NO_WARN
   LFS_NO_ERROR LFS_NO_ASSERT)
@@ -52,6 +54,27 @@ target_link_options(wisp_boot.elf PRIVATE ${CPU_FLAGS} -nostartfiles --specs=nan
 add_custom_command(TARGET wisp_boot.elf POST_BUILD
   COMMAND arm-none-eabi-objcopy -O binary wisp_boot.elf wisp_boot.bin
   COMMAND arm-none-eabi-size wisp_boot.elf)
+
+if(WISP_STAGE0)
+  # stage-0 (rung4.md W24b): linked at 0x448000, shares Wisp Boot's UART2 and PMIC-kick code and
+  # the case-UART codec. scripts/build_native.sh stage-0 combines it with the observe-only Wisp Boot.
+  set(S0_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../stage0)
+  add_executable(stage0.elf ${S0_DIR}/stage0.c stage/boot_pmic.c stage/boot_uart.c
+    ../case/wisp_case_proto.c)
+  target_include_directories(stage0.elf PRIVATE . stage ../case)
+  execute_process(COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR} describe --always --dirty --abbrev=10
+    OUTPUT_VARIABLE WISP_STAGE0_REV OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(WISP_STAGE0_REV)
+    target_compile_definitions(stage0.elf PRIVATE STAGE0_REV="${WISP_STAGE0_REV}")
+  endif()
+  target_compile_options(stage0.elf PRIVATE ${COMMON_FLAGS})
+  target_link_options(stage0.elf PRIVATE ${CPU_FLAGS} -nostartfiles --specs=nano.specs
+    --specs=nosys.specs -Wl,--gc-sections -Wl,-T${S0_DIR}/stage0.ld
+    -Wl,-Map=${CMAKE_BINARY_DIR}/stage0.map)
+  add_custom_command(TARGET stage0.elf POST_BUILD
+    COMMAND arm-none-eabi-objcopy -O binary stage0.elf stage0.bin
+    COMMAND arm-none-eabi-size stage0.elf)
+endif()
 
 if(WISP_BOOT_TEST_APPS)
   set(APP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../tests/boot/app)
@@ -79,6 +102,13 @@ if(WISP_BOOT_TEST_APPS)
             -DOUT=native_erased.bin -P ${APP_DIR}/combine.cmake
     DEPENDS wisp_boot.elf ${APP_DIR}/combine.cmake)
   list(APPEND NATIVE_IMAGES native_erased.bin)
+  if(WISP_STAGE0)
+    add_custom_command(OUTPUT native_stage0.bin
+      COMMAND ${CMAKE_COMMAND} -DBOOT=wisp_boot.bin -DAPP=stage0.bin
+              -DOUT=native_stage0.bin -P ${APP_DIR}/combine.cmake
+      DEPENDS wisp_boot.elf stage0.elf ${APP_DIR}/combine.cmake)
+    list(APPEND NATIVE_IMAGES native_stage0.bin)
+  endif()
   if(WISP_REAL_APP)
     add_custom_command(OUTPUT native_real.bin
       COMMAND ${CMAKE_COMMAND} -DBOOT=wisp_boot.bin -DAPP=${WISP_REAL_APP}

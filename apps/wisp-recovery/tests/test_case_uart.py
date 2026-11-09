@@ -49,7 +49,7 @@ def status_body(stage=4, rev=b"8374f9a\0\0\0\0\0") -> bytes:
 
 
 def boot_block(staging=c.STOCK_STAGING_CRC_WORD) -> bytes:
-    b = bytearray(c.BOOT_STATUS_SIZE)
+    b = bytearray(c.BOOT_STATUS_SIZE_V1)  # native-0's Wisp Boot: version 1
     struct.pack_into("<IHHIIiii", b, 0, 0x54534257, 1, 612, 1, 0x3925C2, 0, 0, -2)
     b[44:52] = bytes([6, 1, 0, 0, 0, 1, 2, 0])
     struct.pack_into("<IIIIi", b, 52, staging, 3_700_100, 0, 0, 0)
@@ -113,6 +113,92 @@ class Vectors(unittest.TestCase):
         b[100] ^= 1
         with self.assertRaises(ValueError):
             c.decode_boot_status(bytes(b))
+
+
+def bootrep_reply(source=0, flags=0x0D, boot=2, prev_stage=0x45, cause=0x08, ms=4592, fault=None) -> bytes:
+    pc, lr, cfsr = fault or (0, 0, 0)
+    return c.frame(b"WSP\x84\x00" + struct.pack("<BBBBIHIII", source, flags | (2 if fault else 0), boot, prev_stage,
+                                              cause, ms, pc, lr, cfsr))
+
+
+def read_reply(block: int, data: bytes, offset: int) -> bytes:
+    chunk = data[offset:offset + 17]
+    payload = b"WSP\x82\x00" + struct.pack("<BHH", block, offset, len(data)) + chunk
+    return c.frame(payload + bytes((27 if len(payload) > 24 else 24) - len(payload)))
+
+
+class Stage0Hook(unittest.TestCase):
+    """boot-watch's wisp protocol against stage-0 (rung4.md W24b): the boot report at every boot,
+    then IDENT and four blocks."""
+
+    def answer(self, req: bytes, blocks: dict, report: bytes | None) -> bytes:
+        op = req[7]
+        if op == c.OP_BOOTREP:
+            return report or b""
+        if op == c.OP_IDENT:
+            return c.frame(b"WSP\x81\x00" + bytes((0, 1, 0, 16, 6, 0x70)) + struct.pack("<Hh", 0, 0x7FFF) + bytes(1))
+        block, offset, _n = struct.unpack_from("<BHB", req, 8)
+        return read_reply(block, blocks[block], offset)
+
+    def test_boot_reports_across_reboots_and_stage0_blocks(self):
+        clock = struct.pack(c.CLOCK_FMT, 1, 1, 1, 0, 0x103, 0x02008005, 900, 36409, 106_000_000, 900_123,
+                            95_400_000, 9101, 900_123, 900_123, 0, 1)
+        rec = bytearray(64)
+        struct.pack_into("<IHHIIIHH", rec, 0, c.DIAG_MAGIC, 1, 64, 2, 8, 0, 0x45, 0)
+        struct.pack_into("<I", rec, 60, zlib.crc32(bytes(rec[:60])))
+        blocks = {1: status_body(stage=6), 2: boot_block(), 3: clock, 4: bytes(rec)}
+        hook = c.WispStatus()
+        answers = []
+        # Wisp Boot's window answers the second request; then IDENT and every block.
+        replies = [b"", bootrep_reply()]
+        for i in range(200):
+            req = hook.request(i)
+            self.assertTrue(status.relay_request_ok(req), req.hex())
+            reply = replies.pop(0) if replies else self.answer(req, blocks, None)
+            if i < 2:
+                self.assertEqual(req, c.bootrep_request())
+                self.assertTrue(hook.urgent() if i == 0 else True)
+            d = hook.decode(reply) if reply else None
+            if d:
+                answers.append(d)
+            if hook.complete(answers):
+                break
+        self.assertTrue(hook.complete(answers))
+        s = hook.summary(answers)
+        self.assertEqual(s["boot_report"]["source"], "wisp-boot")
+        self.assertEqual(s["boot_report"]["prev_stage"], "s0-loop")
+        self.assertEqual(s["clock"]["lfrc_hz"], 900.123)
+        self.assertEqual(s["clock"]["wdt_period_ms"], 9101)
+        self.assertEqual(s["clock"]["wdt_count_direction"], "down")
+        self.assertEqual(s["diag"]["boots"], 2)
+        # A reboot (the loader's HELO): the boot report again, first; both reports are kept.
+        hook.reset()
+        hook.reboots += 1
+        self.assertEqual(hook.request(0), c.bootrep_request())
+        hook.decode(bootrep_reply(boot=3, cause=0x40, prev_stage=0x46, fault=(0x448123, 0x448001, 0x20000)))
+        self.assertFalse(hook.urgent())
+        self.assertEqual([r["boot"] for r in hook.reports], [2, 3])
+        self.assertEqual(hook.reports[1]["reset_cause_names"], ["watchdog"])
+        self.assertEqual(hook.reports[1]["prev_fault"]["pc"], 0x448123)
+        with mock.patch("builtins.print") as out:
+            cli.print_summary(hook.summary())
+        text = "\n".join(str(call.args[0]) for call in out.call_args_list)
+        self.assertIn("boot report", text)
+        self.assertIn("FAULT pc 0x00448123", text)
+
+    def test_watch_does_not_wait_while_the_report_is_due(self):
+        hook = c.WispStatus()
+        sleeps = []
+        now = [0.0]
+
+        class Link:
+            def query(self, frame):
+                now[0] += 0.0175
+                return 2, b"", 0.0175  # no answer (relay status 2)
+
+        status.watch(Link(), hook, 1.0, interval_s=0.5, clock=lambda: now[0], sleep=sleeps.append, log=lambda m: None)
+        self.assertEqual(sleeps[:10], [])  # back to back while urgent
+        self.assertGreaterEqual(hook.report_asked, 50)
 
 
 class WispApp:
@@ -269,7 +355,9 @@ class BootWatchWisp(unittest.TestCase):
         hook.reset()
         self.assertIsNone(hook.ident)
         self.assertEqual(hook.parts[c.BLOCK_STATUS], {})
-        self.assertEqual(hook.request(0), c.ident_request())
+        self.assertEqual(hook.request(0), c.bootrep_request())  # every boot: the boot report first
+        hook.decode(c.frame(b"WSP\x84\x01" + bytes(3)))  # native-0: unknown op
+        self.assertEqual(hook.request(1), c.ident_request())
 
     def test_registered(self):
         self.assertIs(status.PROTOCOLS["wisp"], c.WispStatus)

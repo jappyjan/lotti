@@ -8,7 +8,11 @@
 //   COUNT 0x00C  ticks left before the reset fires (read only)
 //   0x200..0x20C interrupt enable/status/clear/set (stored; the interrupt is not modelled)
 //
-// Clock: LFRC 1024 Hz nominal; CLKSEL 1 = /8 (128 Hz), 2 = /64 (16 Hz), 3 = /1024 (1 Hz),
+// Clock: the LFRC at LfrcHz, 900 Hz by default: hal_ambiq's apollo510.h gives the LFRC as
+// "approximately 900Hz" (STIMER_STCFG_CLKSEL_LFRC_NOMINAL; CLKGEN CLKOUT: "LFRC=900Hz"). Until
+// 2026-11-08 this model ran it at 1024 Hz, which made Wisp Boot's watchdog 8.0 s here and about
+// 9.1 s on silicon (rung4.md, "W24 result and analysis"); stage-0 measures the real rate. The
+// harness may set another rate (`wdt LfrcHz <hz>`) to sweep it. CLKSEL 1 = /8, 2 = /64, 3 = /1024,
 // 4 = /16384. A reset fires RESVAL ticks after the last restart (or after enabling) when WDTEN and
 // RESEN are set and RSTGEN.CFG.WDREN is set; it goes through WispRstGen ("watchdog").
 // The timer runs on Renode virtual time (checked every 1 ms of virtual time).
@@ -34,6 +38,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public long Size => 0x1000;
 
         public ulong Bites { get; private set; }
+        public int LfrcHz { get; set; } = 900;
         public ulong Feeds { get; private set; }
 
         public void Reset()
@@ -109,8 +114,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 return;
             }
-            // LFRC 1024 Hz: one WDT tick every div/1.024 ms.
-            subTicks += 1024;
+            // One WDT tick every div/LfrcHz s; this runs once a millisecond.
+            subTicks += LfrcHz;
             var perTick = (long)div * 1000;
             while(subTicks >= perTick)
             {

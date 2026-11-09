@@ -1,0 +1,219 @@
+/*
+ * SPDX-License-Identifier: MIT
+ *
+ * Wisp diagnostics record (rung4.md, "W24 result and analysis", D1) and the boot report (D2).
+ *
+ * D1: a 64-byte record at a fixed RAM address, the first bytes of Wisp Boot's own RAM, which no
+ * reset handler copies or zeroes. Wisp Boot reads the previous boot's record first thing (before
+ * its .data/.bss set-up touches anything), keeps a copy in its status block, then starts a fresh
+ * one: the reset cause (RSTGEN.STAT), a boot counter, a breadcrumb (the last stage reached and
+ * when) and, if a fault handler ran, the fault. Wisp Boot and the app behind it (stage-0) both
+ * write breadcrumbs into it. Whether SRAM survives a watchdog reset or an SWPOR on this chip is
+ * open (hardware.md); the magic and the CRC tell, and the boot report says whether the previous
+ * record was valid.
+ *
+ * D2: the boot report, one case-UART reply (op 0x04, docs/wisp/case-uart.md): why the previous
+ * boot ended and how far it got, in 22 data bytes. Wisp Boot answers it in a short window right
+ * after it arms the watchdog; the app answers it too.
+ *
+ * Shared by Wisp Boot, stage-0 and the host decoders (tests/boot/case_uart.py,
+ * apps/wisp-recovery wisp_w18/case_uart.py). Little-endian; the _Static_asserts pin the layout.
+ * Header only, no dependencies: the CRC here is a plain bitwise zlib CRC-32.
+ */
+#ifndef WISP_DIAG_H
+#define WISP_DIAG_H
+
+#include <stdint.h>
+
+#define WISP_DIAG_ADDR    0x20370000u /* WISP_BOOT_RAM_BASE: the .noinit slot of boot.ld */
+#define WISP_DIAG_MAGIC   0x47414457u /* "WDAG" little-endian */
+#define WISP_DIAG_VERSION 1u
+
+/* Apollo510 RSTGEN.STAT (hal_ambiq apollo510.h: RSTGEN_Type, size 0x8860, STAT last). Read only;
+ * the HAL itself warns never to write it. */
+#define WISP_RSTGEN_STAT_ADDR 0x4000885Cu
+#define WISP_RSTGEN_STAT_EXRSTAT  0x0001u /* external reset (the case's reset line) */
+#define WISP_RSTGEN_STAT_POASTAT  0x0002u /* power-on */
+#define WISP_RSTGEN_STAT_BORSTAT  0x0004u
+#define WISP_RSTGEN_STAT_SWRSTAT  0x0008u /* software POR (SWPOR, what Wisp uses) */
+#define WISP_RSTGEN_STAT_POIRSTAT 0x0010u
+#define WISP_RSTGEN_STAT_DBGRSTAT 0x0020u
+#define WISP_RSTGEN_STAT_WDRSTAT  0x0040u /* watchdog */
+#define WISP_RSTGEN_STAT_AIRCRSTAT 0x1000u /* SYSRESETREQ */
+
+/* STIMER (the bootloader runs it from the 32 kHz crystal: STCFG CLKSEL 3) */
+#define WISP_STIMER_STCFG 0x40008800u
+#define WISP_STIMER_STTMR 0x40008804u
+
+/* Stage codes (breadcrumbs). 0x10-0x3F Wisp Boot, 0x40-0x7F stage-0, 0x80-0xFF other apps. */
+enum wisp_diag_stage {
+	WISP_DIAG_NONE = 0x00,
+	WISP_DIAG_BOOT_START = 0x10,    /* Wisp Boot: watchdog armed, record started */
+	WISP_DIAG_BOOT_PMIC = 0x11,     /* the nPM1300 watchdog kick returned */
+	WISP_DIAG_BOOT_WINDOW = 0x12,   /* the case-UART boot-report window is open */
+	WISP_DIAG_BOOT_WINDOW_END = 0x13,
+	WISP_DIAG_BOOT_NOR = 0x14,      /* NOR init started */
+	WISP_DIAG_BOOT_MOUNTED = 0x15,  /* littlefs mounted */
+	WISP_DIAG_BOOT_INPUTS = 0x16,   /* record, staging, rescue.bin, inventory read */
+	WISP_DIAG_BOOT_DECIDED = 0x17,
+	WISP_DIAG_BOOT_HANDOFF = 0x18,  /* about to jump to the app */
+	WISP_DIAG_BOOT_RESET = 0x19,    /* Wisp Boot resets on purpose (rescue, no app) */
+	WISP_DIAG_BOOT_FAULT = 0x1F,    /* a fault handler in Wisp Boot ran */
+	WISP_DIAG_S0_RESET = 0x40,      /* stage-0: reset handler entered */
+	WISP_DIAG_S0_INIT = 0x41,       /* .data/.bss ready */
+	WISP_DIAG_S0_UART = 0x42,       /* UART2 set up */
+	WISP_DIAG_S0_FEED = 0x43,       /* first Apollo watchdog feed */
+	WISP_DIAG_S0_KICK = 0x44,       /* first PMIC watchdog kick returned */
+	WISP_DIAG_S0_LOOP = 0x45,       /* main loop running */
+	WISP_DIAG_S0_MEASURE = 0x46,    /* measuring LFRC against the crystal (watchdog not fed) */
+	WISP_DIAG_S0_RESET_REQ = 0x47,  /* resetting on a case-UART RESET */
+	WISP_DIAG_S0_FAULT = 0x4F,      /* a fault handler in stage-0 ran */
+};
+
+#define WISP_DIAG_F_FAULT 0x0001u /* the fault fields are set */
+
+struct wisp_diag_record {
+	uint32_t magic;        /* WISP_DIAG_MAGIC */
+	uint16_t version;      /* WISP_DIAG_VERSION */
+	uint16_t size;         /* sizeof(struct wisp_diag_record) */
+	uint32_t boots;        /* this boot's number: previous valid record's + 1, else 1 */
+	uint32_t rstgen_stat;  /* RSTGEN.STAT as Wisp Boot read it at the start of this boot */
+	uint32_t stimer_start; /* STTMR when Wisp Boot started */
+	uint16_t stage;        /* the last breadcrumb (enum wisp_diag_stage) */
+	uint16_t flags;        /* WISP_DIAG_F_* */
+	uint32_t stage_ticks;  /* STTMR - stimer_start at the last breadcrumb */
+	uint32_t fault_pc;     /* stacked PC, LR, xPSR of the faulting context */
+	uint32_t fault_lr;
+	uint32_t fault_xpsr;
+	uint32_t cfsr;         /* SCB CFSR, HFSR, BFAR, MMFAR at the fault */
+	uint32_t hfsr;
+	uint32_t bfar;
+	uint32_t mmfar;
+	uint32_t exc_return;   /* the handler's LR */
+	uint32_t crc;          /* zlib CRC-32 of every byte before it */
+};
+
+_Static_assert(sizeof(struct wisp_diag_record) == 64, "diag record layout");
+_Static_assert(__builtin_offsetof(struct wisp_diag_record, stage) == 20, "diag record layout");
+_Static_assert(__builtin_offsetof(struct wisp_diag_record, fault_pc) == 28, "diag record layout");
+_Static_assert(__builtin_offsetof(struct wisp_diag_record, crc) == 60, "diag record layout");
+
+/* The boot report (case-UART op 0x04): 22 data bytes. */
+#define WISP_BOOT_REPORT_SIZE 22u
+#define WISP_REPORT_SRC_BOOT 0u /* answered by Wisp Boot in its window */
+#define WISP_REPORT_SRC_APP  1u /* answered by the app */
+/* flags */
+#define WISP_REPORT_F_PREV_VALID 0x01u /* the previous boot's record had a valid magic and CRC */
+#define WISP_REPORT_F_PREV_FAULT 0x02u /* ... and a fault recorded */
+#define WISP_REPORT_F_KICK_OK    0x04u /* this boot's PMIC watchdog kick by Wisp Boot succeeded */
+#define WISP_REPORT_F_STIMER_XT  0x08u /* the STIMER runs from the crystal (STCFG CLKSEL 3) */
+
+/*
+ *  0  u8   source (WISP_REPORT_SRC_*)
+ *  1  u8   flags (WISP_REPORT_F_*)
+ *  2  u8   this boot's number, low byte
+ *  3  u8   the previous boot's last stage
+ *  4  u32  RSTGEN.STAT at the start of this boot (why the previous boot ended)
+ *  8  u16  the previous boot's last stage time, ms after its Wisp Boot start (0xFFFF = later)
+ * 10  u32  the previous boot's fault PC (0 = none)
+ * 14  u32  ... LR
+ * 18  u32  ... CFSR
+ */
+
+static inline void wisp_diag_put16(uint8_t *p, uint32_t v)
+{
+	p[0] = (uint8_t)v;
+	p[1] = (uint8_t)(v >> 8);
+}
+
+static inline void wisp_diag_put32(uint8_t *p, uint32_t v)
+{
+	wisp_diag_put16(p, v);
+	wisp_diag_put16(p + 2, v >> 16);
+}
+
+static inline uint32_t wisp_diag_crc32(const void *data, uint32_t n)
+{
+	const uint8_t *p = data;
+	uint32_t crc = 0xFFFFFFFFu;
+
+	while (n--) {
+		crc ^= *p++;
+		for (int k = 0; k < 8; k++) {
+			crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+		}
+	}
+	return ~crc;
+}
+
+static inline volatile struct wisp_diag_record *wisp_diag(void)
+{
+	return (volatile struct wisp_diag_record *)WISP_DIAG_ADDR;
+}
+
+static inline void wisp_diag_seal(volatile struct wisp_diag_record *r)
+{
+	r->crc = wisp_diag_crc32((const void *)r, __builtin_offsetof(struct wisp_diag_record, crc));
+}
+
+static inline int wisp_diag_valid(const volatile struct wisp_diag_record *r)
+{
+	return r->magic == WISP_DIAG_MAGIC && r->version == WISP_DIAG_VERSION &&
+	       r->size == sizeof(struct wisp_diag_record) &&
+	       r->crc == wisp_diag_crc32((const void *)r,
+					 __builtin_offsetof(struct wisp_diag_record, crc));
+}
+
+static inline uint32_t wisp_stimer_now(void)
+{
+	return *(volatile uint32_t *)WISP_STIMER_STTMR;
+}
+
+/* A breadcrumb: last value wins. Only on a valid record (Wisp Boot started it this boot). */
+static inline void wisp_diag_mark(uint16_t stage)
+{
+	volatile struct wisp_diag_record *r = wisp_diag();
+
+	if (r->magic != WISP_DIAG_MAGIC) {
+		return;
+	}
+	r->stage = stage;
+	r->stage_ticks = wisp_stimer_now() - r->stimer_start;
+	wisp_diag_seal(r);
+}
+
+/* Fault capture for a handler: `frame` is the stacked exception frame (or 0 when it could not be
+ * trusted), `exc_return` the handler's LR. Reads the fault registers and seals the record. */
+static inline void wisp_diag_fault(const uint32_t *frame, uint32_t exc_return, uint16_t stage)
+{
+	volatile struct wisp_diag_record *r = wisp_diag();
+
+	if (r->magic != WISP_DIAG_MAGIC) {
+		return;
+	}
+	if (frame) {
+		r->fault_lr = frame[5];
+		r->fault_pc = frame[6];
+		r->fault_xpsr = frame[7];
+	}
+	r->cfsr = *(volatile uint32_t *)0xE000ED28u;
+	r->hfsr = *(volatile uint32_t *)0xE000ED2Cu;
+	r->mmfar = *(volatile uint32_t *)0xE000ED34u;
+	r->bfar = *(volatile uint32_t *)0xE000ED38u;
+	r->exc_return = exc_return;
+	r->flags |= WISP_DIAG_F_FAULT;
+	r->stage = stage;
+	r->stage_ticks = wisp_stimer_now() - r->stimer_start;
+	wisp_diag_seal(r);
+}
+
+/* The stacked frame of a fault, or 0 if the stack pointer it names is not plausible SRAM. */
+static inline const uint32_t *wisp_diag_frame(uint32_t msp, uint32_t psp, uint32_t exc_return)
+{
+	uint32_t sp = (exc_return & 4u) ? psp : msp;
+
+	return (sp >= 0x20000000u && sp <= 0x20380000u - 32u && !(sp & 3u)) ? (const uint32_t *)sp
+									     : (const uint32_t *)0;
+}
+
+#endif /* WISP_DIAG_H */

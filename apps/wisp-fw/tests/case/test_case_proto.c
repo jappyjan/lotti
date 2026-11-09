@@ -51,7 +51,33 @@ static const uint8_t *boot_block(void *ctx, size_t offset, size_t *len)
 	return block_len ? block : NULL;
 }
 
+/* The boot report of docs/wisp/case-uart.md's example: Wisp Boot, flags prev-valid | kick-ok |
+ * stimer-xt, boot 3, previous stage 0x18 (hand-off) 9,100 ms in, reset cause WDRSTAT. */
+static int report(void *ctx, uint8_t *out)
+{
+	static const uint8_t r[WISP_CASE_BOOT_REPORT_SIZE] = {0x00, 0x0D, 0x03, 0x18, 0x40, 0, 0, 0,
+							      0x8C, 0x23};
+
+	(void)ctx;
+	memcpy(out, r, sizeof(r));
+	return 0;
+}
+
+static uint8_t clock_block[48];
+
+static const uint8_t *extra(void *ctx, uint8_t blk, size_t offset, size_t *len)
+{
+	(void)ctx;
+	(void)offset;
+	*len = blk == WISP_CASE_BLOCK_CLOCK ? sizeof(clock_block) : 0;
+	return *len ? clock_block : NULL;
+}
+
 static const struct wisp_case_ops ops = {.status = status, .boot_block = boot_block};
+static const struct wisp_case_ops ops_s0 = {
+	.status = status, .boot_block = boot_block, .boot_report = report, .extra_block = extra};
+static const struct wisp_case_ops ops_boot = {.boot_report = report}; /* Wisp Boot's window */
+static const struct wisp_case_ops *cur = &ops;
 
 /* Feed bytes; return the last reply's length (copied to out) and whether a reset was asked. */
 static size_t feed(struct wisp_case_rx *rx, const char *hex, uint8_t *out, bool *reset)
@@ -66,7 +92,7 @@ static size_t feed(struct wisp_case_rx *rx, const char *hex, uint8_t *out, bool 
 		size_t n;
 
 		sscanf(hex + i, "%2x", &b);
-		n = wisp_case_rx_byte(rx, (uint8_t)b, &ver, &ops, reply, &r);
+		n = wisp_case_rx_byte(rx, (uint8_t)b, &ver, cur, reply, &r);
 		if (n) {
 			memcpy(out, reply, n);
 			got = n;
@@ -144,6 +170,28 @@ int main(void)
 	/* An unknown op gets status 1. */
 	n = feed(&rx, "7e000104575350090c", out, &reset);
 	CHECK(n == 13 && out[7] == 0x89 && out[8] == WISP_CASE_E_UNKNOWN && !reset);
+
+	/* BOOTREP (rung4.md W24 analysis, D2): an app without it (native-0) says unknown op... */
+	n = feed(&rx, "7e0001045753500407", out, &reset);
+	CHECK(n == 13 && out[7] == 0x84 && out[8] == WISP_CASE_E_UNKNOWN);
+	/* ...stage-0 answers it, 32 bytes... */
+	cur = &ops_s0;
+	n = feed(&rx, "7e0001045753500407", out, &reset);
+	CHECK(n == 32 && hex_eq(out, n, "5aa5ff1b5753508400000d0318400000008c23000000000000000000000000ae"));
+	/* ...and its clock block (READ block 3); block 4 is not served by this callback: status 2. */
+	n = feed(&rx, "7e000114575350020300001100000000000000000000000039", out, &reset);
+	CHECK(n == 32 && out[8] == WISP_CASE_OK && out[9] == 3 && out[12] == 48);
+	n = feed(&rx, "7e00011457535002043300110000000000000000000000006d", out, &reset);
+	CHECK(n == 13 && out[8] == WISP_CASE_E_ARGS);
+	/* Wisp Boot's window: only BOOTREP; IDENT, READ, RESET and stock's query get nothing. */
+	cur = &ops_boot;
+	n = feed(&rx, "7e0001045753500407", out, &reset);
+	CHECK(n == 32 && hex_eq(out, n, "5aa5ff1b5753508400000d0318400000008c23000000000000000000000000ae"));
+	CHECK(feed(&rx, "7e0001045753500104", out, &reset) == 0);
+	CHECK(feed(&rx, "24000100a7", out, &reset) == 0);
+	CHECK(feed(&rx, "7e000114575350035253455400000000000000000000000064", out, &reset) == 0 && !reset);
+	CHECK(feed(&rx, "7e000114575350020100001100000000000000000000000037", out, &reset) == 0);
+	cur = &ops;
 
 	if (failures) {
 		fprintf(stderr, "test_case_proto: %d failure(s)\n", failures);

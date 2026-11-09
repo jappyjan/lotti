@@ -2,7 +2,7 @@
 
 What a native Wisp temple answers on the charging-case link, and how a host asks. This is the observation channel of rung 4 when BLE does not come up ([rung4.md §2](rung4.md#2-which-image-goes-on-first), gap G10). Firmware side: `apps/wisp-fw/src/case/` (codec `wisp_case_proto.c`, host-tested). Reference host side: `apps/wisp-fw/tests/boot/case_uart.py` (pure Python, no I/O), which the Renode harnesses use; its `WispStatus` class plugs into `boot-watch`'s `StatusProtocol` hook in `apps/wisp-recovery` (PR #73). Both are checked against the same golden vectors (`tests/case/`).
 
-Status: **emulation only.** Built for `native-0` (W22) and exercised in Renode against the real stock and patched bootloaders (rung 3's observe suite, `w18-test native-0`). Nothing here has run on a temple.
+Status: **emulation only.** Built for `native-0` (W22) and exercised in Renode against the real stock and patched bootloaders (rung 3's observe suite, `w18-test native-0`). On W24 native-0 never answered (rung4.md, "W24 result and analysis"). Since then the protocol also carries the **boot report** (op `04`, below), answered by Wisp Boot itself in a short window after each reset and by the app, and `stage-0` (rung4.md W24b) answers it with its own blocks 3 and 4. Nothing here has run on a temple yet.
 
 ## Link
 
@@ -42,9 +42,10 @@ reply:    5A A5 FF L  57 53 50  op|80  status  data..  s   zero-padded to L = 8,
 | --- | --- | --- | --- |
 | `01` | IDENT | 9 bytes, no args | 10 bytes: `major minor patch kind`, `stage u8`, `flags u8`, `battery_mv u16`, `bt_result i16` (the fields as in the [status block](#status-block-version-1)); 21-byte reply |
 | `02` | READ | 25 bytes: `block u8`, `offset u16`, `length u8` (1–17), 12 zero bytes | `block u8`, `offset u16`, `total u16`, then min(length, total − offset) bytes; 32-byte reply at most |
-| `03` | RESET | 25 bytes: `52 53 45 54` (`"RSET"`), 12 zero bytes | none; ~50 ms after the reply the app resets (`sys_reboot`, cold). The patched loader's `HELO` is the next frame on the line, then Wisp Boot and the app boot again |
+| `03` | RESET | 25 bytes: `52 53 45 54` (`"RSET"`), 12 zero bytes | none; ~50 ms after the reply the app resets (`sys_reboot`, cold; stage-0: SWPOR). The patched loader's `HELO` is the next frame on the line, then Wisp Boot and the app boot again |
+| `04` | BOOTREP | 9 bytes, no args | 22 bytes: the [boot report](#the-boot-report-op-04) (why the previous boot ended, how far it got); 32-byte reply. Status 1 from an app that predates it (native-0), 3 if the app finds no valid Wisp Boot block |
 
-Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes, 36 READs). Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus both blocks is about 0.7 s.
+Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes in version 1, native-0's Wisp Boot, 36 READs; 692 bytes in version 2, 41 READs), and for stage-0 only **3** = its clock measurements (52 bytes) and **4** = this boot's diagnostics record (64 bytes). An unknown block gets status 2. Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus blocks 1 and 2 is about 0.8 s.
 
 The marker keeps these apart from the loader's requests (`HOLD`, `CONT`, … carry their own four-character marker, and `HOLD` an HMAC). A Wisp request that reaches the loader during its boot window is not one of its commands; a loader request that reaches the app is ignored.
 
@@ -56,11 +57,40 @@ READ status block @0, 17:   7e 00 01 14 57 53 50 02 01 00 00 11 + 12 x 00 + 37
 READ boot block @595, 17:   7e 00 01 14 57 53 50 02 02 53 02 11 + 12 x 00 + 8d
 RESET:                      7e 00 01 14 57 53 50 03 52 53 45 54 + 12 x 00 + 64
 RESET reply:                5a a5 ff 08 57 53 50 83 00 00 00 00 83
+BOOTREP:                    7e 00 01 04 57 53 50 04 07
+BOOTREP reply (Wisp Boot, prev-valid kick-ok stimer-xt, boot 3, previous stage 0x18 at 9,100 ms,
+               reset cause WDRSTAT):
+                            5a a5 ff 1b 57 53 50 84 00 00 0d 03 18 40 00 00 00 8c 23 + 12 x 00 + ae
 IDENT reply (0.1.2, kind 0, stage 5, 3,987 mV, bt -5):
                             5a a5 ff 10 57 53 50 81 00 00 01 02 00 05 3b 93 0f fb ff 00 68
 ```
 
 **boot-watch hook.** `tests/boot/case_uart.py` `WispStatus` has the shape of `status.py`'s `StatusProtocol` (`name`, `request(i)`, `decode(frame)`, `complete(answers)`): IDENT until the app answers, then the two blocks once, then IDENT again; `decode` returns `None` for anything that is not a Wisp reply (the loader's `HELO` is handled by `watch()` itself). `tests/case/test_case_uart.py` runs it against a fake temple. **Registered since W23** as `boot-watch --protocol wisp`: `apps/wisp-recovery/wisp_w18/case_uart.py` is a port of this module (the codec unchanged and cross-checked against it; its `WispStatus` asks a lost READ again, waits for the end of the BLE bring-up, and decodes both blocks for the report).
+
+### The boot report (op `04`)
+
+rung4.md, "W24 result and analysis", D1 and D2. native-0 rebooted every 10.4 s on W24 and said nothing; the boot report is built so that **every boot of a reboot loop says why the previous boot ended and how far it got**, whether or not the app ever runs.
+
+- **The record (D1).** A 64-byte record at `0x20370000`, the first bytes of Wisp Boot's RAM, which no reset handler copies or zeroes (`src/boot/wisp_diag.h`). Wisp Boot reads the previous boot's record first thing, keeps a copy in its status block (`prev`), then starts a fresh one: magic `"WDAG"`, a boot counter, `RSTGEN.STAT` (the Apollo's reset cause, `0x4000885C`), the STIMER at its start, the last breadcrumb (stage code and its time) and, if a fault handler ran, the fault (PC, LR, xPSR, CFSR, HFSR, BFAR, MMFAR, EXC_RETURN), sealed by a CRC-32. Wisp Boot and stage-0 leave breadcrumbs in it (codes in `wisp_diag.h`; names in `case_uart.py` `DIAG_STAGES`); both fault handlers record the fault and then reset (SWPOR). Whether SRAM survives a watchdog reset or an SWPOR on this chip is open; the magic and the CRC tell (flag `prev-valid`).
+- **Wisp Boot's window (D2).** Right after it arms the watchdog, kicks the PMIC watchdog and starts the record, Wisp Boot sets up UART2 itself (the patched loader's own values) and answers **only** BOOTREP: IDENT, READ, RESET and stock's version query get no answer from it, so neither the loader's nor the app's protocol sees anything from Wisp Boot. The window stays open about 300 ms with no request, 100 ms after the last answer, and never more than 1 s, timed by the STIMER on the 32 kHz crystal if it is selected and counting (else by a poll count), and capped at 2,000,000 polls whatever the clock says; the watchdog is fed while it is open. Wisp Boot writes GPIO PADKEY `0x73` around its pad writes, as the bootloader does.
+- **The app** answers BOOTREP too (stage-0 does; native-0's codec answers status 1), built from Wisp Boot's status block, so a host that misses the window still gets it.
+- **The host** (`boot-watch --protocol wisp`): at every boot, from `CONT` or after each loader `HELO`, the boot report on every exchange with no pause (about 17.5 ms apart) until one answers or 200 exchanges passed, then IDENT and the blocks as before. Every boot report of the watch is kept and printed (`boot_reports`).
+
+The 22 data bytes:
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u8 | source: 0 = Wisp Boot's window, 1 = the app |
+| 1 | u8 | flags: `01` the previous record was valid, `02` it holds a fault, `04` this boot's PMIC watchdog kick by Wisp Boot succeeded, `08` the STIMER runs from the crystal |
+| 2 | u8 | this boot's number, low byte |
+| 3 | u8 | the previous boot's last stage (0 if no valid record) |
+| 4 | u32 | `RSTGEN.STAT` at the start of this boot: `01` external (the case's reset line), `02` power-on, `08` SWPOR, `10` SWPOI, `40` watchdog, `1000` SYSRESETREQ |
+| 8 | u16 | the previous boot's last stage time, ms after its Wisp Boot start (`FFFF` = later, or no crystal) |
+| 10 | u32 | the previous boot's fault PC (0 = none) |
+| 14 | u32 | ... LR |
+| 18 | u32 | ... CFSR |
+
+Reading it after a reboot loop: `prev-valid` with the previous stage `boot-handoff` and cause `40` = the app ran and the watchdog reset it without one breadcrumb from the app; a fault PC = a fault handler ran (stage-0 or Wisp Boot); cause `08` and stage `s0-reset-request` = a case-UART RESET; cause `01` = the case's reset line. No `prev-valid` at all after a warm reset = SRAM did not survive it, and only the cause is known.
 
 ### 2. Stock's version query (step 0's bridge only)
 
@@ -100,14 +130,14 @@ The app's own block (READ block 1), 56 bytes. `tests/boot/case_uart.py decode_st
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | u8 | version = 1 |
-| 1 | u8 | stage: 1 main() entered, 2 HAL up, 3 `bt_enable()` running (EM9305 bring-up), 4 BLE up and advertising, 5 BLE unavailable |
+| 1 | u8 | stage: 1 main() entered, 2 HAL up, 3 `bt_enable()` running (EM9305 bring-up), 4 BLE up and advertising, 5 BLE unavailable, 6 bare metal (stage-0: no BLE, no HAL) |
 | 2 | i16 | `bt_enable()` result; `0x7FFF` = not returned yet |
 | 4 | u8 | sensors present (`wisp_hal_sensors_present()`) |
 | 5 | u8 | flags: `01` battery fields valid, `02` VBUS present (in the case), `04` charging, `08` PMIC watchdog armed with stock's settings, `10` Wisp Boot's services table found, `20` its status block valid, `40` that Wisp Boot is the observe-only build, `80` a BLE session is up |
 | 6 | u16 | battery mV (nPM1300 ADC, one VBAT conversion per request) |
 | 8 | u8 | nPM1300 charger status (BCHGCHARGESTATUS, raw) |
 | 9 | u8 | nPM1300 VBUS status (VBUSINSTATUS, raw) |
-| 10 | u8 | image kind (0 = `native-0`, 255 = development) |
+| 10 | u8 | image kind (0 = `native-0`, 16 = `stage-0`, 255 = development) |
 | 11 | i8 | the last PMIC watchdog write's result (0 or −errno) |
 | 12 | u32 | Apollo510 `RSTGEN.STAT` as the app found it at start (the reset cause; the bootloader and Wisp Boot leave it) |
 | 16 | u32 | uptime, ms |
@@ -123,9 +153,37 @@ The app's own block (READ block 1), 56 bytes. `tests/boot/case_uart.py decode_st
 
 Rule 6's case-session threshold for a native temple (battery ≥ 3,900 mV, [safety.md](safety.md)) is read from offset 6, or from IDENT. The percentage Wisp shows elsewhere is a coarse voltage estimate and reads high while charging; the threshold is still to be confirmed against stock's 80 % at W21.
 
-## Wisp Boot's status block, version 1
+## stage-0's blocks 3 and 4
 
-READ block 2: 612 bytes (the app copies it when a READ at offset 0 arrives and serves the rest of the dump from that copy, so a dump that spans a `confirm()` stays one CRC-correct block) in Wisp Boot's own RAM (`0x20370000–0x20380000`), pointed to by its services table at `0x438200` (version 2: `magic "WBS1"`, `version`, `confirm`, `status`). Layout and every offset: `apps/wisp-fw/src/boot/wisp_boot_status.h` (`_Static_assert`s pin them); decoder `case_uart.py decode_boot_status`. In short:
+**Block 3, the clock measurements** (version 1, 52 bytes; `case_uart.py decode_clock`). stage-0 times 16 watchdog ticks (1,024 LFRC cycles at Wisp Boot's LFRC/64) edge to edge against the STIMER (the 32 kHz crystal) and SysTick (the core clock), without feeding the watchdog in between, 2 s after it started and every 15 s after that. The watchdog's COUNT may count either way (the header does not say): each change adds the smaller of its two modular distances, and the block records which way it saw it move. The first 100 ms after the feed are skipped, and the PMIC is not kicked during a measurement (at most 3.6 s).
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | u8 | version = 1 |
+| 1 | u8 | timebase: 1 = the STIMER on the crystal, 2 = SysTick at an assumed 96 MHz (the crystal did not count) |
+| 2 | u8 | measurements done (saturating) |
+| 3 | u8 | the last one: 0 ok, 1 the watchdog's COUNT never moved, 2 16 ticks took over 3 s, 3 not yet, 4 implausible (LFRC outside 500–2,000 Hz) |
+| 4 | u32 | STIMER STCFG as found |
+| 8 | u32 | the watchdog's CFG (Wisp Boot's, locked) |
+| 12 | u32 | STIMER ticks across 2^22 core cycles at start (0 = the STIMER does not count) |
+| 16 | u32 | the last window in STIMER ticks |
+| 20 | u32 | the same window in core cycles |
+| 24 | u32 | the LFRC in mHz, taking the crystal as 32,768 Hz |
+| 28 | u32 | the core clock in Hz, same reference |
+| 32 | u32 | the watchdog's reset period at that LFRC, ms (RESVAL x 64 / LFRC) |
+| 36 | u32 | the lowest LFRC so far, mHz |
+| 40 | u32 | the highest, mHz |
+| 44 | u32 | the last PMIC kick's result code (`boot_pmic.h`) |
+| 48 | u8 | which way COUNT moved: 1 down, 2 up, 3 both, 0 not seen |
+| 49 | u8[3] | reserved, 0 |
+
+In Renode the LFRC is modelled at 900 Hz and the STIMER's crystal at 32,000 Hz (Renode's Apollo4 model), so the block reads about 922 Hz there.
+
+**Block 4** is this boot's diagnostics record as it stands (64 bytes, `wisp_diag.h`; `decode_diag_record`).
+
+## Wisp Boot's status block, versions 1 and 2
+
+READ block 2: 612 bytes (version 1) or 692 (version 2) (the app copies it when a READ at offset 0 arrives and serves the rest of the dump from that copy, so a dump that spans a `confirm()` stays one CRC-correct block) in Wisp Boot's own RAM (`0x20370000–0x20380000`), pointed to by its services table at `0x438200` (version 2: `magic "WBS1"`, `version`, `confirm`, `status`). Layout and every offset: `apps/wisp-fw/src/boot/wisp_boot_status.h` (`_Static_assert`s pin them); decoder `case_uart.py decode_boot_status`. In short:
 
 - magic `"WBST"`, version, size; build flags (`1` observe-only, `2` UART1 log compiled in);
 - the NOR's RDID and `nor_init()` result (−11 = not the MX25U25643G Wisp Boot drives), the littlefs mount result (1 = not attempted);
@@ -135,6 +193,7 @@ READ block 2: 612 bytes (the app copies it when a READ at offset 0 arrives and s
 - the stage reached, the **action taken** and the **action the fallback build would take** with these inputs, and its reason (`wisp_boot.h`);
 - the `/firmware` inventory: up to 12 files, each with name (32 bytes), size, zlib CRC-32 of the whole file and a result; a truncation flag and the directory's open result;
 - `confirm()` calls and the last result;
+- version 2 only: `RSTGEN.STAT` at this boot's start, the PMIC watchdog kick's result, the boot-report window's answers and length, UART2's set-up result, the STIMER's clock select, and the previous boot's diagnostics record (`prev`, with `prev_valid`);
 - a zlib CRC-32 over everything before it, resealed at every change. The app reports the block only when magic, size and CRC are right.
 
 On the first native boot (W24) this is the known-answer test of the NOR read path: the left temple's staging file should still hold the pure stock 2.4.0.24 main (CRC word `0x971F4516` [I]), and the inventory should list `codec.bin`, `ble_em9305.bin`, `touch.bin` and `box.bin` with the sizes of the installed bundle.

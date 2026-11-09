@@ -1,0 +1,21 @@
+{
+  "what": "nPM1300 registers after its own watchdog power-cycled it, as W24 read them (rung4.md, 'W24 result and analysis'). WispPmicWdt writes these into the PMIC model when its watchdog expires (SetPowerOn), so Renode shows what the left temple showed: the charger off and the PMIC watchdog disarmed.",
+  "source": "W24 step 9, `pmic-read --compare` against W21, left temple, 2026-11-08 ~17:07 UTC (safety.md hardware log, PR #79; report runs/w18-pmic-read-left-20261108T17*.json on the Mac). Raw codes.",
+  "notes": "W24 found 23 configuration registers different from W21; the hardware log names these 12 (plus the timer target's two other bytes, which were 0 before and after). The other 11 values are in the report on the Mac and are not modelled yet [?]: those registers keep whatever was written last.",
+  "registers": {
+    "0x0201": {"name": "VBUSIN.ILIM", "value": "0x01"},
+    "0x0304": {"name": "BCHARGER.ENABLE", "value": "0x00"},
+    "0x0308": {"name": "BCHARGER.ISET_MSB", "value": "0x08"},
+    "0x030C": {"name": "BCHARGER.VTERM", "value": "0x02"},
+    "0x0408": {"name": "BUCK1.VOUT_NORM", "value": "0x02"},
+    "0x040A": {"name": "BUCK2.VOUT_NORM", "value": "0x08"},
+    "0x040F": {"name": "BUCK.SW_CTRL", "value": "0x00"},
+    "0x050A": {"name": "ADC.NTCR_SEL", "value": "0x01"},
+    "0x0601": {"name": "GPIO1.MODE", "value": "0x00"},
+    "0x0705": {"name": "TIMER.CONFIG", "value": "0x00"},
+    "0x0708": {"name": "TIMER.TARGET_HI", "value": "0x00"},
+    "0x0709": {"name": "TIMER.TARGET_MID", "value": "0x00"},
+    "0x070A": {"name": "TIMER.TARGET_LO", "value": "0x00"},
+    "0x0807": {"name": "LDSW.CONFIG", "value": "0x00"}
+  }
+}
