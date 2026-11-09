@@ -105,6 +105,27 @@
       "value": "0x211",
       "register": "CLKGEN.MSPIIOCLKCTRL",
       "reason": "not start-up: the MSPI HAL's IO clock for MSPI0, the panel's bus (Zephyr's mspi_ambiq driver through am_hal_mspi), from native-1 on where the panel is enabled. Stock drives MSPI0 for the same panel through its own MSPI HAL [I]; not part of the W25 start-up comparison."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004044",
+      "value": "0xFBBFE1",
+      "register": "CLKGEN.MISC",
+      "reason": "FRCHFRC and FRCHFRC2 (bit 5) set by am_hal_clkgen_private_hfrc_force_on when the MSPI HAL asks for HFRC2 to clock MSPI0 at the panel's quad rate; the same mechanism in stock's HAL [I]; native-1 only while the panel runs."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x214",
+      "register": "CLKGEN.MSPIIOCLKCTRL",
+      "reason": "not start-up: MSPI0's IO clock select and enable for the panel's transfers (Zephyr's mspi_ambiq driver through am_hal_mspi), set when the panel is powered and driven. Stock drives MSPI0 for the same panel through its own MSPI HAL [I]."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x215",
+      "register": "CLKGEN.MSPIIOCLKCTRL",
+      "reason": "not start-up: MSPI0's IO clock select and enable for the panel's transfers (Zephyr's mspi_ambiq driver through am_hal_mspi), set when the panel is powered and driven. Stock drives MSPI0 for the same panel through its own MSPI HAL [I]."
     }
   ]
 }

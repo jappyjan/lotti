@@ -54,13 +54,15 @@ static const struct device *const uart = DEVICE_DT_GET(DT_NODELABEL(uart2));
 #define PAD_UART   4u /* FNCSEL 4: UART2TX on pad 42, UART2RX on pad 44 (stock, the loader) */
 #define PAD_PARKED 3u /* FNCSEL 3 (GPIO), output and input off */
 
-static void pads(uint32_t tx, uint32_t rx)
+/* One pad, then the other: the pad that stops driving or listening is always parked first, so the
+ * two are never in UART function together (as the loader and Wisp Boot turn the wire). */
+static void pads(uint32_t first_pad, uint32_t first_fn, uint32_t second_pad, uint32_t second_fn)
 {
 	unsigned int key = irq_lock(); /* PADKEY must not be relocked under us */
 
 	sys_write32(0x73u, GPIO_PADKEY);
-	sys_write32(tx, GPIO_PINCFG(PAD_TX));
-	sys_write32(rx, GPIO_PINCFG(PAD_RX));
+	sys_write32(first_fn, GPIO_PINCFG(first_pad));
+	sys_write32(second_fn, GPIO_PINCFG(second_pad));
 	sys_write32(0, GPIO_PADKEY);
 	irq_unlock(key);
 }
@@ -68,7 +70,7 @@ static void pads(uint32_t tx, uint32_t rx)
 static void send(const uint8_t *p, size_t n)
 {
 	k_msleep(SETTLE_MS);
-	pads(PAD_UART, PAD_PARKED);
+	pads(PAD_RX, PAD_PARKED, PAD_TX, PAD_UART);
 	for (size_t i = 0; i < n; i++) {
 		uart_poll_out(uart, p[i]);
 	}
@@ -81,7 +83,7 @@ static void send(const uint8_t *p, size_t n)
 		}
 		k_busy_wait(1);
 	}
-	pads(PAD_PARKED, PAD_UART);
+	pads(PAD_TX, PAD_PARKED, PAD_RX, PAD_UART);
 }
 
 static void fill_status(void *ctx, struct wisp_case_status *s)

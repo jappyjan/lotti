@@ -1571,7 +1571,9 @@ class Harness:
                     break
             q["boot_watch"] = {"complete": hook.complete(answers), "queries": i + 1}
             # 2. The boot screen: drawn at boot, the panel off again CONFIG_WISP_BOOT_SCREEN_S later.
-            frames = int(run.r.cmd("panel Frames").split()[0], 0)
+            # JBD4010: pixels and commits (the model's Frames counts the A6N-G's whole frames).
+            frames = int(run.r.cmd("panel Commits").split()[0], 0)
+            pixels = int(run.r.cmd("panel PixelBytes").split()[0], 0)
             frame = self.panel_frame(run)
             screen = self.boot_screen_errors(frame)
             for _ in range(62):
@@ -1642,8 +1644,8 @@ class Harness:
         if st.get("display") != "on" or (q.get("status_later") or {}).get("display") != "off":
             fails.append(f"display state {st.get('display')} ({st.get('display_err')}), later "
                          f"{(q.get('status_later') or {}).get('display')}")
-        if frames < 1 or screen:
-            fails.append(f"boot screen: {frames} frame(s); {screen}")
+        if frames < 1 or pixels < 320 * 480 or screen:
+            fails.append(f"boot screen: {frames} commit(s), {pixels} pixel bytes; {screen}")
         if code != 0 or second["helo"] != 1 or report_reset.get("prev_stage") != "app-reset-request" \
                 or report_reset.get("boot") != (rec1.get("boots", 0) + 1) & 0xFF:
             fails.append(f"RESET: reply {code}, {second['helo']} HELO, report {report_reset}")
@@ -1682,7 +1684,7 @@ class Harness:
                  f"UART half duplex ({half}): IDENT kind {ident_.get('image_kind')} stage {ident_.get('stage')}, both "
                  f"blocks, BOOTREP and the record from the app, boot-watch's protocol complete; Wisp Boot's NOR read "
                  f"(staging {boot.get('staging_id', 0):08x}, {len(boot.get('inventory', []))} firmware files); boot "
-                 f"screen drawn ({frames} frame), rails {RAILS_ON} after the gate, off {RAILS_OFF} after 60 s; PMIC "
+                 f"screen drawn ({pixels} pixel bytes, {frames} commits, checked pixel by pixel), rails {RAILS_ON} after the gate, off {RAILS_OFF} after 60 s; PMIC "
                  f"armed with stock's writes, {pm['kicks']} kicks, Wisp Boot {wb_kicks}, no power cycle; RESET -> HELO "
                  f"-> second boot; its report (from the {report_reset.get('source')}) prev {report_reset.get('prev_stage')} cause "
                  f"{report_reset.get('reset_cause_names')}, boot {report_reset.get('boot')}, app-idle again; {live}; strict clean"
