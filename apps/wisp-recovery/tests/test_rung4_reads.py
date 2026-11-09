@@ -105,6 +105,20 @@ class Peek(unittest.TestCase):
             self.assertNotIn(pins.PEEK_REGIONS[name][:2], reads)  # never dumped
         self.assertEqual(case.mram.writes, [])
 
+    def test_a_sealed_wisp_boot_status_block_is_decoded(self):
+        from test_case_uart import boot_block
+        from wisp_w18 import case_uart
+        st = bytearray(case_uart.BOOT_STATUS_SIZE)
+        st[:608] = boot_block()[:608]
+        struct.pack_into("<HH", st, 4, 2, case_uart.BOOT_STATUS_SIZE)
+        struct.pack_into("<IIHHBBBB", st, 608, 0x40, 0, 0, 300, 1, 0, 3, 0)
+        st[624:688] = wisp_record(boots=6, stage=0x15)
+        struct.pack_into("<I", st, 688, zlib.crc32(bytes(st[:688])))
+        out = cli.describe_peek("wisp-boot-status", bytes(st))
+        self.assertEqual(out["status"]["reset_cause_names"], ["watchdog"])
+        self.assertEqual(out["status"]["window_ms"], 300)
+        self.assertEqual((out["status"]["prev"]["boots"], out["status"]["prev"]["stage"]), (6, "boot-mounted"))
+
     def test_the_wisp_regions_are_the_pinned_stage0_boots(self):
         """wisp-record is wisp_diag_slot and wisp-boot-status is `st` (692 B) in the committed
         stage-0 Wisp Boot ELF; both inside Wisp Boot's RAM, the top 64 KiB of SSRAM group 2, and

@@ -27,8 +27,9 @@ case:
 
 A protocol can therefore schedule its requests: `anchor(t, kind)` is told when the boot was
 released (`cont`, t = 0) and when each loader `HELO` came; `wait(t)` returns how long to wait
-before the next request (None: the plain interval); `no_answer(t)` is told when an exchange ended
-without a frame (status 2: the poll bound passed, or garbage).
+before the next request (None: the plain interval); `at(t)` is told the time of each answer
+before `decode` sees it; `no_answer(t)` is told when an exchange ended without a frame (status 2:
+the poll bound passed, or garbage).
 
 Built in: `listen`, which sends nothing and records any frame the temple sends by itself. It is
 safe against any temple. The loader's own HELO is recognised whatever the protocol: after CONT it
@@ -107,7 +108,7 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
     if hasattr(protocol, "anchor"):
         protocol.anchor(0.0, "cont")
     first = protocol.wait(0.0) if hasattr(protocol, "wait") else None
-    if first:
+    if first and first > 0:
         sleep(min(first, duration_s))
     while clock() - started < duration_s:
         frame = protocol.request(index)
@@ -129,6 +130,8 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
                 protocol.anchor(t, "helo")
             log(f"boot-watch: t = {t:.1f} s: the loader's HELO, the temple rebooted")
         elif status == 0:
+            if hasattr(protocol, "at"):
+                protocol.at(t)  # the answer's time, before decode
             decoded = protocol.decode(reply)
             if decoded is None:
                 out["foreign"].append({"t": t, "frame": reply.hex()})

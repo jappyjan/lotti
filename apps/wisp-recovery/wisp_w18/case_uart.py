@@ -257,8 +257,8 @@ TERMINAL_STAGES = ("bt-up", "bt-failed", "bare-metal")
 
 class WispStatus:
     """boot-watch's hook (status.StatusProtocol). First, at every boot, the boot report (BOOTREP,
-    rung4.md W24 analysis D2): Wisp Boot answers it in a window of about 300 ms (100 ms more after
-    each answer) that opens right after the loader hands off, the app later; a temple that reboots
+    rung4.md W24 analysis D2): Wisp Boot answers it in a window of about 300 ms (until 100 ms after
+    its last answer, at most 1 s) that opens right after the loader hands off, the app later; a temple that reboots
     in a loop thus says, at each boot, why the previous one ended. Then IDENT until the app answers,
     then every READ of the app's status block and Wisp Boot's block (and, for stage-0, its clock
     block and diagnostics record) that has no answer yet (a lost one is asked again on the next
@@ -273,7 +273,9 @@ class WispStatus:
     is asked `report_at[k]` s after that release, k = the boots so far whose try went unanswered,
     cycling, until Wisp Boot answers one; then that offset is kept. IDENT waits `APP_AFTER_REPORT_S` after the report, so it
     does not land in Wisp Boot's window (which ignores it) or in its NOR scan before the hand-off.
-    W24b's tool asked ~15 ms after CONT/HELO, inside the loader's window, and never again."""
+    If Wisp Boot stops answering at a kept offset on two boots in a row, the sweep resumes.
+    W24b's tool asked ~15 ms after each HELO, inside the loader's window (after CONT: before Wisp
+    Boot's UART set-up), and never again on that boot."""
 
     name = "wisp"
 
@@ -292,6 +294,7 @@ class WispStatus:
         self.reports: list[dict] = []
         self.report_locked: float | None = None  # the offset that got an answer
         self.misses = 0  # boots whose one report try got no answer: each moves report_at on by one
+        self.locked_misses = 0  # misses in a row at the kept offset
         self.report_asked = 0
         self.report_missed = False
         self.report = None
@@ -308,7 +311,6 @@ class WispStatus:
         self.ident: dict | None = None
         self.report: dict | None = None  # this boot's boot report
         self.report_asked = 0
-        self.report_sent_at: float | None = None
         self.report_offset: float | None = None
         self.report_answered_at: float | None = None
         self.report_late_asked = False  # BOOTREP asked once more after an app's IDENT
@@ -336,6 +338,14 @@ class WispStatus:
         if not self.report_missed:
             self.report_missed = True
             self.misses += 1
+            if self.report_locked is not None:
+                self.locked_misses += 1
+                if self.locked_misses >= 2:  # the kept offset was marginal: sweep again
+                    self.report_locked, self.locked_misses = None, 0
+
+    def at(self, t: float) -> None:
+        """status.watch: an answer came at t (decode follows)."""
+        self.now = t
 
     def report_due(self) -> bool:
         return self.report is None and self.report_asked == 0
@@ -373,7 +383,7 @@ class WispStatus:
     def request(self, index: int) -> bytes:
         if self.report_due():
             self.report_asked += 1
-            self.report_sent_at, self.report_offset = self.now, self._offset()
+            self.report_offset = self._offset()
             return bootrep_request()
         if self.ident is None:
             return ident_request()
@@ -404,7 +414,7 @@ class WispStatus:
                 self.report = out
                 self.report_answered_at = self.now
                 if out["source"] == "wisp-boot" and self.report_offset is not None:
-                    self.report_locked = self.report_offset
+                    self.report_locked, self.locked_misses = self.report_offset, 0
                     out["asked_s_after_release"] = round(self.report_offset, 3)
                 out["reboots_before"] = self.reboots
                 self.reports.append(out)  # status.watch adds its time ("t") to this same dict

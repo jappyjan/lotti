@@ -104,7 +104,7 @@ class WispBootTemple(fake_status.BootingTemple):
         op = req[7] if req[4:7] == b"WSP" else None
         if phase == "window" and op == c.OP_BOOTREP:
             t = self.clock()
-            self.window_end = min(max(self.window_end, t + 0.1), self.window_cap)
+            self.window_end = min(t + 0.1, self.window_cap)  # report_window: until = now + 100 ms
             return bootrep_reply(boot=self.boots, prev_stage=self.last_stage if self.boots > 1 else 0,
                                  cause=0x40 if self.boots > 1 else 0x01, flags=0x0D if self.boots > 1 else 0x0C)
         if phase != "app" or op is None:
@@ -289,6 +289,33 @@ class AimedReport(unittest.TestCase):
         self.assertGreaterEqual(events["answers"][0]["t"], POLL_BOUND_S)
         self.assertEqual(events["summary"]["boot_report"]["source"], "app")
         self.assertTrue(events["complete"])
+
+    def test_ident_waits_two_seconds_after_the_report_even_at_a_late_offset(self):
+        """A late window (0.8 s) and a long NOR scan (1.5 s): IDENT must come 2 s after the report's
+        answer, not 2 s after the release, or it lands in the NOR scan and blocks the relay."""
+        case = TimingCase(temple(), alive=True, handoff_s=0.8, nor_s=1.5)
+        code, report = watch(case, "--watch-s", "40", "--report-at", "0.95")
+        self.assertEqual(code, 0, report.get("error"))
+        events = report["boot_watch"]
+        self.assertEqual(events["unanswered"], 0)
+        self.assertTrue(events["complete"])
+        log = case.relays[0].temple.log
+        (t_report, phase, _), (t_ident, phase2, op2) = log[0], log[1]
+        self.assertEqual((phase, phase2, op2), ("window", "app", "57535001"))
+        self.assertGreaterEqual(t_ident - t_report, c.WispStatus.APP_AFTER_REPORT_S)
+
+    def test_a_kept_offset_that_stops_working_is_swept_again(self):
+        hook = c.WispStatus()
+        hook.request(0)
+        hook.at(0.17)
+        hook.decode(bootrep_reply())
+        self.assertEqual(hook.report_locked, 0.15)
+        for k in range(2):
+            hook.reset()
+            hook.anchor(10.0 * (k + 1), "helo")
+            hook.request(1)
+        hook.reset()
+        self.assertIsNone(hook.report_locked)
 
     def test_report_at_is_checked(self):
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):

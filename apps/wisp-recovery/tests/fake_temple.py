@@ -276,6 +276,8 @@ class FakeClock:
         return self.now
 
     def advance(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError(f"the clock cannot go back ({seconds} s)")  # time.sleep refuses it too
         self.now += seconds
 
 

@@ -926,7 +926,7 @@ class Harness:
             listen = first and await_helo
             first = False
             wait = None if listen else hook.wait(t)
-            if wait:
+            if wait and wait > 0:
                 run.step(min(wait, seconds - t))
                 t += min(wait, seconds - t)
                 if t >= seconds:
@@ -948,13 +948,15 @@ class Harness:
                                      "got": got[4:12].hex() if got else None})
             if got is None:
                 out["unanswered"] += 1
-                hook.no_answer(t)
+                if t - sent >= RELAY_POLL_BOUND_S:  # not when the watch merely ran out
+                    hook.no_answer(t)
             elif status.is_loader_hello(got):
                 out["helo"] += 1
                 hook.reset()
                 hook.reboots += 1
                 hook.anchor(t, "helo")
             else:
+                hook.at(t)
                 d = hook.decode(got)
                 if d is None:
                     out["foreign"] += 1
@@ -982,7 +984,9 @@ class Harness:
             self.native_probes(run, STAGE_0_DIR / "wisp_boot.elf")
             run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
             pmic_realism(run)
-            run.r.cmd("rstgen RetainRange 0x20370000 0x40")
+            # Wisp Boot's whole RAM survives warm resets (the record and its status block `st`, which
+            # the peek in part 4 reads); the silicon question is the same for both.
+            run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
 
             def host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
@@ -1081,6 +1085,12 @@ class Harness:
             fails.append(f"boot counter {report_reset.get('boot')} -> {report_case.get('boot')}")
         if report_reset.get("asked_s_after_release") is None:
             fails.append("the report after RESET did not come from Wisp Boot's window at an aimed offset")
+        for part, w in (("RESET", second), ("case reset", third)):
+            rep = [e["t"] for e in w["exchanges"] if e["req"] == "57535004" and e["got"]]
+            idents = [e["t"] for e in w["exchanges"] if e["req"] == "57535001"]
+            if not rep or not idents or idents[0] - rep[0] < recovery_case_uart.WispStatus.APP_AFTER_REPORT_S:
+                fails.append(f"{part}: IDENT not {recovery_case_uart.WispStatus.APP_AFTER_REPORT_S} s after the report: "
+                             f"{w['exchanges'][:4]}")
         peek_record, peek_status = {}, {}
         if "error" in presult or not peeked:
             fails.append(f"peek after the case reset: {presult.get('error')!r}")
