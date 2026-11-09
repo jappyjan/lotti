@@ -8,7 +8,8 @@
     0x448000 (its own vector table, SP below Wisp Boot's RAM), with check_image.py's functions;
   - the image ends at or before 0x7F8000;
   - with --app-config: the app is a hardware image (CONFIG_WISP_HW_IMAGE=y, an image kind other
-    than 255, no enabled panel, MSPI controller or nPM13xx node);
+    than 255, no enabled nPM13xx node, no console, log or printk; the panel and its MSPI controller
+    only with the gated rail switches, CONFIG_WISP_NPM1300_SWITCH; rung4.md G11, G12, W25);
   - with --boot-elf --observe: Wisp Boot is the observe-only build (no NOR program/erase, no
     littlefs write path, no flag write among its symbols);
   - with --bare-app-elf (stage-0): the app is bare metal, links none of those writers, and its only
@@ -51,7 +52,8 @@ def check(image: bytes, boot: bytes, app: bytes) -> list[str]:
     return errors
 
 
-HW_FORBIDDEN = re.compile(r"^CONFIG_DT_HAS_(EVEN_G2_ULED|AMBIQ_MSPI_CONTROLLER|NORDIC_NPM13\w*)_ENABLED=y$", re.M)
+HW_FORBIDDEN = re.compile(r"^CONFIG_(DT_HAS_NORDIC_NPM13\w*_ENABLED|UART_CONSOLE|CONSOLE|LOG|PRINTK)=y$", re.M)
+HW_PANEL = re.compile(r"^CONFIG_DT_HAS_(EVEN_G2_ULED|AMBIQ_MSPI_CONTROLLER)_ENABLED=y$", re.M)
 BOOT_WRITERS = ("nor_prog", "nor_erase_4k", "lfs_file_write", "lfs_format", "lfs_file_rawwrite",
                 "lfs_mkdir", "hw_flag_set_install", "rescue_copy", "record_write", "bd_prog", "bd_erase")
 
@@ -64,6 +66,9 @@ def check_app_config(text: str) -> list[str]:
     if not kind or kind.group(1) == "255":
         errors.append("the app's image kind is a development build")
     errors += [f"enabled in the app: {m.group(0)}" for m in HW_FORBIDDEN.finditer(text)]
+    if HW_PANEL.search(text) and not re.search(r"^CONFIG_WISP_NPM1300_SWITCH=y$", text, re.M):
+        errors += [f"enabled in the app without the gated rail switches: {m.group(0)}"
+                   for m in HW_PANEL.finditer(text)]
     return errors
 
 

@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: MIT
+description: |
+  The nPM1300's panel rails as Wisp switches them (src/drivers/npm1300_switch.c): only the task
+  registers that turn a rail on and off, after reading back that the rail's configuration is
+  what stock left (rung4.md W25). Never writes a configuration register. Its children are
+  wisp,npm1300-switch regulators. Lives at the PMIC's address while the nordic,npm1300 node is
+  disabled (hardware images: Zephyr's MFD, regulator and charger drivers stay off, rung4.md G12).
+
+compatible: "wisp,npm1300-rails"
+
+include: i2c-device.yaml

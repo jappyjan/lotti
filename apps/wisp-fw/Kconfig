@@ -149,6 +149,28 @@ config WISP_ULED_INIT_PRIORITY
 	help
 	  After MSPI, the nPM1300 regulators (BUCK1, LDSW2) and GPIO.
 
+config WISP_NPM1300_SWITCH
+	bool "The panel's nPM1300 rails by their task registers, gated (src/drivers/npm1300_switch.c)"
+	default y
+	depends on DT_HAS_WISP_NPM1300_SWITCH_ENABLED
+	select I2C
+	select REGULATOR
+	help
+	  Hardware images (native-1 on) power the panel through these instead of Zephyr's
+	  nPM13xx regulator driver: task writes only, after reading back stock's rail
+	  configuration (rung4.md W25).
+
+config WISP_BOOT_SCREEN
+	bool "Boot screen: a test pattern and \"Wisp\" (src/display/boot_screen.c)"
+	depends on WISP_ULED && WISP_NPM1300_SWITCH && WISP_NATIVE_HAL
+	help
+	  native-1 (rung4.md W25): composed by wisp-core, shown for WISP_BOOT_SCREEN_S.
+
+config WISP_BOOT_SCREEN_S
+	int "Seconds the boot screen stays on"
+	default 60
+	depends on WISP_BOOT_SCREEN
+
 config WISP_NATIVE_HAL
 	bool "Native HAL on the G2 drivers (src/hal/native/)"
 	default y
@@ -181,6 +203,15 @@ config WISP_CASE_UART_POLL_MS
 	help
 	  The PL011 FIFO holds 32 bytes; every request is shorter, and the host waits for the
 	  reply before sending the next one.
+
+config WISP_SOC_INIT
+	bool "Wisp's own SoC start-up instead of the HAL's (src/soc/wisp_soc_init.c)"
+	depends on BOARD_WISP_G2
+	help
+	  Replaces the apollo5x soc_early_init_hook (made weak by Wisp's Zephyr patch 0003)
+	  with the start-up rung4.md W25 settles from stock 2.4.0.24's: breadcrumbs in Wisp
+	  Boot's record around every step, and only the power, clock and trim writes that stock
+	  makes at the same point.
 
 config WISP_IMAGE_KIND
 	int "Image generation reported over the case UART (0 = native-0)"

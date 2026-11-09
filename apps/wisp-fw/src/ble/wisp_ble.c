@@ -33,6 +33,7 @@
 #if defined(CONFIG_BOARD_WISP_G2)
 #include "boot_link.h"
 #endif
+#include "wisp_app_diag.h"
 #include "wisp_ble.h"
 #include "wisp_hal.h"
 #include "wisp_link.h"
@@ -342,6 +343,7 @@ static void log_session(void)
 			LOG_INF("session up: app '%s' (%s)", link.basic.session.peer.app_id,
 				link.basic.session.peer.client_name);
 			wisp_app_status.sessions++;
+			wisp_app_diag_mark(WISP_DIAG_APP_SESSION);
 #if defined(CONFIG_BOARD_WISP_G2)
 			/* HELLO completed with BLE up: this boot is good (rung4.md G8), once per
 			 * boot. A no-op that only counts the call in the observe-only Wisp Boot

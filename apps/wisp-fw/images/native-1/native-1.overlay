@@ -1,0 +1,71 @@
+/* SPDX-License-Identifier: MIT
+ * native-1 (docs/wisp/rung4.md W25): the full app behind the observe-only Wisp Boot.
+ *
+ * Console: UART1 is disabled and nothing is the console (W24 fix plan 3).
+ *
+ * Panel: the JBD4010 (both of Jan's temples report hardware 5), with stock's rails and pins. Its
+ * rails are the gated switches of src/drivers/npm1300_switch.c at the PMIC's address: task writes
+ * only (LDSW2 08 02 01 / 08 03 01, BUCK1 04 00 01 / 04 01 01), each after reading back stock's
+ * configuration (BUCK1 VOUT_NORM 0x01 and SW_CTRL 0x03, LDSW2 LDOSEL 0x00, W21's snapshot).
+ *
+ * PMIC: Zephyr's MFD, regulator, charger and watchdog drivers stay off, as in native-0 (G12).
+ * src/hal/native/power.c arms and kicks the watchdog with stock's writes and reads the battery. */
+/ {
+	chosen {
+		/delete-property/ zephyr,console;
+		/delete-property/ zephyr,shell-uart;
+	};
+};
+
+&uart1 {
+	status = "disabled";
+};
+
+&pmic {
+	status = "disabled";
+};
+
+&pmic_gpio {
+	status = "disabled";
+};
+
+&pmic_regulators {
+	status = "disabled";
+};
+
+&charger {
+	status = "disabled";
+};
+
+&pmic_wdt {
+	status = "disabled";
+};
+
+&i2c7 {
+	/* The same address as the (disabled) pmic node: never both enabled. */
+	wisp_rails: rails@6b {
+		compatible = "wisp,npm1300-rails";
+		reg = <0x6b>;
+
+		wisp_buck1: buck1 {
+			compatible = "wisp,npm1300-switch";
+			rail = "buck1";
+			expect-vout = <0x01>;
+		};
+
+		wisp_ldsw2: ldsw2 {
+			compatible = "wisp,npm1300-switch";
+			rail = "ldsw2";
+		};
+	};
+};
+
+&uled {
+	panel = "jbd4010";
+	vdd-supply = <&wisp_buck1>;
+	vio-supply = <&wisp_ldsw2>;
+	/delete-property/ en-b-gpios;
+	en-c-gpios = <&gpio64_95 4 GPIO_ACTIVE_HIGH>; /* GPIO68 */
+	offset-x = <12>;
+	offset-y = <10>;
+};

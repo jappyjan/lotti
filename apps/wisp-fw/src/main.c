@@ -59,6 +59,10 @@ int wisp_case_start(void);
 #if defined(CONFIG_WISP_BLE)
 #include "wisp_ble.h"
 #endif
+#if defined(CONFIG_WISP_BOOT_SCREEN)
+#include "boot_screen.h"
+#endif
+#include "wisp_app_diag.h"
 
 #ifndef WISP_FW_GIT_REV
 #define WISP_FW_GIT_REV "unknown"
@@ -240,6 +244,7 @@ static void selftest_sensors(void)
 
 int main(void)
 {
+	wisp_app_diag_mark(WISP_DIAG_APP_MAIN);
 	wisp_app_status.stage = WISP_APP_STAGE_KERNEL;
 #if defined(CONFIG_WISP_NATIVE_HAL)
 	wisp_native_watchdogs_start();
@@ -260,6 +265,17 @@ int main(void)
 #if defined(CONFIG_WISP_NATIVE_HAL)
 	bring_up();
 	wisp_app_status.stage = WISP_APP_STAGE_HAL;
+	wisp_app_diag_mark(WISP_DIAG_APP_HAL);
+#endif
+#if defined(CONFIG_WISP_BOOT_SCREEN)
+	{
+		int err;
+
+		wisp_app_status.display = wisp_boot_screen_show(&err);
+		wisp_app_status.display_err = (int8_t)err;
+		wisp_app_diag_mark(WISP_DIAG_APP_DISPLAY);
+		printk("wisp: boot screen: state %u (%d)\n", wisp_app_status.display, err);
+	}
 #endif
 #if defined(CONFIG_WISP_DRIVER_SELFTEST)
 	selftest_display();
@@ -269,20 +285,24 @@ int main(void)
 #if defined(CONFIG_WISP_BLE)
 	printk("wisp: bluetooth: EM9305 update path compiled out (safety rule 8)\n");
 	wisp_app_status.stage = WISP_APP_STAGE_BT_START;
+	wisp_app_diag_mark(WISP_DIAG_APP_BT_START);
 	int bt = wisp_ble_start();
 
 	wisp_app_status.bt_result = (int16_t)bt;
 	if (bt == 0) {
 		wisp_app_status.stage = WISP_APP_STAGE_BT_UP;
+		wisp_app_diag_mark(WISP_DIAG_APP_BT_UP);
 		printk("wisp: bluetooth up, Wisp GATT service registered\n");
 	} else {
 		wisp_app_status.stage = WISP_APP_STAGE_BT_FAILED;
+		wisp_app_diag_mark(WISP_DIAG_APP_BT_FAILED);
 		printk("wisp: bluetooth unavailable, running without a link\n");
 	}
 #else
 	printk("wisp: bluetooth off\n");
 #endif
 
+	wisp_app_diag_mark(WISP_DIAG_APP_IDLE);
 	if (CONFIG_WISP_HEARTBEAT_MS == 0) {
 		return 0;
 	}

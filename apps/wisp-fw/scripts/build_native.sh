@@ -3,11 +3,13 @@
 # wisp-fw:build-native — a whole native image: Wisp Boot padded to 64 KiB + the Wisp app at
 # 0x448000, exactly what install-wisp would write at 0x438000 (docs/wisp/rung4.md §2, §3).
 #
-#   scripts/build_native.sh native-0
+#   scripts/build_native.sh native-1
 #   scripts/build_native.sh stage-0
 #
-# native-0: the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no UART1 log)
-# and the app with images/native-0/ (panel off, PMIC observed only: cmake/hwimage.cmake). Every gate
+# native-1 (rung4.md W25): the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no
+# UART1 log) and the app with images/native-1/ (no console, the panel through the gated rail
+# switches, PMIC configuration untouched: cmake/hwimage.cmake). native-0 (W22) was built the same
+# way with images/native-0/ and is pinned as built at 8374f9a; this tree no longer builds it. Every gate
 # runs on its part: Wisp Boot (check_image, rule 8, no MRAM write), the app (check_image --part app,
 # rule 8, no MRAM write, all in its build), the combined image (layout, both vector tables, Wisp
 # Boot's slot byte for byte) and wisp-ota's own rule-3 checks (pack-main). Nothing is pinned here:
@@ -23,16 +25,21 @@ source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 wisp_require_setup
 
-image="${1:?usage: build_native.sh native-0}"
+image="${1:?usage: build_native.sh native-1|stage-0}"
 case "$image" in
-native-0)
+native-1)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
+	;;
+native-0)
+	echo "wisp-fw: native-0 is pinned as built at 8374f9a (apps/wisp-recovery/wisp_w18/data/native-0/);" \
+		"this tree's hardware-image gate (no console, W25) no longer builds it: check out 8374f9a" >&2
+	exit 1
 	;;
 stage-0)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_STAGE0=ON)
 	;;
 *)
-	echo "wisp-fw: unknown native image '$image' (known: native-0, stage-0)" >&2
+	echo "wisp-fw: unknown native image '$image' (known: native-1, stage-0)" >&2
 	exit 1
 	;;
 esac

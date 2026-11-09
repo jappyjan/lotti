@@ -80,6 +80,8 @@ void wisp_case_status_encode(uint8_t out[WISP_CASE_STATUS_SIZE], const struct wi
 	put16(out + 36, s->confirm_calls);
 	put16(out + 38, (uint16_t)s->confirm_result);
 	put16(out + 40, s->boot_block_size);
+	out[42] = s->display;
+	out[43] = (uint8_t)s->display_err;
 	memcpy(out + 44, s->rev, sizeof(s->rev));
 }
 
