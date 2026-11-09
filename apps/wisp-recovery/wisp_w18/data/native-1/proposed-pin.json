@@ -1,0 +1,27 @@
+{
+  "note": "PROPOSED, NOT PINNED: copy into wisp_w18/pins.py only in the reviewed pinning commit (rung4.md W24d). The suites below are the builder's rule-12 runs; the review reruns them.",
+  "image": {
+    "commit": "237c41e",
+    "image_sha256": "a21297113d7f76fbdae87d1a10eaebf3b04b621f62fe9df5f24fa12789235ba7",
+    "image_bytes": 245116,
+    "elf_sha256": "ceb1c87fbfb4a16d1ab21d884d73902457c92be8a023d24c1ef71e37bb867e08",
+    "map_sha256": "fa0209819c9abd6cc31fb2a703e8f748af7c94db25298fe19977829f7996ca99",
+    "gates": [
+      "check_rule8",
+      "no-mram-write"
+    ],
+    "crc32": "0x83454f17",
+    "crc32_aligned_over_stock": "0xa8a44793",
+    "wisp_boot_slot_sha256": "34e401fbf2c90950bdfca96ad2bb7f507db47ef2560a3254f2954f732463a776"
+  },
+  "wisp_boot": {
+    "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 237c41e",
+    "wisp_boot_bin_sha256": "ef1a967feb9380617ec4c2bbfa9fc23c8a6d2df6d41245066ed8f865492c7e10",
+    "suites": {
+      "stock-2.4.0.24": "observe suite: see rung4.md W24d",
+      "patched-87e2d4e0": "observe suite: see rung4.md W24d"
+    }
+  },
+  "end": "0x473d80",
+  "peek_wisp_boot_status": "0x2037533c"
+}

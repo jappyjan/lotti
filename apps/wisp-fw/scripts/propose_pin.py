@@ -26,7 +26,8 @@ REPO = HERE.parents[2]
 sys.path.insert(0, str(REPO / "apps/wisp-recovery"))
 from wisp_w18 import image, pins  # noqa: E402
 
-APPS = {"stage-0b": ("stage-0b.bin", "stage0.elf", "stage0.map")}
+APPS = {"stage-0b": ("stage-0b.bin", "stage0.elf", "stage0.map"),
+        "native-1": ("native-1.bin", "zephyr.elf", "zephyr.map")}
 
 
 def sha(data: bytes) -> str:

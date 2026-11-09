@@ -1,19 +1,19 @@
 {
   "image": "native-1",
-  "bytes": 244628,
-  "end": "0x473b94",
-  "image_sha256": "10da0eaeed3284b22807af90ff19b397e5c6812c41ff997e6cd4402861383f74",
-  "image_crc32": "39f3c7ee",
+  "bytes": 245116,
+  "end": "0x473d7c",
+  "image_sha256": "a21297113d7f76fbdae87d1a10eaebf3b04b621f62fe9df5f24fa12789235ba7",
+  "image_crc32": "83454f17",
   "wisp_boot_bin_sha256": "ef1a967feb9380617ec4c2bbfa9fc23c8a6d2df6d41245066ed8f865492c7e10",
   "wisp_boot_bin_bytes": 11584,
   "wisp_boot_slot_sha256": "34e401fbf2c90950bdfca96ad2bb7f507db47ef2560a3254f2954f732463a776",
-  "app_bin_sha256": "26ce56b409890c4cf21ac03bb9976b859db6a33c7bfeb45e8feff6010ec4cee8",
-  "app_bin_bytes": 179092,
+  "app_bin_sha256": "96cc9aba6380c7b0429ed2c00f06f55bb45a9dd3426c62a0609264aa6ae9e7db",
+  "app_bin_bytes": 179580,
   "app_hardware_image": true,
   "app_bare_metal": false,
   "wisp_boot_observe_only": true,
   "boot_elf_sha256": "6286f924c43dc0aa37dc010d0e40f867cd0e6ddef1017fe8473a379374144a2b",
   "boot_map_sha256": "1ecfacdd11239145da8d7e37ec372e9e5c760b90df439b64ded051c34684fa95",
-  "app_elf_sha256": "daf2f6e9e6e767aceb2c64ec8ad51903be82dae1137e291056d384fb4205bdf6",
-  "app_map_sha256": "f2c877e85c4efe7a393c8672e9a1695ba126d128f03d896adf866d16b1b6041e"
+  "app_elf_sha256": "39ead6cf621733c29385a8556c8de10c44cb1463c4b84d728cac5c50e33750bc",
+  "app_map_sha256": "fa0209819c9abd6cc31fb2a703e8f748af7c94db25298fe19977829f7996ca99"
 }
