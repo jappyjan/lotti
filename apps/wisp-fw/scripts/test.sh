@@ -11,7 +11,8 @@
 #   4. Renode boot of the built image: banner, drivers up against the bus models, Bluetooth
 #      gives up on the absent EM9305 without any update / recovery attempt, heartbeats on UART1
 #   5. end to end over BLE: the same app on native_sim/native/64 behind a virtual controller
-#      (Bumble), the TypeScript SDK completes HELLO through a GATT central (tests/ble/)
+#      (Bumble), the TypeScript SDK completes HELLO through a GATT central (tests/ble/); then the
+#      Mac session tool (tests/ble/session.mts: HELLO, TIME_SYNC, PINGs, BYE) the same way
 #   6. safety rule 8 negative builds: each must FAIL, with the rule 8 message
 #        a. Bluetooth on without CONFIG_WISP_BT_ALLOWED  -> configure-time gate
 #        b. hal_ambiq without Wisp's patch                -> configure-time gate
@@ -93,6 +94,16 @@ WISP_E2E_EXE="$sim_build/zephyr/zephyr.exe" WISP_E2E_BRIDGE="$APP_DIR/tests/ble/
 	WISP_E2E_LOG="$out/e2e-firmware.log" \
 	node --test --test-timeout=60000 --test-reporter=spec "$APP_DIR/tests/ble/e2e.test.mts"
 echo "firmware log: $out/e2e-firmware.log"
+# The Mac's session tool (rung4.md G14, W25) on the same firmware: HELLO, TIME_SYNC, PINGs past
+# the session timeout, BYE, through the Bumble bridge here (bleak_bridge.py on the Mac).
+python3 -I "$APP_DIR/tests/ble/test_bleak_bridge.py"
+node "$APP_DIR/tests/ble/session.mts" --bridge "python3 -I $APP_DIR/tests/ble/bumble_bridge.py" \
+	--firmware "$sim_build/zephyr/zephyr.exe" >"$out/session.json" || {
+	cat "$out/session.json" >&2
+	echo "FAIL: session.mts against the native_sim firmware" >&2
+	exit 1
+}
+echo "ok: session.mts (the Mac session tool) against the native_sim firmware: $(grep -c '"ok": true' "$out/session.json") steps ok"
 
 if [[ "${WISP_TEST_SKIP_NEGATIVE:-}" == 1 ]]; then
 	step "6/6 rule 8 negative builds: SKIPPED (WISP_TEST_SKIP_NEGATIVE=1)"
