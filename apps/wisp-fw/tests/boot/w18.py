@@ -1579,16 +1579,25 @@ class Harness:
             t += 62
             raw = case_uart.read_block(ask, case_uart.BLOCK_STATUS)
             q["status_later"] = case_uart.decode_status(raw) if raw else {}
-            # 3. RESET over the case UART: the reply, the loader's HELO, Wisp Boot's report (from its
-            # window, through the half-duplex wire) naming the app's last breadcrumb, a second boot.
-            n_reports = len(hook.reports)
+            # 3. RESET over the case UART: the reply, the loader's HELO (nobody holds it), Wisp Boot,
+            # the second boot to app-idle; then the boot report from the app, built from Wisp Boot's
+            # block: the previous boot's last breadcrumb, through the reset and the D-cache model.
+            # Short steps: a long RunFor through the patched loader's window can stall Renode.
+            n_frames = run.frame_count()
             code, _ = recovery_case_uart.decode_reply(ask(recovery_case_uart.reset_request()),
                                                       recovery_case_uart.OP_RESET)
-            second = self.watch(run, hook, 12, until=lambda o: len(hook.reports) > n_reports and hook.ident,
-                                await_helo=True)
-            report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
-            t += second["seconds"]
-            t += run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 30, step=0.25)
+            t_reset = 0.0
+            while t_reset < 30 and self.diag_record(run).get("boots", 0) < rec1.get("boots", 0) + 1:
+                run.step(0.1)
+                t_reset += 0.1
+            while t_reset < 40 and self.diag_record(run).get("stage") != "app-idle":
+                run.step(0.1)
+                t_reset += 0.1
+            t += t_reset
+            helo_after = sum(run.frame(i).startswith(HELO_PREFIX) for i in range(n_frames, run.frame_count()))
+            code_, rep = case_uart.decode_reply(ask(case_uart.bootrep_request()), case_uart.OP_BOOTREP)
+            report_reset = case_uart.decode_boot_report(rep) if code_ == 0 else {"code": code_}
+            second = {"helo": helo_after, "seconds": round(t_reset, 1)}
             rec2 = self.diag_record(run)
             silicon = silicon_findings(run)
             watched = run.r.cmd("nor WatchedLog").split("\n")
@@ -1635,8 +1644,8 @@ class Harness:
                          f"{(q.get('status_later') or {}).get('display')}")
         if frames < 1 or screen:
             fails.append(f"boot screen: {frames} frame(s); {screen}")
-        if code != 0 or second["helo"] != 1 or report_reset.get("source") != "wisp-boot" \
-                or report_reset.get("prev_stage") != "app-reset-request":
+        if code != 0 or second["helo"] != 1 or report_reset.get("prev_stage") != "app-reset-request" \
+                or report_reset.get("boot") != (rec1.get("boots", 0) + 1) & 0xFF:
             fails.append(f"RESET: reply {code}, {second['helo']} HELO, report {report_reset}")
         fails += silicon_failures(silicon)
         if not re.match(r"tx_lost=0 rx_corrupted=0 ", silicon["wire"]):
@@ -1675,8 +1684,8 @@ class Harness:
                  f"(staging {boot.get('staging_id', 0):08x}, {len(boot.get('inventory', []))} firmware files); boot "
                  f"screen drawn ({frames} frame), rails {RAILS_ON} after the gate, off {RAILS_OFF} after 60 s; PMIC "
                  f"armed with stock's writes, {pm['kicks']} kicks, Wisp Boot {wb_kicks}, no power cycle; RESET -> HELO "
-                 f"-> Wisp Boot's report prev {report_reset.get('prev_stage')} cause "
-                 f"{report_reset.get('reset_cause_names')} -> second boot to app-idle; {live}; strict clean"
+                 f"-> second boot; its report (from the {report_reset.get('source')}) prev {report_reset.get('prev_stage')} cause "
+                 f"{report_reset.get('reset_cause_names')}, boot {report_reset.get('boot')}, app-idle again; {live}; strict clean"
                  if ok else f"{'; '.join(fails)} {result.get('error')!r}")
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
