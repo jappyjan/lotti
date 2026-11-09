@@ -86,6 +86,62 @@ namespace Antmicro.Renode.Peripherals.Wisp
         }
     }
 
+    // The case link's two pads (rung4.md, "W24d: stage-0b"): GPIO PINCFG42 (UART2TX in function 4)
+    // and PINCFG44 (UART2RX in function 4) sit on ONE pogo wire. GPIO is plain storage (WispTrace);
+    // this record watches the two registers: their current function, every write with its virtual
+    // time and PC (PadLog), and every write after which both pads are in UART function at once
+    // (BothUart: the TX pad drives the wire while the receiver listens; the loader and stock park one
+    // before they enable the other). WispCaseLink reads the state to model the half-duplex wire.
+    // Cleared by a machine reset (the GPIO block's Reset).
+    public static class WispPads
+    {
+        public const ulong Pincfg42 = 0x400100A8, Pincfg44 = 0x400100B0;
+        public const uint UartFunction = 4;
+        public static uint Tx, Rx;
+        public static long BothUart;
+        public static readonly List<string> Log = new List<string>();
+        public static readonly List<string> BothUartLog = new List<string>();
+
+        public static bool TxDriving => (Tx & 0xF) == UartFunction;
+        public static bool RxListening => (Rx & 0xF) == UartFunction;
+
+        public static void ResetPads()
+        {
+            Tx = Rx = 0;
+        }
+
+        public static void Note(IMachine machine, ulong address, uint value)
+        {
+            if(address != Pincfg42 && address != Pincfg44)
+            {
+                return;
+            }
+            if(address == Pincfg42)
+            {
+                Tx = value;
+            }
+            else
+            {
+                Rx = value;
+            }
+            var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((ICPUWithRegisters)cpu).PC : 0;
+            var t = machine.LocalTimeSource.ElapsedVirtualTime.TotalMilliseconds;
+            var line = $"{t:F3} pad{(address == Pincfg42 ? 42 : 44)} 0x{value:X} pc 0x{pc:X}";
+            if(Log.Count < 4000)
+            {
+                Log.Add(line);
+            }
+            if(TxDriving && RxListening)
+            {
+                BothUart++;
+                if(BothUartLog.Count < 64)
+                {
+                    BothUartLog.Add(line);
+                }
+            }
+        }
+    }
+
     public class WispTrace : IBytePeripheral, IWordPeripheral, IDoubleWordPeripheral, IKnownSize
     {
         public WispTrace(IMachine machine, long size = 0x1000, int trace = 1, ulong baseAddress = 0)
@@ -104,6 +160,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             mem = new Dictionary<long, uint>();
             seenR = new HashSet<long>();
             seenW = new HashSet<long>();
+            if(baseAddress <= WispPads.Pincfg42 && WispPads.Pincfg44 < baseAddress + (ulong)size)
+            {
+                WispPads.ResetPads();
+            }
         }
 
         public long Size => size;
@@ -140,6 +200,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private void Write(long o, uint v)
         {
             mem[o] = v;
+            if(baseAddress != 0)
+            {
+                WispPads.Note(machine, baseAddress + (ulong)o, v);
+            }
             if(Trace >= 2 || (Trace == 1 && seenW.Add(o)))
             {
                 this.Log(LogLevel.Warning, "W +0x{0:X4} <- 0x{1:X8} pc 0x{2:X}", o, v, Pc());

@@ -243,9 +243,12 @@ def decode_boot_status(b: bytes) -> dict:
         "confirm_calls": confirm_calls, "confirm_result": confirm_result,
     }
     if version >= 2:
-        stat, kick, answers, window_ms, prev_valid, uart, clksel, _res = struct.unpack_from("<IIHHBBBB", b, 608)
+        stat, kick, answers, window_ms, prev_valid, uart, clksel, nor_bound = struct.unpack_from("<IIHHBBBB", b, 608)
+        # nor_bound: stage-0b's Wisp Boot sets bit 0 when the NOR phase hit its deadline or poll budget
+        # (the byte was reserved, 0, before).
         out.update(rstgen_stat=stat, reset_cause_names=rstgen_stat_names(stat), pmic_kick=kick,
                    window_answers=answers, window_ms=window_ms, uart_result=uart, stimer_clksel=clksel,
+                   nor_bound_hit=bool(nor_bound & 1),
                    prev_valid=bool(prev_valid),
                    prev=decode_diag_record(b[624:688], check=False) if prev_valid else None)
     return out

@@ -52,6 +52,44 @@ static struct wisp_boot_status st;
 static void status_seal(void)
 {
 	st.crc = wisp_boot_crc32(0, &st, (uint32_t)__builtin_offsetof(struct wisp_boot_status, crc));
+	wisp_dcache_clean(&st, sizeof(st)); /* to SRAM: a watchdog reset must not lose it (wisp_diag.h) */
+}
+
+/* ---- the NOR phase's bound ------------------------------------------------------------------ */
+
+/* Every NOR command is bounded (boot_nor.c), but a long run of slow ones, or a littlefs that keeps
+ * reading, was not: with a feed in every block read it could go on as long as it liked. Now each
+ * NOR phase has a deadline (the STIMER, when it counts the crystal) and a budget of polls in the NOR
+ * driver (whatever the clock): past either one every NOR call fails at once, littlefs returns an
+ * I/O error, and the boot goes on (the observe build runs the app; the fallback build runs it
+ * degraded, or, in the rescue copy, resets with the flag not written). bd_read feeds the watchdog
+ * only inside the bound, so a littlefs loop that does not read is still ended by the watchdog. */
+#define NOR_PHASE_TICKS  (32768u * 5u)  /* boot: NOR init, mount, record, staging, rescue.bin, inventory */
+#define NOR_PHASE_POLLS  40000000u
+#define NOR_COPY_TICKS   (32768u * 120u) /* the rescue copy and its verify (fallback build) */
+#define NOR_COPY_POLLS   1000000000u
+
+static int xt;           /* the STIMER counts the crystal (CLKSEL 3 and moving) */
+static uint32_t nor_t0, nor_ticks;
+
+static void nor_phase(uint32_t ticks, uint32_t polls)
+{
+	nor_t0 = wisp_stimer_now();
+	nor_ticks = ticks;
+	nor_budget(polls);
+}
+
+/* 0 while the phase may go on; else ends it (every later NOR call fails) and notes it. */
+static int nor_phase_over(void)
+{
+	if (xt && wisp_stimer_now() - nor_t0 > nor_ticks) {
+		nor_budget(0);
+	}
+	if (nor_budget_left() == 0) {
+		st.nor_bound |= WISP_BOOT_NOR_BOUND_HIT;
+		return 1;
+	}
+	return 0;
 }
 
 /* ---- littlefs on the NOR, stock geometry ---------------------------------------------------- */
@@ -59,6 +97,10 @@ static void status_seal(void)
 static int bd_read(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, void *buf,
 		   lfs_size_t n)
 {
+	if (nor_phase_over()) {
+		return LFS_ERR_IO;
+	}
+	hw_wdt_feed();
 	return nor_read(WISP_LFS_BASE + b * c->block_size + off, buf, n) ? LFS_ERR_IO : 0;
 }
 
@@ -69,6 +111,10 @@ static int bd_prog(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, con
 	uint32_t a = WISP_LFS_BASE + b * c->block_size + off;
 	const uint8_t *p = buf;
 
+	if (nor_phase_over()) {
+		return LFS_ERR_IO;
+	}
+	hw_wdt_feed();
 	while (n) { /* prog_size = 256 = one page, so this is one iteration per call */
 		uint32_t c2 = 256u - (a & 255u);
 
@@ -87,6 +133,9 @@ static int bd_prog(const struct lfs_config *c, lfs_block_t b, lfs_off_t off, con
 
 static int bd_erase(const struct lfs_config *c, lfs_block_t b)
 {
+	if (nor_phase_over()) {
+		return LFS_ERR_IO;
+	}
 	hw_wdt_feed();
 	return nor_erase_4k(WISP_LFS_BASE + b * c->block_size) ? LFS_ERR_IO : 0;
 }
@@ -364,6 +413,7 @@ static int svc_confirm(void)
 	/* The app may have reconfigured MSPI1 and written the filesystem since boot: bring the
 	 * NOR up again and mount fresh instead of trusting state from boot time. */
 	mounted = 0;
+	nor_phase(NOR_PHASE_TICKS, NOR_PHASE_POLLS);
 	if (fs_up() != 0 || record_read(&r) != 0 || !wisp_boot_record_valid(&r)) {
 		e = -1;
 	} else {
@@ -452,7 +502,6 @@ static void report_window(void)
 	static uint8_t out[WISP_CASE_MAX_FRAME];
 	static const struct wisp_case_ops ops = {.boot_report = report};
 	static const struct wisp_case_version ver;
-	const int xt = st.stimer_clksel == 3u && stimer_counts();
 	uint32_t start, now, until, last = 0;
 
 	st.uart_result = (uint8_t)(boot_uart_init() != 0);
@@ -540,6 +589,7 @@ _Noreturn void wisp_boot_main(void)
 	st.pmic_kick = boot_pmic_kick();
 	wisp_diag_mark(WISP_DIAG_BOOT_PMIC);
 	hw_wdt_feed();
+	xt = st.stimer_clksel == 3u && stimer_counts();
 	report_window();
 	st.magic = WISP_BOOT_STATUS_MAGIC;
 	st.version = WISP_BOOT_STATUS_VERSION;
@@ -553,6 +603,7 @@ _Noreturn void wisp_boot_main(void)
 	status_seal();
 	hw_log(WISP_BOOT_OBSERVE ? "\nwisp-boot: start (observe-only)\n" : "\nwisp-boot: start\n");
 
+	nor_phase(NOR_PHASE_TICKS, NOR_PHASE_POLLS);
 	if (fs_up() != 0) {
 		hw_log_hex("wisp-boot: NOR id ", st.nor_id);
 		hw_log("wisp-boot: no filesystem -> run-app-degraded\n");
@@ -606,6 +657,7 @@ _Noreturn void wisp_boot_main(void)
 	}
 
 	hw_log("wisp-boot: staging rescue.bin\n");
+	nor_phase(NOR_COPY_TICKS, NOR_COPY_POLLS);
 	if (rescue_copy() != 0) {
 		hw_log("wisp-boot: copy failed, flag NOT written -> reset\n");
 		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
