@@ -321,6 +321,15 @@ class Run:
             raise RuntimeError(f"uart2 FrameLog failed: {bad}")
         return [l.strip() for l in out if l.strip()]
 
+    def frame_count(self) -> int:
+        return int(self.r.cmd("uart2 FrameCount").split()[0])
+
+    def frame(self, i: int) -> str:
+        out = self.r.cmd(f"uart2 FrameAt {i}").strip()
+        if out and not re.fullmatch(r"[0-9a-f]+", out):
+            raise RuntimeError(f"uart2 FrameAt failed: {out}")
+        return out
+
     def mram(self) -> bytes:
         out = self.dir / "mram.bin"
         self.r.cmd(f"probe Dump 0x400000 0x400000 @{out}")
@@ -948,7 +957,7 @@ class Harness:
                 t += min(wait, seconds - t)
                 if t >= seconds:
                     break
-            seen = len(run.frames())
+            seen = run.frame_count()
             req = b"" if listen else hook.request(i)
             if req:
                 run.r.cmd(f'uart2 Inject "{req.hex()}"')
@@ -957,9 +966,8 @@ class Harness:
             while t - sent < RELAY_POLL_BOUND_S and t < seconds:
                 run.step(RELAY_EXCHANGE_S)
                 t += RELAY_EXCHANGE_S
-                frames = run.frames()
-                if len(frames) > seen:
-                    got = bytes.fromhex(frames[seen])  # the first frame; the relay drops the rest
+                if run.frame_count() > seen:
+                    got = bytes.fromhex(run.frame(seen))  # the first frame; the relay drops the rest
                     break
             out["exchanges"].append({"t": round(sent, 3), "req": req[4:8].hex(), "waited": round(t - sent, 3),
                                      "got": got[4:12].hex() if got else None})
@@ -1144,13 +1152,12 @@ class Harness:
 
     @staticmethod
     def inject(run, req: bytes) -> bytes:
-        before = len(run.frames())
+        before = run.frame_count()
         run.r.cmd(f'uart2 Inject "{req.hex()}"')
         for _ in range(40):
             run.r.cmd('emulation RunFor "0.025"')
-            fr = run.frames()
-            if len(fr) > before:
-                return bytes.fromhex(fr[before])
+            if run.frame_count() > before:
+                return bytes.fromhex(run.frame(before))
         raise RuntimeError(f"no case-UART reply to {req.hex()}")
 
     # --- the pinned native-0 (W23) and its way back (W24) ---

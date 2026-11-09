@@ -205,6 +205,18 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
         }
 
+        // Cheap polling for harnesses: the log holds every loader frame of an install (tens of
+        // thousands), so asking for all of it on every poll costs more than the emulation.
+        public int FrameCount()
+        {
+            return Frames.Count;
+        }
+
+        public string FrameAt(int i)
+        {
+            return i >= 0 && i < Frames.Count ? Frames[i] : "";
+        }
+
         public string FrameLog()
         {
             return string.Join("\n", Frames);
