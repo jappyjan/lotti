@@ -1106,9 +1106,11 @@ class Harness:
                 # The pinned stage-0: one boot behind the loader is enough for the pad and MSPI findings
                 # (nothing answers on the half-duplex wire, so the long watches below would only wait out
                 # the relay bound), then the peek after a case reset shows the record lost.
-                hook.report_at = (2.0,)
-                first = self.watch(run, hook, 4)
-                run.step(3)
+                # Short steps: a long RunFor through the patched loader's window can stall Renode.
+                for _ in range(40):
+                    run.step(0.1)
+                hook.report_at = (0.2,)
+                first = self.watch(run, hook, 2)
             else:
                 hook.report_at = (2.0,)
                 first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
