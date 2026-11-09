@@ -53,11 +53,11 @@ class Native1(unittest.TestCase):
         self.assertGreaterEqual(facts["elf_segments_checked"], 1)
 
     def test_peek_finds_native1s_record_and_status_block(self):
-        """`peek`'s wisp-record and wisp-boot-status (pinned from stage-0's Wisp Boot) are where
-        native-1's Wisp Boot keeps them too, so the W25 runbook can peek them."""
+        """`peek`'s wisp-record and wisp-boot-status-w24d are where native-1's Wisp Boot keeps them
+        (stage-0's `wisp-boot-status` is 12 bytes lower), so the W25 runbook can peek them."""
         symbols = elf_symbols(DIR / "wisp_boot.elf")
         self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (symbols["wisp_diag_slot"][0], 64))
-        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], symbols["st"])
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status-w24d"][:2], symbols["st"])
 
     def test_installs_over_a_temple_running_another_wisp_image(self):
         f = files()

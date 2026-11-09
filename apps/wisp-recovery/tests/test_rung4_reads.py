@@ -42,7 +42,8 @@ def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF, ssram=0x7)
     uart2 = struct.pack("<7I", 2, 0x2001_9000, 0x0043_4210, 0, 0, 0, 1)  # awake: the loader woke UART2
     return {"nor": struct.pack("<I", nor), "board": struct.pack("<BBHhH", 0, 0, 3, millivolts, 0),
             "uart2": uart2, "power-callbacks": bytes(8), "ssram-power": struct.pack("<I", ssram),
-            "rstgen-stat": struct.pack("<I", 1), "wisp-record": wisp_record(), "wisp-boot-status": bytes(692)}
+            "rstgen-stat": struct.pack("<I", 1), "wisp-record": wisp_record(), "wisp-boot-status": bytes(692),
+            "wisp-boot-status-w24d": bytes(692)}
 
 
 def ram_temple(app=b"", **ram):
