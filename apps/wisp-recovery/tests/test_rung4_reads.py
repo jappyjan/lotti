@@ -29,11 +29,20 @@ from test_w18 import FAKE_PATCHED, temple
 from wisp_w18 import cli, image, links, loader, pins, relay_model, session, status
 
 
-def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF) -> dict:
-    """What the patched bootloader leaves in RAM at the hold, as the fake temple's readable memory."""
+def wisp_record(boots=7, stage=0x42, stat=0x40) -> bytes:
+    rec = bytearray(64)
+    struct.pack_into("<IHHIIIHHI", rec, 0, 0x47414457, 1, 64, boots, stat, 1234, stage, 0, 3277)
+    struct.pack_into("<I", rec, 60, zlib.crc32(bytes(rec[:60])))
+    return bytes(rec)
+
+
+def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF, ssram=0x7) -> dict:
+    """What the patched bootloader leaves in RAM at the hold, as the fake temple's readable memory,
+    with what the last Wisp boot left in SSRAM group 2 and the two registers peek reads."""
     uart2 = struct.pack("<7I", 2, 0x2001_9000, 0x0043_4210, 0, 0, 0, 1)  # awake: the loader woke UART2
     return {"nor": struct.pack("<I", nor), "board": struct.pack("<BBHhH", 0, 0, 3, millivolts, 0),
-            "uart2": uart2, "power-callbacks": bytes(8)}
+            "uart2": uart2, "power-callbacks": bytes(8), "ssram-power": struct.pack("<I", ssram),
+            "rstgen-stat": struct.pack("<I", 1), "wisp-record": wisp_record(), "wisp-boot-status": bytes(692)}
 
 
 def ram_temple(app=b"", **ram):
@@ -41,6 +50,24 @@ def ram_temple(app=b"", **ram):
     for name, data in bootloader_ram(**ram).items():
         mram.io[pins.PEEK_REGIONS[name][0]] = data
     return mram  # the NOR records (MRAM) are inside FAKE_PATCHED
+
+
+def elf_symbols(path: Path) -> dict[str, tuple[int, int]]:
+    """name -> (value, size) from a little-endian ELF32 .symtab."""
+    b = path.read_bytes()
+    shoff, = struct.unpack_from("<I", b, 0x20)
+    shentsize, shnum = struct.unpack_from("<HH", b, 0x2E)
+    sections = [struct.unpack_from("<IIIIIIIIII", b, shoff + i * shentsize) for i in range(shnum)]
+    out = {}
+    for sec in sections:
+        if sec[1] != 2:  # SHT_SYMTAB
+            continue
+        strtab = sections[sec[6]]
+        for o in range(sec[4], sec[4] + sec[5], 16):
+            name, value, size = struct.unpack_from("<III", b, o)
+            start = strtab[4] + name
+            out[b[start:b.index(b"\0", start)].decode()] = (value, size)
+    return out
 
 
 class Peek(unittest.TestCase):
@@ -55,10 +82,40 @@ class Peek(unittest.TestCase):
         self.assertTrue(peek["uart2"]["loader_state"])
         self.assertTrue(peek["power-callbacks"]["zero"])
         self.assertEqual(peek["flag"]["word0"], "0xffffffff")
+        self.assertTrue(peek["ssram-power"]["wisp_ram_powered"])
+        self.assertEqual(peek["rstgen-stat"]["causes"], ["external"])
+        record = peek["wisp-record"]["record"]
+        self.assertTrue(record["valid"])
+        self.assertEqual((record["boots"], record["stage"], record["reset_cause_names"], record["stage_ms"]),
+                         (7, "s0-uart", ["watchdog"], 100))
+        self.assertIn("not a sealed v2 status block", peek["wisp-boot-status"]["error"])  # all zero here
         self.assertEqual(case.mram.writes, [])
         reads = {(a0, a1) for a0, a1 in case.programs}
         for address, length, _what in pins.PEEK_REGIONS.values():
             self.assertIn((address, length), reads)
+
+    def test_wisp_ram_is_read_only_while_ssram_group_2_is_powered(self):
+        case = Case(ram_temple(ssram=0x1))
+        code, report = run_cli(["peek", "--side", "left"], case)
+        self.assertEqual(code, 0, report.get("error"))
+        for name in pins.PEEK_SSRAM_GATED:
+            self.assertIn("not powered", report["peek"][name]["refused"])
+        reads = {(a0, a1) for a0, a1 in case.programs}
+        for name in pins.PEEK_SSRAM_GATED:
+            self.assertNotIn(pins.PEEK_REGIONS[name][:2], reads)  # never dumped
+        self.assertEqual(case.mram.writes, [])
+
+    def test_the_wisp_regions_are_the_pinned_stage0_boots(self):
+        """wisp-record is wisp_diag_slot and wisp-boot-status is `st` (692 B) in the committed
+        stage-0 Wisp Boot ELF; both inside Wisp Boot's RAM, the top 64 KiB of SSRAM group 2, and
+        above the patched bootloader's only SSRAM use, its heap [0x20081000, 0x2013C800)."""
+        symbols = elf_symbols(Path(__file__).resolve().parents[1] / "wisp_w18/data/stage-0/wisp_boot.elf")
+        self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (symbols["wisp_diag_slot"][0], 64))
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], symbols["st"])
+        for name in pins.PEEK_SSRAM_GATED:
+            address, length, _ = pins.PEEK_REGIONS[name]
+            self.assertTrue(0x2037_0000 <= address and address + length <= 0x2038_0000)
+            self.assertGreaterEqual(address, 0x2013_C800)
 
     def test_gd_and_unknown_records(self):
         for pointer, part in ((0x0043_36B0, "GD25LE256H"), (0x1234, "neither record")):

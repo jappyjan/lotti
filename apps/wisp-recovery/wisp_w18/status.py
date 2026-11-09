@@ -14,7 +14,21 @@ case:
   - a request is empty (listen only) or 9, 25 or 32 bytes starting 7E 00 01 n-5 (the loader's
     request framing); the stock version query `24 00 01 00 a7` cannot be sent this way;
   - a reply is a 5A A5 FF frame whose length byte is 8, 16, 24 or 27 (13, 21, 29 or 32 bytes in
-    all); anything else reaches the host as "no frame" (relay status 2).
+    all); anything else reaches the host as "no frame" (relay status 2);
+  - **a request without an answer blocks** (case_exchange.c `relay_receive`): the relay re-arms its
+    temple receiver after sending and then waits, without reading the host port, for the first four
+    temple bytes, up to its poll bound (64,000,000 polls: about 31 s with the YHM4005 feed, 18 s
+    without). It ends early only on four bytes that are not a frame header or a UART error flag
+    (status 2). So an unanswered request costs the rest of a boot in a reboot loop (the next frame
+    is the loader's `HELO`) or the whole poll bound if the temple stays silent, and the host gets
+    exactly one try per boot at a short window. The host must not send again before the answer:
+    the relay would see the bytes only after the wait, and USART1 has a one-byte receive register.
+    Bytes the temple sends while no exchange is pending are lost (the next exchange re-arms first).
+
+A protocol can therefore schedule its requests: `anchor(t, kind)` is told when the boot was
+released (`cont`, t = 0) and when each loader `HELO` came; `wait(t)` returns how long to wait
+before the next request (None: the plain interval); `no_answer(t)` is told when an exchange ended
+without a frame (status 2: the poll bound passed, or garbage).
 
 Built in: `listen`, which sends nothing and records any frame the temple sends by itself. It is
 safe against any temple. The loader's own HELO is recognised whatever the protocol: after CONT it
@@ -90,6 +104,11 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
     started = clock()
     out: dict = {"protocol": protocol.name, "answers": [], "unanswered": 0, "reboots_s": [], "foreign": []}
     index = 0
+    if hasattr(protocol, "anchor"):
+        protocol.anchor(0.0, "cont")
+    first = protocol.wait(0.0) if hasattr(protocol, "wait") else None
+    if first:
+        sleep(min(first, duration_s))
     while clock() - started < duration_s:
         frame = protocol.request(index)
         if not relay_request_ok(frame):
@@ -106,6 +125,8 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
             if hasattr(protocol, "reset"):  # what it read so far belongs to the boot that ended
                 protocol.reset()
                 protocol.reboots = getattr(protocol, "reboots", 0) + 1
+            if hasattr(protocol, "anchor"):
+                protocol.anchor(t, "helo")
             log(f"boot-watch: t = {t:.1f} s: the loader's HELO, the temple rebooted")
         elif status == 0:
             decoded = protocol.decode(reply)
@@ -120,10 +141,11 @@ def watch(link, protocol: StatusProtocol, duration_s: float, interval_s: float =
                     break
         else:
             out["unanswered"] += 1
-        # A protocol that is racing a short window (the boot report: Wisp Boot answers it only for
-        # about 300 ms after each reset) asks again at once.
-        urgent = getattr(protocol, "urgent", None)
-        wait = 0.0 if urgent and urgent() else max(interval_s - (clock() - asked), 0.0)
+            if hasattr(protocol, "no_answer"):
+                protocol.no_answer(t)
+        # The protocol may time its next request (a boot window it must hit), else the interval.
+        scheduled = protocol.wait(clock() - started) if hasattr(protocol, "wait") else None
+        wait = max(interval_s - (clock() - asked), 0.0) if scheduled is None else max(scheduled, 0.0)
         if clock() - started + wait >= duration_s:
             break
         if wait:

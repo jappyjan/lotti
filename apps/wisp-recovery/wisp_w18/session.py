@@ -243,6 +243,12 @@ class Session:
             raise RefusedError(f"peek {name!r} is not in pins.PEEK_REGIONS; nothing read")
         if not self.bootloader_verified:
             raise RefusedError("peek reads the patched bootloader's RAM; its CRC must be checked first")
+        if name in pins.PEEK_SSRAM_GATED:
+            address, length, _what = pins.PEEK_REGIONS["ssram-power"]
+            powered = struct.unpack("<I", self.dump(address, length))[0]
+            if not powered & pins.PEEK_SSRAM_GROUP2:
+                raise RefusedError(f"peek {name}: PWRCTRL.SSRAMPWRST = {powered:#x}, SSRAM group 2 is not powered "
+                                   "in the held loader; not read (nothing of the last boot's record is left)")
         address, length, _what = pins.PEEK_REGIONS[name]
         return self.dump(address, length)
 
