@@ -126,12 +126,15 @@ uint8_t wisp_boot_screen_show(int *err)
 			return *err == -EACCES ? WISP_CASE_DISPLAY_REFUSED : WISP_CASE_DISPLAY_FAILED;
 		}
 	}
-	*err = compose();
-	if (*err) {
-		return WISP_CASE_DISPLAY_FAILED;
-	}
+	/* Power first: the JBD4010's init (stock's sequence) sends a blank frame from the panel's own
+	 * frame buffer, which is also the one the flush composes into, so a screen composed before
+	 * the power-up would be wiped. Composed after it, the commit sends the rows at once. */
 	if (wisp_hal_display_power(true)) {
 		*err = -EIO;
+		return WISP_CASE_DISPLAY_FAILED;
+	}
+	*err = compose();
+	if (*err) {
 		return WISP_CASE_DISPLAY_FAILED;
 	}
 	k_work_init_delayable(&off_work, off_fn);
