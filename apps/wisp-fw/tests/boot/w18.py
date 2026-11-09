@@ -1621,6 +1621,9 @@ class Harness:
         v = result.get("value") or {}
         if mram[0x38000:0x38000 + len(data)] != data:
             fails.append("native-1 not in MRAM")
+        proposed = json.loads((NATIVE_1_DIR / "proposed-pin.json").read_text())["image"]
+        if v.get("crc_after") != f"{int(proposed['crc32_aligned_over_stock'], 16):08x}":
+            fails.append(f"final CRC {v.get('crc_after')}, proposed pin {proposed['crc32_aligned_over_stock']}")
         if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
             fails.append("bootloader region changed")
         if not (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
