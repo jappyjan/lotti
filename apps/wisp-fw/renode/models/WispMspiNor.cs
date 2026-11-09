@@ -19,13 +19,13 @@
 //     and erase completes instantly (WIP never reads 1), so a power cut lands between two NOR
 //     operations, never inside one.
 //
-// MSPICFG (0x030) bits 31/30 are PRSTN/IPRSTN, active-low resets (rung4.md W24c): while either
-// is 0 the controller is held in reset, so a PIO START never completes (CTRL.STATUS stays 0, no
-// RX data) and a DMA does nothing. Writing the whole register 0, as Wisp Boot did up to stage-0,
-// therefore kills the NOR path here as it does on silicon. Counter: HeldInReset (starts refused).
-// The register resets to 0xC0000000, both resets released: hal_ambiq never writes PRSTN or IPRSTN,
-// and the bootloader and stock drive the NOR with it, so on silicon they come up released. Only a
-// write that clears them (a whole-register 0) holds the controller.
+// MSPICFG (0x030) bits 31/30 are PRSTN/IPRSTN, active-low resets (apollo510.h). Their reset value
+// is 1 (running): the HAL only ever read-modify-writes single MSPICFG fields and never sets them.
+// While either reads 0 the module is held in reset: CTRL.STATUS never sets, START and the FIFOs do
+// nothing, RXENTRIES reads 0. Every access other than to MSPICFG in that state is counted
+// (`InResetAccesses`) and the first ones logged with their PC (`InResetLog`); the harnesses fail a
+// case on any (rung4.md, "W24d": the W24/W24b Wisp Boot wrote MSPICFG = 0). What silicon does on
+// such an access (a stall, a bus error, nothing) is not known; nothing working is the mild model.
 //
 // The NOR array is non-volatile: Reset() (any machine reset, incl. the Wisp power-cut model)
 // clears only the controller registers and the device's volatile state (WEL, 4-byte mode, QE is
@@ -76,23 +76,6 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public event Action<ulong> OpDone;
         public ulong Erases { get; private set; }
         public ulong Reads { get; private set; }
-        public ulong HeldInReset { get; private set; }
-
-        private bool InReset => (Get(MSPICFG) & RESETS_N) != RESETS_N;
-
-        private bool Refuse(string what)
-        {
-            if(!InReset)
-            {
-                return false;
-            }
-            HeldInReset++;
-            if(HeldInReset == 1)
-            {
-                this.Log(LogLevel.Warning, "{0} while MSPICFG = 0x{1:X8}: PRSTN/IPRSTN hold the MSPI in reset, nothing happens", what, Get(MSPICFG));
-            }
-            return true;
-        }
         public int Trace { get; set; }
 
         public void LoadImage(string path)
@@ -114,9 +97,33 @@ namespace Antmicro.Renode.Peripherals.Wisp
             File.WriteAllBytes(path, nor);
         }
 
+        public ulong InResetAccesses { get; private set; }
+
+        public string InResetLog()
+        {
+            return string.Join("\n", inResetLog);
+        }
+
+        // In reset: PRSTN or IPRSTN low. Notes the access (not MSPICFG itself) and says so.
+        private bool HeldInReset(long o, bool write, uint v)
+        {
+            if((Get(MSPICFG) & RESETS_N) == RESETS_N || o == MSPICFG)
+            {
+                return false;
+            }
+            InResetAccesses++;
+            if(inResetLog.Count < 32)
+            {
+                var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((Antmicro.Renode.Peripherals.CPU.ICPUWithRegisters)cpu).PC : 0;
+                inResetLog.Add($"{(write ? "W" : "R")} +0x{o:X3}{(write ? $" <- 0x{v:X8}" : "")} MSPICFG 0x{Get(MSPICFG):X8} pc 0x{pc:X}");
+            }
+            return true;
+        }
+
         public void Reset()
         {
-            regs = new Dictionary<long, uint> { [MSPICFG] = RESETS_N };
+            regs = new Dictionary<long, uint>();
+            regs[MSPICFG] = RESETS_N; // PRSTN, IPRSTN deasserted
             rx = new Queue<uint>();
             tx = new List<byte>();
             pioActive = false;
@@ -136,6 +143,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             if(Trace >= 3 && o != RXFIFO && o != RXENTRIES && o != CTRL)
             {
                 this.Log(LogLevel.Warning, "R +0x{0:X3}", o);
+            }
+            if(HeldInReset(o, false, 0))
+            {
+                return o == CTRL ? Get(CTRL) & ~(START | BUSY | STATUS) : (o == RXENTRIES || o == RXFIFO ? 0 : Get(o));
             }
             switch(o)
             {
@@ -164,25 +175,25 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 this.Log(LogLevel.Warning, "W +0x{0:X3} <- 0x{1:X8}", o, v);
             }
+            if(HeldInReset(o, true, v))
+            {
+                if(o != TXFIFO && o != INTCLR && o != INTSET)
+                {
+                    regs[o] = v; // stored, but nothing starts
+                }
+                return;
+            }
             switch(o)
             {
             case CTRL:
                 regs[CTRL] = v;
                 if((v & START) != 0)
                 {
-                    if(Refuse("PIO start"))
-                    {
-                        pioActive = true; /* never completes */
-                        pioBytes = int.MaxValue;
-                        rx.Clear();
-                        tx.Clear();
-                        return;
-                    }
                     StartPio(v);
                 }
                 return;
             case TXFIFO:
-                if(pioActive && pioBytes != int.MaxValue)
+                if(pioActive)
                 {
                     for(var i = 0; i < 4 && tx.Count < pioBytes; i++)
                     {
@@ -209,7 +220,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 return;
             case DMACFG:
                 regs[DMACFG] = v;
-                if((v & DMAEN_MSK) != 0 && !Refuse("DMA"))
+                if((v & DMAEN_MSK) != 0)
                 {
                     RunDma();
                 }
@@ -528,9 +539,11 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private uint pioAddr, intstat;
         private byte sr, cr;
 
+        private const long MSPICFG = 0x030;
+        private const uint RESETS_N = 0xC0000000u; // PRSTN | IPRSTN
+        private readonly List<string> inResetLog = new List<string>();
         private const long CTRL = 0x000, ADDR = 0x008, INSTR = 0x00C, TXFIFO = 0x010, RXFIFO = 0x014;
-        private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094, MSPICFG = 0x030;
-        private const uint RESETS_N = 0xC0000000; /* PRSTN | IPRSTN */
+        private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094;
         private const long DMACFG = 0x100, DMASTAT = 0x104, DMATARGADDR = 0x108, DMADEVADDR = 0x10C, DMATOTCOUNT = 0x110;
         private const long INTEN = 0x200, INTSTAT = 0x204, INTCLR = 0x208, INTSET = 0x20C;
         private const long CQCFG = 0x2A0, CQADDR = 0x2A8, CQSTAT = 0x2AC, CQCURIDX = 0x2C0, CQENDIDX = 0x2C4;

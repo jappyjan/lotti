@@ -25,6 +25,15 @@ cuts along the rescue path. Every case asserts an end state:
          rung4.md W24b) the whole diagnostics path is exercised: its clock block, the boot report from
          the app, a case-UART RESET, and the boot report from Wisp Boot's window on the next boot.
 
+Since W24d (rung4.md, "W24d: stage-0b") every case runs with three silicon facts Renode did not
+model: the case link is ONE half-duplex wire (WispCaseLink HalfDuplex: a byte sent while pad 42 is
+not UART2TX is lost, a byte from the case is received only once pad 44 is UART2RX and is corrupted
+if pad 42 drives at that moment; Wisp code may never leave both pads in UART function), MSPICFG's
+PRSTN/IPRSTN hold MSPI1 in reset (WispMspiNor: any access in that state fails the case), and, with
+SRAM kept across warm resets, a D-cache (WispRstGen CacheModel: only lines cleaned through
+wisp_dcache_clean survive the reset). native-0's Zephyr app keeps both pads in UART function: its
+case-UART query is skipped and reported as a finding for native-0b.
+
 Every case also checks, since W24 (docs/wisp/rung4.md, "W24 result and analysis"): Wisp Boot's only
 PMIC write is the watchdog kick 07 04 01 (PC-attributed, WispPmicWdt PmicPcLog), it kicks once per
 boot, and it makes no write to a power, clock or trim register that no model acts on (the strict
@@ -252,6 +261,34 @@ def platform(run_dir: Path, patched: bool) -> Path:
     return out
 
 
+def nm_all(elf: Path, name: str) -> list[int]:
+    """Every address of a (possibly local, repeated) function symbol."""
+    out = subprocess.run(["arm-none-eabi-nm", str(elf)], check=True, capture_output=True, text=True).stdout
+    return sorted({int(p[0], 16) & ~1 for p in (l.split() for l in out.splitlines())
+                   if len(p) == 3 and p[1] in "tT" and p[2] == name})
+
+
+def silicon_models(r, elves: list[Path], retain: bool) -> None:
+    """The W24d models (rung4.md, "W24d: stage-0b"): the half-duplex case wire (WispCaseLink), and,
+    when SRAM is kept across warm resets, the D-cache (WispRstGen: only lines cleaned through
+    wisp_dcache_clean survive). MSPICFG's PRSTN/IPRSTN are always on (WispMspiNor)."""
+    r.cmd("uart2 HalfDuplex true")
+    if retain:
+        r.cmd("rstgen CacheModel true")
+        for elf in elves:
+            for addr in nm_all(elf, "wisp_dcache_clean"):
+                r.cmd(f"rstgen CleanHook {addr:#x}")
+
+
+def wire_findings(res: dict) -> dict:
+    """Who left both case-link pads in UART function at once (strict.owner of each PC), and the
+    MSPI accesses made while MSPI1 was held in reset."""
+    # Only writes made while Wisp code ran ("wisp", WispPads): stock after a rescue runs at the same PCs.
+    owners = sorted({strict.owner(int(m[1], 16)) for m in re.finditer(r" pc 0x([0-9A-F]+) wisp", res["both_uart_log"])})
+    return {"both_uart": owners, "report": res["wire"].strip(), "nor_in_reset": res["nor_in_reset"],
+            "nor_in_reset_log": res["nor_in_reset_log"]}
+
+
 def nm_symbols(elf: Path) -> dict[str, int]:
     out = subprocess.run(["arm-none-eabi-nm", str(elf)], check=True, capture_output=True, text=True).stdout
     syms = {}
@@ -350,7 +387,8 @@ def observe_cases() -> list[Case]:
              budget=60, retain=True,
              status={**common, "rescue_ok": False, "prev_valid": True, "prev_stage": "boot-handoff",
                      "reset_cause_names": ["watchdog"]}),
-        Case("obs-stage-0", "stage-0 (rung4.md W24b) as install-wisp leaves it: IDENT, its clock measurement, the "
+        Case("obs-stage-0b", "stage-0b (rung4.md W24d; stage-0 of W24b with the silicon fixes) as install-wisp "
+             "leaves it, on the half-duplex wire with the D-cache model: IDENT, its clock measurement, the "
              "boot report, a case-UART RESET, then the boot report from Wisp Boot's window (D1, D2)",
              "stage0", "OBSERVE", flag_initially_set=False, staging="stock", rescue="missing", firmware=True,
              min_boots=1, query=True, budget=60, retain=True,
@@ -496,6 +534,8 @@ class Harness:
             r.cmd('probe StrictFrom "wisp_boot_main"')
             if case.retain:
                 r.cmd("rstgen RetainRange 0x20370000 0x40")
+            silicon_models(r, [self.build / "wisp_boot.elf"] + ([self.build / "stage0.elf"] if case.app == "stage0" else []),
+                           case.retain)
             if case.cut_nor_op is not None:
                 r.cmd(f"probe CutAtNorOp {case.cut_nor_op}")
             if case.cut_milestone:
@@ -528,6 +568,12 @@ class Harness:
             res["pmic_expiries"] = int(r.cmd("pmicwdt Expiries").split()[0], 0)
             (d / "pmic.log").write_text(res["pmic_log"] + "\n")
             res["boot_status_raw"] = self.boot_status(r, d)
+            res["wire"] = r.cmd("uart2 WireReport")
+            res["both_uart_log"] = r.cmd("uart2 BothUartLog")
+            (d / "pads.log").write_text(r.cmd("uart2 PadLog") + "\n")
+            res["nor_in_reset"] = int(r.cmd("nor InResetAccesses").split()[0], 0)
+            res["nor_in_reset_log"] = r.cmd("nor InResetLog")
+            res["cleans"] = r.cmd("rstgen CleanLog")
             r.cmd(f"nor SaveImage @{d / 'nor-after.bin'}")
         finally:
             r.close()
@@ -721,8 +767,14 @@ class Harness:
                         (case.app != "real" or (app_up and text.count(APP_BANNER) >= handoffs)) and \
                         (handoffs >= runs or case.app == "erased"):
                     break
+        app_drives_both = case.app == "real" and any(
+            strict.owner(int(m[1], 16)) == "app" for m in re.finditer(r" pc 0x([0-9A-F]+) wisp", r.cmd("uart2 BothUartLog")))
         if case.query and case.app == "stage0":
             out["query"] = self.query_stage0(r, d)
+        elif case.query and app_drives_both:
+            # native-0's Zephyr UART2 pinctrl puts both pads in UART function for good: on the
+            # half-duplex wire its own TX pad corrupts every request (rung4.md W24d; native-0b).
+            out["query_skipped"] = "the app keeps both case-link pads in UART function"
         elif case.query:
             out["query"] = self.query(r, d)
             r.cmd('emulation RunFor "1"')
@@ -845,6 +897,16 @@ class Harness:
             fails.append(f"Wisp Boot wrote the PMIC other than the kick: {wb_other}")
         if not boots - 1 <= wb_kicks <= boots:  # one kick per run; a power cut may land before it
             fails.append(f"{wb_kicks} PMIC kicks by Wisp Boot in {boots} runs")
+        wire = wire_findings(res)
+        if wire["nor_in_reset"]:
+            fails.append(f"{wire['nor_in_reset']} MSPI1 accesses while held in reset (MSPICFG PRSTN/IPRSTN): "
+                         f"{wire['nor_in_reset_log'].splitlines()[:2]}")
+        # Only Wisp code fails here. The patched loader's UART wake (its GPIO helper, 0x41D998) sets both
+        # pads from its pin table for a few instructions before its first send's direction(1); that is
+        # Even's and drdaeman's code, which works on silicon (rung4.md W24d).
+        wisp_both = [o for o in wire["both_uart"] if o in ("wisp-boot", "app")]
+        if "wisp-boot" in wisp_both or (case.app != "real" and wisp_both):
+            fails.append(f"both case-link pads in UART function at once, by {wisp_both} (half duplex)")
         wb_strict = strict.unallowed_writes(res["strict"], owners=("wisp-boot",))
         if wb_strict:
             fails.append(f"Wisp Boot wrote unmodelled power/clock/trim registers: {strict.describe(wb_strict)}")
@@ -931,7 +993,12 @@ class Harness:
                 extra.append(self.check_pmic(res, fails))
             if case.status:
                 extra.append(self.check_status(case, res, fails))
-            if case.query and case.app != "stage0":
+            if case.query and case.app != "stage0" and "query_skipped" in res:
+                if [o for o in wire["both_uart"] if o in ("wisp-boot", "app")] != ["app"]:
+                    fails.append(f"query skipped, but the pads were set by {wire['both_uart']}")
+                extra.append("FINDING (native-0b): the app keeps both case-link pads in UART function, so on the "
+                             "half-duplex wire its TX pad corrupts every request; case-UART query not run")
+            elif case.query and case.app != "stage0":
                 extra.append(self.check_query(case, res, fails))
             kind = "observe-only Wisp Boot" if case.expect == "OBSERVE" else "Wisp Boot"
             state = (f"{kind} ran {boots}x, {'no app (reset at once)' if case.app == 'erased' else 'the app ran each time'}; "

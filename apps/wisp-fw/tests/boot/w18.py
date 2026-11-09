@@ -64,6 +64,21 @@ Cases (end states):
                 CRC, no watchdog bite and no PMIC power cycle, every PMIC write a kick (Wisp Boot's
                 once per boot, stage-0's every second), the clock measurement (LFRC 900 Hz as
                 modelled), and no write by Wisp code to an unmodelled power, clock or trim register
+  stage-0b      rung4.md W24d: the same as stage-0, with the committed stage-0b (data/stage-0b/, NOT
+                pinned: its proposed-pin.json is added to the pin tables in this process only, so that
+                install-wisp's own gate runs on the committed files), on the W24d models: the case link
+                as ONE half-duplex wire (WispCaseLink HalfDuplex, on in every case here: a byte sent
+                while pad 42 is not UART2TX is lost, a byte from the case is received once pad 44 is
+                UART2RX, corrupted if pad 42 drives then), MSPICFG's PRSTN/IPRSTN (WispMspiNor: MSPI1
+                does nothing while held in reset; any access then fails the case), and the D-cache
+                (WispRstGen CacheModel: across a warm reset only lines cleaned by wisp_dcache_clean
+                survive). Also checked: Wisp Boot's NOR phase read the MX id with result 0
+  stage-0-models the pinned stage-0 (W24b) under the same models: it must FAIL with each of the three
+                silicon findings (both pads in UART function by Wisp Boot and stage-0, MSPI1 accessed in
+                reset by Wisp Boot, no clean and the peeked record lost: all zeros, as on silicon); the
+                row passes when the models catch all three. native-0 and native-0-recover run with the
+                half-duplex model off (native-0's Zephyr app keeps both pads in UART function) and list
+                the W24d findings with their failures
   temple-wdt-*  the temple's nPM1300 watchdog (renode/models/WispPmicWdt.cs on IOM7), armed at the
                 start as the stock app leaves it, with a period scaled to Renode's virtual time
                 (PMIC_PERIOD_S): `-unfed` runs drdaeman's programs and is power-cycled mid-session
@@ -117,6 +132,7 @@ PMIC_PERIOD_S = 2.5
 JUMP_RE = re.compile(r"(just jump to app|APP jumpaddr app)\(0x438000\)")
 HELO_PREFIX = "5aa5ff100001030c48454c4f"
 STAGE_0_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0"
+STAGE_0B_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0b"
 NATIVE_1_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/native-1"
 BASELINE = APP_DIR / "images/pmic-baseline-w21.json"
 DIAG_ADDR = 0x20370000
@@ -183,6 +199,42 @@ def strict_check(run, fails: list[str]) -> list[dict]:
     return bad
 
 
+def nm_all(elf: Path, name: str, kinds: str = "tT") -> list[int]:
+    """Every address of a (possibly local, repeated) symbol."""
+    out = subprocess.run(["arm-none-eabi-nm", str(elf)], check=True, capture_output=True, text=True).stdout
+    return sorted({int(p[0], 16) & ~1 for p in (l.split() for l in out.splitlines())
+                   if len(p) == 3 and p[1] in kinds and p[2] == name})
+
+
+def silicon_findings(run) -> dict:
+    """The W24d models' records (rung4.md, "W24d: stage-0b"): who left both case-link pads in UART
+    function at once (WispCaseLink, half duplex), MSPI1 accesses while held in reset (WispMspiNor,
+    MSPICFG PRSTN/IPRSTN), and the D-cache cleans (WispRstGen)."""
+    both = run.r.cmd("uart2 BothUartLog")
+    owners = sorted({strict.owner(int(m[1], 16)) + ("" if m[2] == "wisp" else " (not while Wisp ran)")
+                     for m in re.finditer(r" pc 0x([0-9A-F]+) (\w+)", both)})
+    in_reset = run.r.cmd("nor InResetLog").splitlines()
+    (run.dir / "pads.log").write_text(run.r.cmd("uart2 PadLog") + "\n")
+    cleans = run.r.cmd("rstgen CleanLog")
+    (run.dir / "cleans.log").write_text(cleans + "\n")
+    in_reset_pcs = [int(m[1], 16) for m in (re.search(r" pc 0x([0-9A-F]+)", l) for l in in_reset) if m]
+    return {"both_uart": owners, "both_uart_wisp": [o for o in owners if o in ("wisp-boot", "app")],
+            "wire": run.r.cmd("uart2 WireReport").strip(),
+            "nor_in_reset": int(run.r.cmd("nor InResetAccesses").split()[0], 0),
+            "nor_in_reset_wisp": [p_ for p_ in in_reset_pcs if strict.owner(p_) in ("wisp-boot", "app")],
+            "nor_in_reset_first": in_reset[:1],
+            "cleans": int(cleans.split("\n")[0].split("=")[1])}
+
+
+def silicon_failures(f: dict) -> list[str]:
+    out = []
+    if f["both_uart_wisp"]:
+        out.append(f"half duplex: both case-link pads in UART function at once by {f['both_uart_wisp']}")
+    if f["nor_in_reset"]:
+        out.append(f"MSPI1 accessed {f['nor_in_reset']} times while held in reset: {f['nor_in_reset_first']}")
+    return out
+
+
 def free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -239,6 +291,9 @@ class Run:
         if "error" in out.lower() or "could not" in out.lower():
             raise RuntimeError(f"Renode platform failed to load: {out[-800:]}")
         r.cmd("uart2 HostTimeoutMs 600000")
+        # The case link is one half-duplex wire (WispCaseLink, rung4.md W24d): the loader turns it round
+        # for every send, as Wisp code must. native-0's cases turn the model off (see there).
+        r.cmd("uart2 HalfDuplex true")
         # Skip idle (WFI) time instead of pacing it: the loader spends most of each exchange in
         # FreeRTOS delays. Virtual time stays exact; only wall time shrinks.
         out = r.cmd("emulation SetAdvanceImmediately true")
@@ -357,7 +412,10 @@ class Harness:
 
     def record(self, name, ok, state, detail):
         self.rows.append((name, ok, state, detail))
-        print(f"{'PASS' if ok else 'FAIL'} {name}: {state} ({detail})", flush=True)
+        line = f"{'PASS' if ok else 'FAIL'} {name}: {state} ({detail})"
+        print(line, flush=True)
+        with (self.work / "rows.log").open("a") as f:  # survives a run that is stopped before its table
+            f.write(line + "\n")
 
     # --- cases ---
     def control(self, name, bootloader):
@@ -773,6 +831,10 @@ class Harness:
         app = AppImage("native-0", data, facts["image_sha256"], int(facts["end"], 16), check=native_rule3)
         nor = self.native_nor()
         run = Run(self.work, "native-0", self.patched, self.app, nor=nor)
+        # native-0 (pinned, W23) keeps both case-link pads in UART function (its Zephyr pinctrl) and its
+        # Wisp Boot writes MSPICFG = 0: the half-duplex wire would only corrupt its queries, so its own
+        # checks run on the full-duplex model and the W24d findings are listed with its failures.
+        run.r.cmd("uart2 HalfDuplex false")
         run_dir = run.dir
         log = []
         t0 = time.time()
@@ -847,6 +909,7 @@ class Harness:
             fails = []
             pc_log = run.r.cmd("pmicwdt PmicPcLog")
             live = liveness(run, fails)
+            fails += silicon_failures(silicon_findings(run))
             strict_bad = strict_check(run, fails)
         finally:
             run.close()
@@ -924,7 +987,7 @@ class Harness:
         (run_dir / "case-uart.json").write_text(json.dumps({"query": q, "boot": boot, "boot_watch": hook_summary},
                                                            indent=2, default=str))
 
-    # --- stage-0 (rung4.md W24b) ---
+    # --- stage-0 (rung4.md W24b) and stage-0b (W24d) ---
     @staticmethod
     def stage_0_files() -> tuple[bytes, bytes, bytes, dict]:
         """The committed stage-0 (data/stage-0/, pinned at W24b-0), through install-wisp's own
@@ -935,6 +998,32 @@ class Harness:
         facts = native.resolve(data, elf, map_text, image.sha(data)[:12])
         if facts["name"] != "stage-0":
             raise native.NativeRefused(f"resolved as {facts['name']}, not the stage-0 pin")
+        return data, elf, map_text, facts
+
+    @staticmethod
+    def stage_0b_files() -> tuple[bytes, bytes, bytes, dict]:
+        """The committed stage-0b (data/stage-0b/), NOT pinned (rung4.md W24d: pinning follows an
+        independent review). This process (Renode, never a case) adds its proposed pin
+        (proposed-pin.json) to the pin tables in memory, next to the repository's own, so that
+        install-wisp's whole gate (native.resolve) runs on the committed files as it would after
+        pinning. Wisp Boot's status block `st` moved in this build: the peek region is taken from
+        the committed wisp_boot.elf, as the pin will have to record it."""
+        prop = json.loads((STAGE_0B_DIR / "proposed-pin.json").read_text())
+        pin = {k: (tuple(v) if k == "gates" else int(v, 16) if k.startswith("crc32") else v)
+               for k, v in prop["image"].items()}
+        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "stage-0b": pin}
+        pins.WISP_BOOT_PASSED = {**pins.WISP_BOOT_PASSED, pin["wisp_boot_slot_sha256"]: prop["wisp_boot"]}
+        st = nm_all(STAGE_0B_DIR / "wisp_boot.elf", "st", kinds="bB")
+        if len(st) != 1 or st[0] != int(prop["peek_wisp_boot_status"], 16):
+            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not proposed-pin.json's peek address")
+        _, size, what = pins.PEEK_REGIONS["wisp-boot-status"]
+        pins.PEEK_REGIONS = {**pins.PEEK_REGIONS, "wisp-boot-status": (st[0], size, what)}
+        data = (STAGE_0B_DIR / "stage-0b.bin").read_bytes()
+        elf = (STAGE_0B_DIR / "stage0.elf").read_bytes()
+        map_text = (STAGE_0B_DIR / "stage0.map").read_bytes()
+        facts = native.resolve(data, elf, map_text, image.sha(data)[:12])
+        if facts["name"] != "stage-0b":
+            raise native.NativeRefused(f"resolved as {facts['name']}, not stage-0b's proposed pin")
         return data, elf, map_text, facts
 
     @staticmethod
@@ -993,25 +1082,38 @@ class Harness:
         out["queries"] = i
         return out
 
-    def stage_zero(self):
-        """install-wisp of stage-0, boot-watch's wisp protocol, then a RESET and a case reset."""
-        name = "stage-0"
+    def stage_zero(self, variant: str = "stage-0b"):
+        """install-wisp of stage-0b (or the pinned stage-0), boot-watch's wisp protocol, then a
+        RESET and a case reset, on the W24d models: the half-duplex wire, MSPICFG's resets and the
+        D-cache. stage-0b must pass. The pinned stage-0 (`stage-0-models`) must FAIL with each of
+        the three silicon findings; the row passes when the models catch all three."""
+        old = variant == "stage-0"
+        name = "stage-0-models" if old else "stage-0b"
+        d = STAGE_0_DIR if old else STAGE_0B_DIR
         try:
-            data, _elf, _map, facts = self.stage_0_files()
-        except (OSError, native.NativeRefused) as error:
-            self.record(name, False, f"stage-0 files or install-wisp's gate: {error}", "")
+            data, _elf, _map, facts = self.stage_0_files() if old else self.stage_0b_files()
+        except (OSError, ValueError, KeyError, native.NativeRefused) as error:
+            self.record(name, False, f"{variant} files or install-wisp's gate: {error}", "")
             return
-        app = AppImage("stage-0", data, facts["image_sha256"], int(facts["end"], 16), check=native_rule3)
+        pin = pins.WISP_IMAGES[facts["name"]]
+        app = AppImage(variant, data, facts["image_sha256"], int(facts["end"], 16), check=native_rule3)
         run = Run(self.work, name, self.patched, self.app, nor=self.native_nor())
         log, fails, t0 = [], [], time.time()
         hook = recovery_case_uart.WispStatus()
+        summary1, clock, code, report_reset, report_case = {}, {}, None, {}, {}
+        first = second = third = {"seconds": 0.0, "helo": 0, "answers": [], "exchanges": [], "queries": 0}
         try:
-            self.native_probes(run, STAGE_0_DIR / "wisp_boot.elf")
+            self.native_probes(run, d / "wisp_boot.elf")
             run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
             pmic_realism(run)
             # Wisp Boot's whole RAM survives warm resets (the record and its status block `st`, which
-            # the peek in part 4 reads); the silicon question is the same for both.
+            # the peek in part 4 reads); the silicon question is the same for both. With the D-cache
+            # model, only what Wisp code cleaned survives (every wisp_dcache_clean in both ELFs).
             run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
+            run.r.cmd("rstgen CacheModel true")
+            for elf in (d / "wisp_boot.elf", d / "stage0.elf"):
+                for addr in nm_all(elf, "wisp_dcache_clean"):
+                    run.r.cmd(f"rstgen CleanHook {addr:#x}")
 
             def host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
@@ -1026,28 +1128,44 @@ class Harness:
             # 1. The first boot after CONT: the protocol until it is complete and stage-0 has measured.
             # The harness steps 1 s at a time while the host session runs, so CONT was up to 1 s ago:
             # the report is asked 2 s in, from stage-0 (Wisp Boot's window is aimed in 2 and 3).
-            hook.report_at = (2.0,)
-            first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
-            hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
-            summary1 = hook.summary(first["answers"])
-            # stage-0's first measurement starts 2 s after it started and takes about 1.1 s.
-            run.step(3)
-            raw = case_uart.read_block(lambda r: self.inject(run, r), case_uart.BLOCK_CLOCK)
-            summary1["clock"] = case_uart.decode_clock(raw) if raw else None
-            # 2. RESET over the case UART, then the reboot's boot report (through the loader's window).
-            n_reports = len(hook.reports)
-            code, _ = recovery_case_uart.decode_reply(self.inject(run, recovery_case_uart.reset_request()),
-                                                      recovery_case_uart.OP_RESET)
-            second = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
-                                await_helo=True)
-            report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
-            # 3. The case's reset line (on hardware: the relay's start).
-            n_reports = len(hook.reports)
-            run.r.cmd('rstgen Request "case-reset"')
-            third = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
-                               await_helo=True)
-            report_case = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
-            run.step(2)
+            if old:
+                # The pinned stage-0: one boot behind the loader is enough for the pad and MSPI findings
+                # (nothing answers on the half-duplex wire, so the long watches below would only wait out
+                # the relay bound), then the peek after a case reset shows the record lost.
+                # Short steps: a long RunFor through the patched loader's window can stall Renode.
+                for _ in range(40):
+                    run.step(0.1)
+                hook.report_at = (0.2,)
+                first = self.watch(run, hook, 2)
+            else:
+                hook.report_at = (2.0,)
+                first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
+                hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
+                summary1 = hook.summary(first["answers"])
+                # stage-0's first measurement starts 2 s after it started and takes about 1.1 s.
+                run.step(3)
+                try:
+                    raw = case_uart.read_block(lambda r: self.inject(run, r), case_uart.BLOCK_CLOCK)
+                except RuntimeError as error:  # no reply (the old stage-0 on the half-duplex wire)
+                    raw, summary1["clock_error"] = None, str(error)
+                summary1["clock"] = case_uart.decode_clock(raw) if raw else None
+                # 2. RESET over the case UART, then the reboot's boot report (through the loader's window).
+                n_reports = len(hook.reports)
+                try:
+                    code, _ = recovery_case_uart.decode_reply(self.inject(run, recovery_case_uart.reset_request()),
+                                                              recovery_case_uart.OP_RESET)
+                except RuntimeError:
+                    code = None
+                second = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                                    await_helo=True)
+                report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
+                # 3. The case's reset line (on hardware: the relay's start).
+                n_reports = len(hook.reports)
+                run.r.cmd('rstgen Request "case-reset"')
+                third = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                                   await_helo=True)
+                report_case = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
+                run.step(2)
             # 4. The W24b runbook's peek after step 7: a case reset into a held loader, then what the
             # interrupted boot left in Wisp Boot's RAM, read through dump_fed (pins.PEEK_REGIONS).
             def peek_host(link):
@@ -1067,14 +1185,15 @@ class Harness:
             pc_log = run.r.cmd("pmicwdt PmicPcLog")
             pm = self.pmic(run)
             mram = run.mram()
+            silicon = silicon_findings(run)
         finally:
             run.close()
         v = result.get("value") or {}
         if mram[0x38000:0x38000 + len(data)] != data:
-            fails.append("stage-0 not in MRAM")
-        want_crc = f"{pins.WISP_IMAGES['stage-0']['crc32_aligned_over_stock']:08x}"
+            fails.append(f"{variant} not in MRAM")
+        want_crc = f"{pin['crc32_aligned_over_stock']:08x}"
         if v.get("crc_after") != want_crc:
-            fails.append(f"final CRC {v.get('crc_after')}, pinned for W24b {want_crc}")
+            fails.append(f"final CRC {v.get('crc_after')}, pinned {want_crc}")
         if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
             fails.append("bootloader region changed")
         if not (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
@@ -1097,6 +1216,8 @@ class Harness:
             fails.append(f"Wisp Boot block {summary1.get('boot_error') or summary1.get('boot')}")
         if clock.get("result") != "ok" or not 850 <= clock.get("lfrc_hz", 0) <= 960:
             fails.append(f"clock {clock or summary1.get('clock_error')}")
+        if (summary1.get("boot") or {}).get("nor_id") != 0x3925C2 or (summary1.get("boot") or {}).get("nor_result") != 0:
+            fails.append(f"Wisp Boot's NOR phase: {summary1.get('boot')}")
         if code != 0 or second["helo"] != 1:
             fails.append(f"RESET: reply {code}, {second['helo']} HELO")
         if report_reset.get("source") != "wisp-boot" or report_reset.get("prev_stage") != "s0-reset-request" \
@@ -1131,8 +1252,25 @@ class Harness:
                 fails.append(f"peek of the record after the case reset: {peek_record}")
             if not ((peek_status.get("prev") or {}).get("valid") and peek_status.get("rstgen_stat") == 1):
                 fails.append(f"peek of Wisp Boot's status block: {peek_status}")
+        silicon_fails = silicon_failures(silicon)
+        if old:
+            # The models must catch each of the three silicon bugs in the pinned stage-0.
+            caught = {k: bool(silicon[k]) for k in ("both_uart_wisp", "nor_in_reset_wisp")}
+            caught["record_lost"] = silicon["cleans"] == 0 and not peek_record.get("valid")
+            ok = bool(v) and all(caught.values()) and "error" not in result
+            state = (f"the pinned stage-0 FAILS the W24d checks, as it must: (1) half duplex: both case-link pads in "
+                     f"UART function by {silicon['both_uart']} ({silicon['wire']}); (2) MSPI1 held in reset: "
+                     f"{silicon['nor_in_reset']} accesses by Wisp Boot (first: {silicon['nor_in_reset_first']}); (3) D-cache: "
+                     f"{silicon['cleans']} cleans, the peeked record valid={peek_record.get('valid')} (all "
+                     f"{'zeros' if peeked.get('wisp-record', b'x') == bytes(64) else 'not zeros'}, as on silicon). Its other "
+                     f"checks: {'; '.join(fails)[:600]}" if ok else
+                     f"the models did NOT catch every bug in the pinned stage-0: {caught}; {silicon}; {result.get('error')!r}")
+            self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+            (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
+            return
+        fails += silicon_fails
         ok = bool(v) and not fails and "error" not in result
-        state = (f"stage-0 ({len(data)} B, CRC {v.get('crc_after')}) written through the loader, vectors first and last; "
+        state = (f"stage-0b ({len(data)} B, CRC {v.get('crc_after')}) written through the loader, vectors first and last; "
                  f"boot-watch's wisp protocol at 17.5 ms: IDENT kind {ident.get('image_kind')} {ident.get('stage')}, "
                  f"{first['queries']} queries; LFRC {clock.get('lfrc_hz')} Hz (watchdog {clock.get('wdt_period_ms')} ms); "
                  f"RESET -> HELO -> Wisp Boot's report: prev {report_reset.get('prev_stage')} "
@@ -1141,8 +1279,9 @@ class Harness:
                  f"{report_case.get('boot')}; Wisp Boot's report asked {report_reset.get('asked_s_after_release')} s after "
                  f"the release; peek after a held case reset: record boot {peek_record.get('boots')} stage "
                  f"{peek_record.get('stage')}, status prev {(peek_status.get('prev') or {}).get('stage')}; "
-                 f"PMIC: {wb_kicks} Wisp Boot kicks + stage-0's, nothing else, no power cycle; "
-                 f"{live}; strict clean" if ok else f"{'; '.join(fails)} {result.get('error')!r}")
+                 f"PMIC: {wb_kicks} Wisp Boot kicks + stage-0b's, nothing else, no power cycle; "
+                 f"{live}; strict clean; half duplex: no pads in UART function together ({silicon['wire']}); "
+                 f"MSPI1 never accessed in reset; D-cache: {silicon['cleans']} cleans kept the record" if ok else f"{'; '.join(fails)} {result.get('error')!r}")
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
         (run.dir / "boot-watch.json").write_text(json.dumps(
@@ -1212,6 +1351,10 @@ class Harness:
         # MRAM as install-wisp leaves it over stock: native-0, then stock's bytes after it.
         start = data + self.app[len(data):]
         run = Run(self.work, name, self.patched, start, nor=self.native_nor())
+        # native-0 (pinned, W23) keeps both case-link pads in UART function (its Zephyr pinctrl) and its
+        # Wisp Boot writes MSPICFG = 0: the half-duplex wire would only corrupt its queries, so its own
+        # checks run on the full-duplex model and the W24d findings are listed with its failures.
+        run.r.cmd("uart2 HalfDuplex false")
         log = []
         t0 = time.time()
         banner = "*** Wisp native "
@@ -1257,6 +1400,7 @@ class Harness:
             helo_after = sum(f.startswith(HELO_PREFIX) for f in run.frames())
             live_fails = []
             live = liveness(run, live_fails)
+            live_fails += silicon_failures(silicon_findings(run))
             strict_check(run, live_fails)
             pm = self.pmic(run)
             mram = run.mram()
@@ -1385,6 +1529,12 @@ class Harness:
             for reg, v in json.loads(BASELINE.read_text())["registers"].items():
                 run.r.cmd(f"pmicwdt SetRegister {int(reg, 16):#x} {int(v['value'], 16):#x}")
             run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
+            # The D-cache model: across a warm reset only what Wisp code cleaned survives (every
+            # wisp_dcache_clean in Wisp Boot's and the app's ELF).
+            run.r.cmd("rstgen CacheModel true")
+            for elf in (NATIVE_1_DIR / "wisp_boot.elf", NATIVE_1_DIR / "zephyr.elf"):
+                for addr in nm_all(elf, "wisp_dcache_clean"):
+                    run.r.cmd(f"rstgen CleanHook {addr:#x}")
 
             def host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
@@ -1440,8 +1590,7 @@ class Harness:
             t += second["seconds"]
             t += run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 30, step=0.25)
             rec2 = self.diag_record(run)
-            half = run.r.cmd("uart2 HalfDuplexStats").strip()
-            held = int(run.r.cmd("nor HeldInReset").split()[0], 0)
+            silicon = silicon_findings(run)
             watched = run.r.cmd("nor WatchedLog").split("\n")
             watched_writes = int(run.r.cmd("nor WatchedWrites").split()[0], 0)
             live = liveness(run, fails)
@@ -1489,10 +1638,12 @@ class Harness:
         if code != 0 or second["helo"] != 1 or report_reset.get("source") != "wisp-boot" \
                 or report_reset.get("prev_stage") != "app-reset-request":
             fails.append(f"RESET: reply {code}, {second['helo']} HELO, report {report_reset}")
-        if half != "tx_bytes=" + half.split("tx_bytes=")[1].split()[0] + " tx_lost=0 rx_lost=0":
-            fails.append(f"half duplex: {half}")
-        if held:
-            fails.append(f"{held} MSPI1 transfers started while held in reset")
+        fails += silicon_failures(silicon)
+        if not re.match(r"tx_lost=0 rx_corrupted=0 ", silicon["wire"]):
+            fails.append(f"half duplex: {silicon['wire']}")
+        if not silicon["cleans"]:
+            fails.append("no D-cache clean by Wisp code (the record would not survive a reset)")
+        half = silicon["wire"]
         nor_ops = {l.split()[0] for l in watched if l.strip()}
         if watched_writes or not nor_ops <= {"9f", "05", "13"} or "13" not in nor_ops:
             fails.append(f"Wisp Boot NOR commands {sorted(nor_ops)}")
@@ -1531,22 +1682,23 @@ class Harness:
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
         (run.dir / "case-uart.json").write_text(json.dumps(
             {"query": q, "record_first": rec1, "record_after_reset": rec2, "reset_watch": second,
-             "boot_watch": hook.summary(answers), "strict_unallowed": strict_bad}, indent=2, default=str))
+             "boot_watch": hook.summary(answers), "strict_unallowed": strict_bad, "silicon": silicon},
+            indent=2, default=str))
 
     def legacy_half_duplex(self, name: str, data: bytes, boot_elf: Path):
-        """A pinned pre-W24c image (native-0, stage-0) in MRAM as install-wisp leaves it over stock,
-        behind the stock 2.4.0.24 bootloader:
-        under the half-duplex wire and MSPICFG's reset bits it must fail as it did on silicon (the
-        case UART never answers: pad 42 holds the wire; stage-0's Wisp Boot also holds MSPI1 in
-        reset). A pass here means: it fails, for those reasons."""
+        """The pinned native-0 in MRAM as install-wisp leaves it over stock, behind the stock 2.4.0.24
+        bootloader, under the W24d models (half-duplex wire, MSPICFG's resets): it must fail as it
+        did on silicon (W24): its Zephyr pinctrl keeps both case-link pads in UART function, so the
+        case's bytes arrive corrupted and nothing is answered, and its Wisp Boot holds MSPI1 in
+        reset. A pass here means: it fails, for those reasons. (stage-0's counterpart is
+        `stage-0-models`.)"""
         image_ = data + self.app[len(data):]
-        # Behind the stock 2.4.0.24 bootloader: the half-duplex failure does not depend on the
-        # bootloader, and the patched loader's boot window runs about 30x slower in Renode.
+        # The half-duplex failure does not depend on the bootloader, and the patched loader's boot
+        # window runs about 30x slower in Renode.
         run = Run(self.work, name, self.bl24, image_, nor=self.native_nor())
         fails, t0 = [], time.time()
         try:
             self.native_probes(run, boot_elf)
-            # 0.1 s steps: a long RunFor through the patched loader's boot window can stall Renode.
             run.run_until(lambda: False, 12, step=0.1)
             answered = 0
             for req in (case_uart.ident_request(), case_uart.bootrep_request(), case_uart.ident_request()):
@@ -1555,21 +1707,22 @@ class Harness:
                     answered += 1
                 except RuntimeError:
                     pass
-            half = run.r.cmd("uart2 HalfDuplexStats").strip()
-            held = int(run.r.cmd("nor HeldInReset").split()[0], 0)
+            silicon = silicon_findings(run)
             boots = sum(l.startswith("wisp_boot_main ") for l in run.r.cmd("probe Report").splitlines())
         finally:
             run.close()
-        rx_lost = int(half.split("rx_lost=")[1].split()[0])
         if answered:
             fails.append(f"{answered} case-UART request(s) answered")
-        if not rx_lost:
-            fails.append(f"no case bytes lost to the driven wire ({half})")
+        if "app" not in silicon["both_uart_wisp"]:
+            fails.append(f"the app never left both pads in UART function ({silicon['both_uart']})")
+        if not silicon["nor_in_reset_wisp"]:
+            fails.append("Wisp Boot never touched MSPI1 while held in reset")
         if not boots:
             fails.append("Wisp Boot never ran")
         ok = not fails
-        self.record(name, ok, (f"fails as on silicon: Wisp Boot ran {boots}x, 0 of 3 case-UART requests answered, "
-                               f"{half} (pad 42 drives the wire), MSPI1 starts while held in reset: {held}")
+        self.record(name, ok, (f"fails as on silicon (W24): Wisp Boot ran {boots}x; 0 of 3 case-UART requests "
+                               f"answered ({silicon['wire']}); both pads in UART function by {silicon['both_uart_wisp']}; "
+                               f"MSPI1 accessed {silicon['nor_in_reset']}x while held in reset")
                     if ok else "; ".join(fails), f"{time.time() - t0:.0f} s wall")
 
     def install_wisp_cut(self, fraction=0.5):
@@ -1668,8 +1821,9 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
                                                    "recover-relay", "recover-cut", "recover-split", "temple-wdt",
-                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0-legacy",
-                                                   "native-0-recover", "stage-0-legacy", "native-1", "install"])
+                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0",
+                                                   "native-0-legacy", "native-0-recover", "stage-0b", "stage-0-models",
+                                                   "native-1", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -1703,17 +1857,17 @@ def main() -> int:
     if "install-wisp" in only:
         h.install_wisp()
         h.install_wisp_cut()
-    if "native-0" in only:  # the W22 case as it was: fails since W25's half-duplex model
+    if "native-0" in only:
         h.native_zero()
     if "native-0-legacy" in only:
         h.legacy_half_duplex("native-0-legacy", native.NATIVE_0_FILES["image"].read_bytes(),
                              native.NATIVE_0_DIR / "wisp_boot.elf")
     if "native-0-recover" in only:
         h.native_zero_recover()
-    if "stage-0" in only:  # the W24b case as it was: fails since W25's half-duplex model
-        h.stage_zero()
-    if "stage-0-legacy" in only:
-        h.legacy_half_duplex("stage-0-legacy", native.STAGE_0_FILES["image"].read_bytes(), STAGE_0_DIR / "wisp_boot.elf")
+    if "stage-0b" in only or "stage-0" in only:
+        h.stage_zero("stage-0b")
+    if "stage-0-models" in only or "stage-0" in only:
+        h.stage_zero("stage-0")
     if "native-1" in only:
         h.native_one()
     if "install" in only:

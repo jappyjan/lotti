@@ -174,25 +174,6 @@ static inline uint32_t wisp_diag_crc32(const void *data, uint32_t n)
 	return ~crc;
 }
 
-/* Clean (write back) the D-cache lines over [p, p + n): the bootloader hands off with the D-cache
- * on (rung4.md W24c), and a line still dirty when the watchdog resets the chip is lost. SCB
- * DCCMVAC, 32-byte lines (Cortex-M55); harmless with the cache off. Firmware only. */
-static inline void wisp_dcache_clean(const volatile void *p, uint32_t n)
-{
-#if defined(__arm__)
-	uint32_t a = (uint32_t)(uintptr_t)p & ~31u, end = (uint32_t)(uintptr_t)p + n;
-
-	__asm volatile("dsb" ::: "memory");
-	for (; a < end; a += 32u) {
-		*(volatile uint32_t *)0xE000EF68u = a;
-	}
-	__asm volatile("dsb\n isb" ::: "memory");
-#else
-	(void)p;
-	(void)n;
-#endif
-}
-
 static inline volatile struct wisp_diag_record *wisp_diag(void)
 {
 	return (volatile struct wisp_diag_record *)WISP_DIAG_ADDR;
@@ -201,7 +182,6 @@ static inline volatile struct wisp_diag_record *wisp_diag(void)
 static inline void wisp_diag_seal(volatile struct wisp_diag_record *r)
 {
 	r->crc = wisp_diag_crc32((const void *)r, __builtin_offsetof(struct wisp_diag_record, crc));
-	wisp_dcache_clean(r, sizeof(*r));
 }
 
 static inline int wisp_diag_valid(const volatile struct wisp_diag_record *r)
@@ -217,6 +197,36 @@ static inline uint32_t wisp_stimer_now(void)
 	return *(volatile uint32_t *)WISP_STIMER_STTMR;
 }
 
+/* D-cache (rung4.md, "W24d: stage-0b"): the Even bootloader enables the I- and D-caches in its board
+ * set-up and hands off with them on, and SRAM is write-back cacheable by default. A record or status
+ * block still in a dirty line when the watchdog resets the chip never reaches SRAM. So every update
+ * of the record (wisp_diag_mark, wisp_diag_fault, Wisp Boot's diag_begin) and of Wisp Boot's status
+ * block (status_seal) ends with a clean of its lines to SRAM: SCB DCCMVAC (0xE000EF68, D-cache clean
+ * by address to the point of coherency), one write per 32-byte line (the Cortex-M55's line size),
+ * then DSB. With the D-cache off the writes do nothing. Cleaning was chosen over an MPU region: it
+ * changes no state the app inherits, and it is local to the writers. noipa (no inlining, no clone
+ * with the arguments folded in): the Renode harness hooks every copy by its symbol, reading the
+ * range from r0/r1 (its D-cache model keeps only cleaned lines across a reset). */
+#define WISP_DCACHE_LINE 32u
+#define WISP_SCB_DCCMVAC 0xE000EF68u
+
+static __attribute__((noipa, unused)) void wisp_dcache_clean(const volatile void *p, uint32_t n)
+{
+#if defined(__arm__)
+	uint32_t a = (uint32_t)p & ~(WISP_DCACHE_LINE - 1u);
+	const uint32_t end = (uint32_t)p + n;
+
+	__asm volatile("dsb" ::: "memory");
+	for (; a < end; a += WISP_DCACHE_LINE) {
+		*(volatile uint32_t *)WISP_SCB_DCCMVAC = a;
+	}
+	__asm volatile("dsb" ::: "memory");
+#else
+	(void)p; /* host builds of the codec: no cache */
+	(void)n;
+#endif
+}
+
 /* A breadcrumb: last value wins. Only on a valid record (Wisp Boot started it this boot). */
 static inline void wisp_diag_mark(uint16_t stage)
 {
@@ -228,6 +238,7 @@ static inline void wisp_diag_mark(uint16_t stage)
 	r->stage = stage;
 	r->stage_ticks = wisp_stimer_now() - r->stimer_start;
 	wisp_diag_seal(r);
+	wisp_dcache_clean(r, sizeof(*r));
 }
 
 /* Fault capture for a handler: `frame` is the stacked exception frame (or 0 when it could not be
@@ -253,6 +264,7 @@ static inline void wisp_diag_fault(const uint32_t *frame, uint32_t exc_return, u
 	r->stage = stage;
 	r->stage_ticks = wisp_stimer_now() - r->stimer_start;
 	wisp_diag_seal(r);
+	wisp_dcache_clean(r, sizeof(*r));
 }
 
 /* The stacked frame of a fault, or 0 if the stack pointer it names is not plausible SRAM. */

@@ -15,6 +15,10 @@
 #define WISP_BOOT_OBSERVE 0
 #endif
 
+/* The NOR phase's poll budget: every poll of every wait spends one; at 0 every call fails at once
+ * (-5 from a transfer). Set it before each phase (boot_main.c nor_phase). */
+void nor_budget(uint32_t polls);
+uint32_t nor_budget_left(void);
 /* Powers MSPI1, reads the RDID into *rdid (3 bytes, byte 0 = manufacturer) and checks it. */
 int nor_init(uint32_t *rdid);
 int nor_read(uint32_t addr, void *buf, uint32_t n);

@@ -6,6 +6,7 @@
 #include "boot_uart.h"
 
 #include "boot_hw.h"
+#include "wisp_diag.h"
 
 #define UART2(o) REG(0x4003B000u + (o))
 #define GPIO_PINCFG(n) REG(0x40010000u + 4u * (n))
@@ -31,27 +32,51 @@ enum {
 	WAIT = 200000u,
 	PAD_TX = 42u,
 	PAD_RX = 44u,
-	PAD_UART = 4u,   /* FNCSEL 4: UART2TX on pad 42, UART2RX on pad 44 */
-	PAD_PARKED = 3u, /* FNCSEL 3 (GPIO), output and input off: the pad lets go of the wire */
-	SETTLE_TICKS = 197u,  /* 6 ms at 32768 Hz: the loader's 6-tick wait before it answers */
-	SETTLE_POLLS = 60000u, /* the same bound without a counting STIMER (about 6-12 ms) */
+	PAD_UART2 = 4u,  /* FNCSEL 4: UART2TX on pad 42, UART2RX on pad 44 (the loader's pin table) */
+	PAD_PARKED = 3u, /* FNCSEL 3 (GPIO), input and output disabled: the pad lets go of the wire */
+	SETTLE_TICKS = 197u, /* 6 ms at 32768 Hz: the loader's DELAY(6) before each of its sends */
+	SETTLE_POLLS = 200000u, /* cap, whatever the STIMER does */
+	DRAIN_MAX = 64u,
 };
 
-#define STIMER_STTMR REG(0x40008804u)
-
-/* The case link is one wire: pad 42 drives it only while we send (W24c, rung4.md). */
-static void pads(uint32_t tx, uint32_t rx)
+/* Raw PINCFG writes between PADKEY 0x73 and 0, as the bootloader's GPIO helper does. The pad that
+ * stops driving is parked first, so the two are never in UART function at once. */
+static void pads_rx(void)
 {
 	GPIO_PADKEY = 0x73u;
-	GPIO_PINCFG(PAD_TX) = tx;
-	GPIO_PINCFG(PAD_RX) = rx;
+	GPIO_PINCFG(PAD_TX) = PAD_PARKED;
+	GPIO_PINCFG(PAD_RX) = PAD_UART2;
 	GPIO_PADKEY = 0;
+}
+
+static void pads_tx(void)
+{
+	GPIO_PADKEY = 0x73u;
+	GPIO_PINCFG(PAD_RX) = PAD_PARKED;
+	GPIO_PINCFG(PAD_TX) = PAD_UART2;
+	GPIO_PADKEY = 0;
+}
+
+/* Waits (bounded) until the last stop bit has left: TX FIFO empty and not busy. */
+static void tx_done(void)
+{
+	for (uint32_t i = 0; (UART2(FR) & FR_BUSY || !(UART2(FR) & FR_TXFE)) && i < WAIT; i++) {
+	}
+}
+
+/* Whatever the receiver latched while its pad was parked (or our own turnaround) goes. */
+static void rx_drain(void)
+{
+	for (uint32_t i = 0; !(UART2(FR) & FR_RXFE) && i < DRAIN_MAX; i++) {
+		(void)UART2(DR);
+	}
+	UART2(RSR) = 0;
 }
 
 int boot_uart_init(void)
 {
 	if ((PWRCTRL_DEVPWREN & PWR_UART2) && (UART2(CR) & 1u)) {
-		boot_uart_flush(); /* the loader's last reply may still be leaving */
+		tx_done(); /* the loader's last reply may still be leaving */
 	}
 	PWRCTRL_DEVPWREN |= PWR_UART2;
 	for (uint32_t n = 0; !(PWRCTRL_DEVPWRSTATUS & PWR_UART2); n++) {
@@ -68,8 +93,9 @@ int boot_uart_init(void)
 	UART2(IER) = 0;
 	UART2(IEC) = 0xFFFFFFFFu;
 	UART2(RSR) = 0;
-	pads(PAD_PARKED, PAD_UART); /* receive: the case owns the wire */
+	pads_rx();
 	UART2(CR) = 0x319u;
+	rx_drain();
 	return 0;
 }
 
@@ -88,27 +114,25 @@ int boot_uart_getc(void)
 	return (int)(d & 0xFFu);
 }
 
-/* Like the loader: give the case time to turn its USART round to receive, park the receive pad
- * (it would hear our own bytes), drive pad 42, send, wait until the last stop bit is out, then
- * let go of the wire again. Every wait is bounded. */
 void boot_uart_write(const uint8_t *p, uint32_t n)
 {
-	uint32_t t0 = STIMER_STTMR;
+	const uint32_t t0 = wisp_stimer_now();
 
-	for (uint32_t i = 0; STIMER_STTMR - t0 < SETTLE_TICKS && i < SETTLE_POLLS; i++) {
+	/* The other end sent last: give it the loader's 6 ms to stop driving and start listening. */
+	for (uint32_t i = 0; wisp_stimer_now() - t0 < SETTLE_TICKS && i < SETTLE_POLLS; i++) {
 	}
-	pads(PAD_UART, PAD_PARKED);
+	pads_tx();
 	while (n--) {
 		for (uint32_t i = 0; (UART2(FR) & FR_TXFF) && i < WAIT; i++) {
 		}
 		UART2(DR) = *p++;
 	}
-	boot_uart_flush();
-	pads(PAD_PARKED, PAD_UART);
+	tx_done();
+	pads_rx();
+	rx_drain();
 }
 
 void boot_uart_flush(void)
 {
-	for (uint32_t i = 0; (UART2(FR) & FR_BUSY || !(UART2(FR) & FR_TXFE)) && i < WAIT; i++) {
-	}
+	tx_done();
 }

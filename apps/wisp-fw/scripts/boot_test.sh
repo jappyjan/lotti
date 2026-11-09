@@ -6,8 +6,8 @@
 #   1. stock bundles in the git-ignored .wisp-cache/stock/: 2.4.0.24 (the version on Jan's temples,
 #      or $WISP_STOCK_VERSION) and 2.3.2.14 (the base of drdaeman's patched bootloader); wisp-ota
 #      fetch if missing, SHA-256 pinned. Even's firmware never leaves .wisp-cache.
-#   2. native-1 and stage-0 (scripts/build_native.sh): the observe-only Wisp Boot, stage-0, and the real
-#      app (native-1's, with the UART1 console back for rung3.py: tests/boot/app/rung3-console.*)
+#   2. native-1 and stage-0b (scripts/build_native.sh): the observe-only Wisp Boot, stage-0b, and the
+#      real app (native-1's, with the UART1 console back for rung3.py: tests/boot/app/rung3-console.*)
 #   3. both Wisp Boot builds with the fault apps and the real app behind them
 #      (scripts/build_boot.sh -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP=...): the fallback build in
 #      build/wisp-boot, the observe-only one in build/wisp-boot-observe, which must be byte-identical
@@ -52,13 +52,13 @@ app="$rung3_app/zephyr/zephyr.bin"
 "$APP_DIR/scripts/build_boot.sh" -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app"
 WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe" "$APP_DIR/scripts/build_boot.sh" \
 	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app" -DWISP_STAGE0=ON
-"$APP_DIR/scripts/build_native.sh" stage-0 >/dev/null
-cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$CACHE_DIR/build/stage-0/boot/wisp_boot.bin" || {
-	echo "FAIL: the observe-only Wisp Boot under test differs from stage-0's" >&2
+"$APP_DIR/scripts/build_native.sh" stage-0b >/dev/null
+cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$CACHE_DIR/build/stage-0b/boot/wisp_boot.bin" || {
+	echo "FAIL: the observe-only Wisp Boot under test differs from stage-0b's" >&2
 	exit 1
 }
-cmp "$CACHE_DIR/build/wisp-boot-observe/native_stage0.bin" "$CACHE_DIR/build/stage-0/stage-0.bin" || {
-	echo "FAIL: native_stage0.bin differs from stage-0.bin" >&2
+cmp "$CACHE_DIR/build/wisp-boot-observe/native_stage0.bin" "$CACHE_DIR/build/stage-0b/stage-0b.bin" || {
+	echo "FAIL: native_stage0.bin differs from stage-0b.bin" >&2
 	exit 1
 }
 cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$native/boot/wisp_boot.bin" || {

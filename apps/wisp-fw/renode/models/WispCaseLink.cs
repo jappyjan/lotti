@@ -5,8 +5,9 @@
 // the real case (apps/wisp-recovery).
 //
 // Register behaviour (PL011 subset the loader and the stock code use): DR (0x00) write = one TX
-// byte, DR read = next RX byte (no error bits); FR (0x18) = TXFE | (RXFE when nothing is queued),
-// never BUSY or TXFF; RSR (0x04) = 0, no receive errors; every other offset is plain storage. No interrupt is ever raised (the loader
+// byte, DR read = next RX byte (error bits only from the half-duplex model below); FR (0x18) = TXFE |
+// (RXFE when nothing is queued), never BUSY or TXFF; RSR (0x04) = the last byte's errors (0 unless the
+// half-duplex model corrupted it), a write clears them; every other offset is plain storage. No interrupt is ever raised (the loader
 // polls with IRQ 17 masked; the stock app copes with an idle UART2, as WispUartIdle shows).
 //
 // The model frames the temple's output: a frame is 5A A5 FF <len> followed by len + 1 bytes (the
@@ -21,20 +22,19 @@
 // relay's one-request/one-reply G2TX/G2RX exchange. A host that stays silent for HostTimeoutMs
 // real milliseconds is detached.
 //
-// Half duplex (rung4.md W24c; HalfDuplex, on by default): the pogo link is one wire shared by the
-// temple's pad 42 (UART2TX) and pad 44 (UART2RX). The model reads both pads' FNCSEL from the GPIO
-// window (PINCFG42 0x400100A8, PINCFG44 0x400100B0; plain memory in the platform) at the moments
-// that matter:
-//   - a DR write reaches the wire only while pad 42 is UART2TX (FNCSEL 4); otherwise the byte is
-//     lost (TxLost);
-//   - bytes from the case are heard only while pad 44 is UART2RX and pad 42 is NOT driving the
-//     line (FNCSEL 4 on pad 42 holds it high against the case's start bits). The model is
-//     lockstep, so it cannot say when on the wire the case's bytes arrive: they wait as pending
-//     and are delivered the first time the temple looks at its receiver (an FR or DR read) in
-//     that pad state. If the temple transmits again first, or never listens, they are lost
-//     (RxLost). Stock, the loader and Wisp from native-1 on turn the wire back to receive after
-//     each frame; native-0 and stage-0 never did, so nothing reaches them.
-// Not modelled: the case's own turn-round time (a temple that answers too quickly), the settle.
+// Half-duplex wire (`uart2 HalfDuplex true`; rung4.md, "W24d: stage-0b"). On the G2 the case link is
+// ONE pogo wire: pad 42 (UART2TX, function 4) and pad 44 (UART2RX, function 4) both sit on it, and
+// the loader and stock turn it round for every send (park the other pad, function 3). With the
+// model on, it follows the two pads (WispPads, the GPIO record in WispTrace.cs):
+//   * a byte the temple writes while pad 42 is not in UART function never reaches the wire: it is
+//     not framed or sent to the host (TxLost);
+//   * bytes from the case (the host's reply, Inject) wait on the wire until pad 44 is in UART
+//     function; if pad 42 is in UART function too at that moment, the temple's own TX pad drives
+//     the wire against them, and every byte arrives with a framing error (DR bit 8 FE, RSR FE;
+//     RxCorrupted). That is what the W24/W24b UART set-up (both pads in function 4 for good) does.
+// BothUart counts pad writes that left both pads in UART function at once (any code, PCs in
+// BothUartLog); the harnesses fail Wisp code on it. With the model off (the default) bytes are
+// received at once and pads are ignored, as before.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -70,67 +70,69 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public int HostTimeoutMs { get; set; } = 120000;
         public ulong TxBytes { get; private set; }
         public ulong RxBytes { get; private set; }
-        public bool HalfDuplex { get; set; } = true;
-        public ulong TxLost { get; private set; }
-        private ulong rxLost;
-        public ulong RxLost => rxLost + (ulong)pending.Count;
-        public string HalfDuplexStats()
-        {
-            return $"tx_bytes={TxBytes} tx_lost={TxLost} rx_lost={RxLost}";
-        }
-
-        private const ulong PinCfg42 = 0x400100A8, PinCfg44 = 0x400100B0;
-        private const uint FnUart = 4;
-
-        private uint Fn(ulong addr)
-        {
-            return (uint)machine.SystemBus.ReadDoubleWord(addr) & 0xFu;
-        }
-
-        private bool TxDriving => Fn(PinCfg42) == FnUart;
-
-        private bool RxListening => Fn(PinCfg44) == FnUart && !TxDriving;
-
-        // The temple looks at its receiver: pending case bytes arrive if it can hear them now.
-        private void Hear()
-        {
-            if(pending.Count > 0 && (!HalfDuplex || RxListening))
-            {
-                while(pending.Count > 0)
-                {
-                    rx.Enqueue(pending.Dequeue());
-                }
-            }
-        }
-
-        // The temple talks again: whatever of the case's bytes it never heard is gone.
-        private void Drop()
-        {
-            if(pending.Count == 0)
-            {
-                return;
-            }
-            if(rxLost == 0)
-            {
-                this.Log(LogLevel.Warning, "W18 case link: {0} case byte(s) never heard: pad 42 FNCSEL {1}, pad 44 FNCSEL {2} (half duplex)",
-                    pending.Count, Fn(PinCfg42), Fn(PinCfg44));
-            }
-            rxLost += (ulong)pending.Count;
-            pending.Clear();
-        }
+        public bool HostAttached => client != null;
 
         // Peripheral reset (also on every emulated power cut): registers and FIFOs only. The host
         // link and the frame log survive, like the case relay survives a temple reset.
         public void Reset()
         {
             regs = new Dictionary<long, uint>();
-            rx = new Queue<byte>();
+            rx = new Queue<uint>();
             tx = new List<byte>();
-            if(pending != null)
+            wire = new Queue<byte>();
+            rsr = 0;
+        }
+
+        public bool HalfDuplex { get; set; }
+        public ulong TxLost { get; private set; }
+        public ulong RxCorrupted { get; private set; }
+        public long BothUart => WispPads.BothUart;
+
+        public string PadLog()
+        {
+            return string.Join("\n", WispPads.Log);
+        }
+
+        public string BothUartLog()
+        {
+            return string.Join("\n", WispPads.BothUartLog);
+        }
+
+        // One line for the harness: "tx_lost=<n> rx_corrupted=<n> both_uart=<n> waiting=<n>".
+        public string WireReport()
+        {
+            return $"tx_lost={TxLost} rx_corrupted={RxCorrupted} both_uart={WispPads.BothUart} waiting={wire.Count}";
+        }
+
+        // Bytes from the case reach the receiver once pad 44 listens; corrupted if pad 42 drives.
+        private void Deliver()
+        {
+            if(!HalfDuplex || wire.Count == 0 || !WispPads.RxListening)
             {
-                rxLost += (ulong)pending.Count; // the temple reset before it heard them
+                return;
             }
-            pending = new Queue<byte>();
+            var corrupt = WispPads.TxDriving;
+            while(wire.Count > 0)
+            {
+                var b = wire.Dequeue();
+                if(corrupt)
+                {
+                    RxCorrupted++;
+                }
+                rx.Enqueue(corrupt ? 0x100u | b : b);
+            }
+        }
+
+        private void FromCase(byte b)
+        {
+            if(HalfDuplex)
+            {
+                wire.Enqueue(b);
+            }
+            else
+            {
+                rx.Enqueue(b);
+            }
         }
 
         public void Listen(int port)
@@ -200,7 +202,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 for(var i = 0; i + 1 < h.Length; i += 2)
                 {
-                    pending.Enqueue(Convert.ToByte(h.Substring(i, 2), 16));
+                    FromCase(Convert.ToByte(h.Substring(i, 2), 16));
                 }
             }
         }
@@ -224,10 +226,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         public uint ReadDoubleWord(long o)
         {
-            if(o == 0x00 || o == 0x18)
-            {
-                Hear();
-            }
+            Deliver();
             if(o == 0x00)
             {
                 if(rx.Count == 0)
@@ -235,7 +234,9 @@ namespace Antmicro.Renode.Peripherals.Wisp
                     return 0;
                 }
                 RxBytes++;
-                return rx.Dequeue();
+                var d = rx.Dequeue();
+                rsr = (d >> 8) & 0xF;
+                return d;
             }
             if(o == 0x18)
             {
@@ -243,28 +244,28 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             if(o == 0x04)
             {
-                return 0; // RSR: no receive errors (a write there is ECR, "clear errors")
+                return rsr; // RSR: the last byte's errors (a write there is ECR, "clear errors")
             }
             return regs.TryGetValue(o, out var v) ? v : 0;
         }
 
         public void WriteDoubleWord(long o, uint v)
         {
+            if(o == 0x04)
+            {
+                rsr = 0;
+                return;
+            }
             if(o != 0x00)
             {
                 regs[o] = v;
                 return;
             }
-            if(HalfDuplex && !TxDriving)
+            if(HalfDuplex && !WispPads.TxDriving)
             {
-                TxLost++;
-                if(TxLost == 1)
-                {
-                    this.Log(LogLevel.Warning, "W18 case link: a byte sent with pad 42 FNCSEL {0} never reaches the wire (half duplex)", Fn(PinCfg42));
-                }
+                TxLost++; // pad 42 is not UART2TX: the byte never reaches the wire
                 return;
             }
-            Drop();
             TxBytes++;
             tx.Add((byte)v);
             // Resynchronise on the 5A A5 FF prefix; drop anything before it.
@@ -313,7 +314,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 }
                 foreach(var b in ReadExact(n))
                 {
-                    pending.Enqueue(b);
+                    FromCase(b);
                 }
             }
             catch(Exception e)
@@ -376,8 +377,9 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         private readonly IMachine machine;
         private Dictionary<long, uint> regs;
-        private Queue<byte> rx;
-        private Queue<byte> pending;
+        private Queue<uint> rx;
+        private Queue<byte> wire;
+        private uint rsr;
         private List<byte> tx;
         private TcpListener listener;
         private TcpClient client;

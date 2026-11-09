@@ -23,6 +23,10 @@
 #define WISP_BOOT_BUILD_OBSERVE  0x1u /* observe-only: no NOR or MRAM write code, always run-app */
 #define WISP_BOOT_BUILD_LOG      0x2u /* UART1 debug log compiled in */
 
+/* nor_bound (stage-0b's Wisp Boot): the NOR phase hit its deadline or poll budget (boot_main.c), so
+ * every NOR call after that point failed at once. Builds before it leave the byte 0. */
+#define WISP_BOOT_NOR_BOUND_HIT  0x1u
+
 /* stage: how far Wisp Boot got before it handed over */
 enum wisp_boot_stage {
 	WISP_BOOT_STAGE_START = 1,   /* watchdog armed */
@@ -80,7 +84,7 @@ struct wisp_boot_status {
 	uint8_t prev_valid;      /* prev holds the previous boot's valid record */
 	uint8_t uart_result;     /* boot_uart_init(): 0 = up */
 	uint8_t stimer_clksel;   /* STCFG CLKSEL as found (3 = the 32 kHz crystal) */
-	uint8_t reserved;
+	uint8_t nor_bound;       /* WISP_BOOT_NOR_BOUND_*: 0 = the NOR phase ended within its bound (was reserved, 0) */
 	struct wisp_diag_record prev; /* the previous boot's record as found (zeros if invalid) */
 	uint32_t crc;            /* zlib CRC-32 of every byte before it; resealed on each change */
 };

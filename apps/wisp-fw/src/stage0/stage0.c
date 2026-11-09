@@ -1,8 +1,12 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * stage-0 — the smallest app behind Wisp Boot (docs/wisp/rung4.md, "W24 result and analysis", fix
- * plan 1, and the W24b runbook). Bare metal: no Zephyr, no Ambiq HAL start-up, no interrupts. It
+ * stage-0b — the smallest app behind Wisp Boot (docs/wisp/rung4.md, "W24 result and analysis", fix
+ * plan 1, the W24b runbook, and "W24d: stage-0b"). stage-0b is stage-0 (pinned at W24b-0, built from
+ * commit 9bfac4d) with the three silicon fixes of W24d, which live in the shared code: the case UART
+ * is half duplex (boot_uart.c), the record is cleaned out of the D-cache after each breadcrumb
+ * (wisp_diag.h), and its Wisp Boot no longer holds MSPI1 in reset and bounds its NOR phase. Here
+ * only the start-up's SysTick probe gained a bound, and the version is 0.2.0. Bare metal: no Zephyr, no Ambiq HAL start-up, no interrupts. It
  * exists to show on silicon what native-0 could not: that the hand-off from Wisp Boot reaches code
  * at 0x448000, that UART2 and IOM7 work with our own register sequences, and how fast the clocks
  * really run. Everything it does:
@@ -42,7 +46,7 @@
 #define STAGE0_KIND 16u /* image kind in IDENT and the status block (native-0 = 0) */
 #define STAGE0_STAGE 6u /* app stage "bare-metal" (case-uart.md status block) */
 #define STAGE0_MAJOR 0u
-#define STAGE0_MINOR 1u
+#define STAGE0_MINOR 2u /* 0.1.0 = stage-0 (W24b), 0.2.0 = stage-0b (W24d) */
 #define STAGE0_PATCH 0u
 
 #define WDT_COUNT REG(0x4002400Cu)
@@ -60,6 +64,7 @@
 #define MEASURE_TICKS 16u /* watchdog ticks per measurement: 16 x 64 = 1,024 LFRC cycles */
 #define MEASURE_SETTLE (XT_HZ / 10u) /* after the feed, before the first edge counts */
 #define DRAIN_MAX 64u  /* received bytes handled per pass before the watchdogs get their turn */
+#define PROBE_POLLS 4000000u /* cap on the start-up's STIMER probe (each poll is several cycles) */
 
 /* ---- time: the STIMER (crystal) if it runs, else SysTick at an assumed clock ---------------- */
 
@@ -396,9 +401,10 @@ static _Noreturn void stage0_main(void)
 		wisp_diag_mark(WISP_DIAG_S0_UART);
 	}
 
-	/* Does the STIMER count? 2^22 core cycles is 17-44 ms at 96-250 MHz. */
+	/* Does the STIMER count? 2^22 core cycles is 17-44 ms at 96-250 MHz. Bounded by a poll count
+	 * too, in case SysTick does not count in the state the hand-off leaves (W24b-0 review, 1). */
 	s0 = wisp_stimer_now();
-	for (uint64_t c0 = cycles; cycles - c0 < (1u << 22);) {
+	for (uint64_t c0 = cycles, i = 0; cycles - c0 < (1u << 22) && i < PROBE_POLLS; i++) {
 		cycles_update();
 	}
 	clk.stimer_probe = wisp_stimer_now() - s0;
