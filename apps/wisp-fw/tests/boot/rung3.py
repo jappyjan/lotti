@@ -899,8 +899,12 @@ class Harness:
         if wire["nor_in_reset"]:
             fails.append(f"{wire['nor_in_reset']} MSPI1 accesses while held in reset (MSPICFG PRSTN/IPRSTN): "
                          f"{wire['nor_in_reset_log'].splitlines()[:2]}")
-        if "wisp-boot" in wire["both_uart"] or (case.app != "real" and wire["both_uart"]):
-            fails.append(f"both case-link pads in UART function at once, by {wire['both_uart']} (half duplex)")
+        # Only Wisp code fails here. The patched loader's UART wake (its GPIO helper, 0x41D998) sets both
+        # pads from its pin table for a few instructions before its first send's direction(1); that is
+        # Even's and drdaeman's code, which works on silicon (rung4.md W24d).
+        wisp_both = [o for o in wire["both_uart"] if o in ("wisp-boot", "app")]
+        if "wisp-boot" in wisp_both or (case.app != "real" and wisp_both):
+            fails.append(f"both case-link pads in UART function at once, by {wisp_both} (half duplex)")
         wb_strict = strict.unallowed_writes(res["strict"], owners=("wisp-boot",))
         if wb_strict:
             fails.append(f"Wisp Boot wrote unmodelled power/clock/trim registers: {strict.describe(wb_strict)}")
@@ -988,7 +992,7 @@ class Harness:
             if case.status:
                 extra.append(self.check_status(case, res, fails))
             if case.query and case.app != "stage0" and "query_skipped" in res:
-                if wire["both_uart"] != ["app"]:
+                if [o for o in wire["both_uart"] if o in ("wisp-boot", "app")] != ["app"]:
                     fails.append(f"query skipped, but the pads were set by {wire['both_uart']}")
                 extra.append("FINDING (native-0b): the app keeps both case-link pads in UART function, so on the "
                              "half-duplex wire its TX pad corrupts every request; case-UART query not run")
