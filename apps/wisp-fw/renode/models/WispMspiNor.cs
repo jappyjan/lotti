@@ -23,8 +23,9 @@
 // is 0 the controller is held in reset, so a PIO START never completes (CTRL.STATUS stays 0, no
 // RX data) and a DMA does nothing. Writing the whole register 0, as Wisp Boot did up to stage-0,
 // therefore kills the NOR path here as it does on silicon. Counter: HeldInReset (starts refused).
-// The register resets to 0 with the machine: whoever uses the MSPI must release the resets, as
-// the bootloader's HAL does.
+// The register resets to 0xC0000000, both resets released: hal_ambiq never writes PRSTN or IPRSTN,
+// and the bootloader and stock drive the NOR with it, so on silicon they come up released. Only a
+// write that clears them (a whole-register 0) holds the controller.
 //
 // The NOR array is non-volatile: Reset() (any machine reset, incl. the Wisp power-cut model)
 // clears only the controller registers and the device's volatile state (WEL, 4-byte mode, QE is
@@ -115,7 +116,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         public void Reset()
         {
-            regs = new Dictionary<long, uint>();
+            regs = new Dictionary<long, uint> { [MSPICFG] = RESETS_N };
             rx = new Queue<uint>();
             tx = new List<byte>();
             pioActive = false;

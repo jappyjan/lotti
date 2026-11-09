@@ -225,6 +225,13 @@ test('the firmware asks for its connection parameters (30–50 ms, latency 0, 4 
   await glasses.syncClock(1);
 });
 
+test('PINGs alone keep the session past its 10 s timeout (native-1, W25: HELLO, PING, TIME_SYNC)', async () => {
+  await new Promise((resolve) => setTimeout(resolve, 12_000));
+  const clock = await glasses.syncClock(2);
+  assert.ok(clock);
+  assert.doesNotMatch(firmwareLog(), /session ended/);
+});
+
 test('BYE ends the session; advertising resumes', async () => {
   const from = bridge.events.length;
   await glasses.close();

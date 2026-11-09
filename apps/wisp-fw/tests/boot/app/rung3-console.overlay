@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: MIT
+ * Rung 3's real app: native-1's overlay with UART1 and the console back (rung3-console.conf). */
+/ {
+	chosen {
+		zephyr,console = &uart1;
+		zephyr,shell-uart = &uart1;
+	};
+};
+
+&uart1 {
+	status = "okay";
+};
