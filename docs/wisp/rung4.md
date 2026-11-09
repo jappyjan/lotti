@@ -688,6 +688,20 @@ Same image, same pins, same review (`fc267e0b0de4…`, final CRC `19b3e002`): no
 | reports, but never `prev-valid` | the record does not survive (SRAM, SBL or cache): decide from `reset cause` alone, and move the record |
 | still no report in 70 s (about six boots) | Wisp Boot never opens its window (it hangs before it, after its kick: the PMIC still kept), or UART2 TX from Wisp Boot fails. `peek` (7b) then decides: a valid record with stage `boot-pmic-kick` or `boot-window` names it |
 
+### W24c: static findings after W24b
+
+Written on t3-worker on 2026-11-09. **No hardware was touched**: disassembly of the patched bootloader (`87e2d4e0…`) and stock 2.4.0.24, drdaeman's loader and relay at `1d22097`, and Wisp Boot's and stage-0's sources. None of this is proven on silicon yet. Tags as above.
+
+**Host fix.** [C] `_exit_relay` rejected a `G2RS` whose byte 10 was non-zero. Byte 10 is the relay's UART error flags (the temple USART's ISR error bits; `wisp_case/bridge.py` reads it as `uart_errors`), not framing. A clean session after a UART glitch therefore looked like a stop. It is now accepted and logged as `relay_exit_uart_errors`. Every exit logs the raw `G2RS`, and a framing error carries the head and tail bytes.
+
+**Three silicon-only bugs that Renode does not model:**
+
+1. **The case UART is one shared, half-duplex wire; Wisp drives it permanently.** [C, disassembly] Stock's UART2 init (`0x5A196A`) parks pad 42 (TX; function 3, GPIO with the output off) and sets pad 44 to UART2RX (`0x57B1C6`). Every send switches first (`0x57B292`: park pad 44, pad 42 = UART2TX) and back afterwards. drdaeman's loader does the same in `direction()`, with a settle delay, and the case re-initialises its USART TX-only or RX-only per exchange. Wisp Boot's `boot_uart_init`, which stage-0 also uses, puts both pads in function 4 and leaves them there, so pad 42 holds the line high against the case's start bits. [I] That explains why neither image ever answered, and it fits the framing error (flags 2) about 0.16 s after release, when the pads are reconfigured. native-0's (Zephyr) pin set-up still has to be checked for native-0b.
+2. **`nor_init` writes `MSPI1 MSPICFG = 0`.** [C] On Apollo510, bits 31/30 are `PRSTN`/`IPRSTN`, active-low resets; the HAL only ever read-modify-writes single bits. Writing 0 holds MSPI1 in reset, so Wisp Boot's NOR phase cannot work on silicon. [I] NOR waits are bounded per word, not per block, and `nor_read` does not feed the watchdog. A hang there, right after the report window, fits the ≈10.7 s period.
+3. **The D-cache is on at hand-off.** [C] The bootloader enables the caches in its board init (`0x41E266(1)`). Its only full clean is in the copy and clock paths, not on the jump. Wisp Boot never cleans its record (`0x20370000`) or status block (`0x20375330`), so a watchdog reset can drop them. [I] The all-zero `peek` also needs SRAM to have been zero underneath, which is plausible after the stock app's run but is not shown.
+
+**Plan.** These three are fixed in Wisp Boot and stage-0, and the Renode harness learns half-duplex and the MSPI reset bits, so the old image fails there (separate PR; the new image is called stage-0b). Then stage-0b gets an independent review, pinning and the W24b-style cycle. The RAM probes designed for W24c (`uart_probe`: one loader-format frame in each pad mode; `sram_probe`: patterns with and without a cache clean across a case reset) are **deferred**. Run them only if stage-0b still stays silent.
+
 ### Gaps
 
 Size: **S** < 1 day, **M** 1–3 days, **L** > 3 days, for one thread.
