@@ -46,8 +46,15 @@
 //
 // SUBMODCTRL reads its submodule types as on silicon (WispIomTypes.cs explains why).
 //
+// Register file across Apollo resets (KeepRegisters, set by the native-1 case): the nPM1300 is a
+// separate chip, so what was written to it (and what SetRegister <reg> <value> preloads, e.g. the
+// configuration stock left, images/pmic-baseline-w21.json) is still there after an Apollo reset;
+// G2Iom's own register file is rebuilt at every reset, so the model replays it. A power cycle
+// replaces it with the power-on values.
+//
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
-// PmicLog (one line per PMIC write), PmicPcLog, ActOnWrites, SetPowerOn <reg> <value>, PeriodMs.
+// PmicLog (one line per PMIC write), PmicPcLog, ActOnWrites, SetPowerOn <reg> <value>, PeriodMs,
+// KeepRegisters, SetRegister <reg> <value>.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -87,18 +94,34 @@ namespace Antmicro.Renode.Peripherals.Wisp
             powerOn[reg] = (byte)value;
         }
 
+        public bool KeepRegisters { get; set; }
+
+        public void SetRegister(int reg, int value)
+        {
+            kept[reg] = (byte)value;
+            Poke(reg, (byte)value);
+        }
+
+        // One register into G2Iom's PMIC register file, as a write transaction no code made.
+        private void Poke(int reg, byte value)
+        {
+            var saved = iom.ReadDoubleWord(0x2C4);
+            iom.WriteDoubleWord(0x2C4, 0x6B);
+            iom.WriteDoubleWord(0x10C, (uint)(((reg >> 8) & 0xFF) | ((reg & 0xFF) << 8) | (value << 16)));
+            iom.WriteDoubleWord(0x120, (3u << 8) | 1);
+            iom.WriteDoubleWord(0x2C4, saved);
+        }
+
         public void AckPowerCycle()
         {
             PowerCyclePending = false;
             // The PMIC's own power cycle: its registers back at their power-on values.
-            var saved = iom.ReadDoubleWord(0x2C4);
+            kept.Clear();
             foreach(var kv in powerOn)
             {
-                iom.WriteDoubleWord(0x2C4, 0x6B);
-                iom.WriteDoubleWord(0x10C, (uint)(((kv.Key >> 8) & 0xFF) | ((kv.Key & 0xFF) << 8) | (kv.Value << 16)));
-                iom.WriteDoubleWord(0x120, (3u << 8) | 1);
+                kept[kv.Key] = kv.Value;
+                Poke(kv.Key, kv.Value);
             }
-            iom.WriteDoubleWord(0x2C4, saved);
             timerConfig = 0;
             target = latched = 0;
             log.AppendLine($"{nowMs} ms power-on values restored ({powerOn.Count} registers)");
@@ -136,6 +159,13 @@ namespace Antmicro.Renode.Peripherals.Wisp
             devcfg = 0;
             offsetHi = 0;
             rxBytes = 0;
+            if(KeepRegisters)
+            {
+                foreach(var kv in kept)
+                {
+                    Poke(kv.Key, kv.Value);
+                }
+            }
         }
 
         // Byte and halfword reads go through ReadDoubleWord, so FIFOPTR, FIFOPOP and SUBMODCTRL
@@ -231,6 +261,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             var hex = BitConverter.ToString(wire.ToArray()).Replace("-", " ").ToLowerInvariant();
             log.AppendLine($"{nowMs} ms write {hex}");
+            for(var i = 2; i < wire.Count; i++)
+            {
+                kept[((wire[0] << 8) | wire[1]) + i - 2] = wire[i];
+            }
             if(wire.Count > 2)
             {
                 var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((ICPUWithRegisters)cpu).PC : 0;
@@ -318,6 +352,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly StringBuilder log;
         private readonly StringBuilder pcLog = new StringBuilder();
         private readonly Dictionary<int, byte> powerOn = new Dictionary<int, byte>();
+        private readonly Dictionary<int, byte> kept = new Dictionary<int, byte>();
         private int timerConfig, target, latched;
         private List<byte> push;
         private uint devcfg, offsetHi, rxBytes;

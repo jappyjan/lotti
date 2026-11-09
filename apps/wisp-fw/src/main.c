@@ -74,6 +74,7 @@ struct wisp_app_status wisp_app_status = {
 };
 
 #if defined(CONFIG_BOARD_WISP_G2)
+#if !defined(CONFIG_WISP_SOC_INIT) /* that captures it first thing, before the BORSTAT clear */
 /* The Apollo510's reset cause, as the app finds it (the bootloader and Wisp Boot leave it). */
 static int capture_reset_cause(void)
 {
@@ -81,6 +82,7 @@ static int capture_reset_cause(void)
 	return 0;
 }
 SYS_INIT(capture_reset_cause, PRE_KERNEL_1, 1);
+#endif
 
 static void print_boot_status(void)
 {

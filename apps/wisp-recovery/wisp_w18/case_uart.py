@@ -145,7 +145,8 @@ DIAG_STAGES = {0x00: "none", 0x10: "boot-start", 0x11: "boot-pmic-kick", 0x12: "
                0x85: "app-stimer-ok", 0x86: "app-post", 0x87: "app-post-buses", 0x88: "app-post-end",
                0x89: "app-pmic-thread", 0x8A: "app-pmic-armed", 0x8B: "app-main", 0x8C: "app-case",
                0x8D: "app-hal", 0x8E: "app-display", 0x8F: "app-bt-start", 0x90: "app-bt-up",
-               0x91: "app-bt-failed", 0x92: "app-idle", 0x93: "app-session", 0x9E: "app-stimer-dead",
+               0x91: "app-bt-failed", 0x92: "app-idle", 0x93: "app-session", 0x94: "app-soc-lp",
+               0x95: "app-soc-buck", 0x96: "app-soc-temp", 0x9E: "app-stimer-dead",
                0x9F: "app-fault", 0xA0: "app-reset-request", 0xA1: "app-wdt-starved"}
 REPORT_SOURCES = {0: "wisp-boot", 1: "app"}
 REPORT_FLAGS = {0x01: "prev-valid", 0x02: "prev-fault", 0x04: "kick-ok", 0x08: "stimer-xt"}

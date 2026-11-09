@@ -182,12 +182,22 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public uint ReadDoubleWord(long o)
         {
             var v = inner.ReadDoubleWord(o);
+            if((o & ~3L) == VRSTATUS)
+            {
+                // SIMOBUCKST (bits 5:4) = 3, active, once VRCTRL.SIMOBUCKEN is set: the bootloader's
+                // own SIMOBUCK_INIT sets it at every boot, so on silicon the app's
+                // am_hal_pwrctrl_control(SIMOBUCK_INIT) finds the buck active and returns at its
+                // first check, as stock's does (rung4.md W25). Without this the HAL saw 0 here and
+                // ran its 13 VRCTRL/SIMOBUCK writes, which silicon never does.
+                return (v & ~0x30u) | ((inner.ReadDoubleWord(VRCTRL) & 1u) != 0 ? 0x30u : 0u);
+            }
             if(!Modelled(o))
             {
                 WispStrict.Note(machine, baseAddress + (ulong)o, v, false);
             }
             return v;
         }
+        private const long VRCTRL = 0x100, VRSTATUS = 0x108;
         public void WriteByte(long o, byte v) { Spy(o, v); inner.WriteByte(o, v); }
         public void WriteWord(long o, ushort v) { Spy(o, v); inner.WriteWord(o, v); }
         public void WriteDoubleWord(long o, uint v) { Spy(o, v); inner.WriteDoubleWord(o, v); }

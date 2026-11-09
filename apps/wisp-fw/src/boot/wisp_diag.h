@@ -89,6 +89,9 @@ enum wisp_diag_stage {
 	WISP_DIAG_APP_BT_FAILED = 0x91, /* Bluetooth unavailable */
 	WISP_DIAG_APP_IDLE = 0x92,      /* main's start-up is over */
 	WISP_DIAG_APP_SESSION = 0x93,   /* a BLE session completed HELLO */
+	WISP_DIAG_APP_SOC_LP = 0x94,    /* soc: am_hal_pwrctrl_low_power_init returned */
+	WISP_DIAG_APP_SOC_BUCK = 0x95,  /* soc: SIMOBUCK_INIT returned */
+	WISP_DIAG_APP_SOC_TEMP = 0x96,  /* soc: temp_update returned (caches next) */
 	WISP_DIAG_APP_STIMER_DEAD = 0x9E, /* D5: the STIMER does not count; the fallback loop runs */
 	WISP_DIAG_APP_FAULT = 0x9F,     /* the app's fatal-error handler ran (fault recorded) */
 	WISP_DIAG_APP_RESET_REQ = 0xA0, /* resetting on a case-UART RESET */
