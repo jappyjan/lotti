@@ -52,6 +52,7 @@ static struct wisp_boot_status st;
 static void status_seal(void)
 {
 	st.crc = wisp_boot_crc32(0, &st, (uint32_t)__builtin_offsetof(struct wisp_boot_status, crc));
+	wisp_dcache_clean(&st, sizeof(st)); /* in SRAM, not only in the cache (W24c) */
 }
 
 /* ---- littlefs on the NOR, stock geometry ---------------------------------------------------- */

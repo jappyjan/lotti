@@ -5,6 +5,12 @@
  * am_hal_mspi_blocking_transfer() (hal_ambiq am_hal_mspi.c): INSTR/ADDR, then CTRL with
  * XFERBYTES, TXRX, SENDI, SENDA, START; FIFO words; wait CTRL.STATUS. The device configuration
  * values (DEV0CFG, PADOUTEN) are the ones the stock Even bootloader programs (seen in Renode).
+ *
+ * MSPICFG holds two active-low resets (PRSTN bit 31, IPRSTN bit 30; hal_ambiq only ever
+ * read-modify-writes it). Writing the whole register 0, as this driver did up to stage-0, holds
+ * MSPI1 in reset on silicon (rung4.md W24c): it is now left as the bootloader set it, with both
+ * resets released. Every block read feeds the watchdog, so littlefs's loops (which only call
+ * bd_read) cannot starve it.
  */
 #include "boot_nor.h"
 
@@ -26,6 +32,9 @@
 #define M_INTEN     REG(MSPI1 + 0x200u)
 #define M_INTCLR    REG(MSPI1 + 0x208u)
 #define M_CQCFG     REG(MSPI1 + 0x2A0u)
+
+#define MSPICFG_PRSTN  (1u << 31) /* active low: 0 holds the MSPI in reset */
+#define MSPICFG_IPRSTN (1u << 30)
 
 #define CTRL_START  (1u << 0)
 #define CTRL_STATUS (1u << 1)
@@ -113,7 +122,7 @@ int nor_init(uint32_t *rdid)
 	M_CQCFG = 0;
 	M_DMACFG = 0;
 	M_DEV0XIP = 0;
-	M_MSPICFG = 0;
+	M_MSPICFG |= MSPICFG_PRSTN | MSPICFG_IPRSTN;
 	M_PADOUTEN = 0x10Fu;      /* CLK + D0..D3, as stock */
 	M_DEV0CFG = 0x01010860u;  /* stock: serial CE0, 4-byte address, 1-byte instr, TXNEG */
 	if (pio(0x9F, 0, 0, 0, &id, 3) != 0) {
@@ -134,6 +143,7 @@ int nor_read(uint32_t addr, void *buf, uint32_t n)
 	while (n) {
 		uint32_t c = n > 4096u ? 4096u : n;
 
+		hw_wdt_feed();
 		if (pio(0x13, 1, addr, 0, p, c) != 0) {
 			return -20;
 		}

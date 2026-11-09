@@ -34,8 +34,12 @@
 #define UART1_DR REG(0x4003A000u)
 #define UART1_FR REG(0x4003A018u)
 
-/* SCB / NVIC */
+/* SCB / NVIC / SysTick */
+#define SCB_ICSR  REG(0xE000ED04u)
+#define SCB_ICSR_PENDSVCLR (1u << 27)
+#define SCB_ICSR_PENDSTCLR (1u << 25)
 #define SCB_VTOR  REG(0xE000ED08u)
+#define SYST_CSR  REG(0xE000E010u)
 #define NVIC_ICER(n) REG(0xE000E180u + 4u * (n))
 #define NVIC_ICPR(n) REG(0xE000E280u + 4u * (n))
 
@@ -57,6 +61,9 @@ _Noreturn void hw_reset(void);
 #if !WISP_BOOT_OBSERVE /* the observe-only build has no MRAM write code at all */
 int hw_flag_set_install(void);
 #endif
+/* Hands over the state Zephyr assumes at reset (rung4.md W24 fix plan 3): interrupts masked, a
+ * quiet NVIC, SysTick off, no pending PendSV or SysTick, Thread mode on MSP (CONTROL 0) with
+ * MSPLIM/PSPLIM 0 and MSP = PSP = the app's initial SP, VTOR at the app; then unmasks and jumps. */
 _Noreturn void hw_jump(uint32_t vector_table);
 
 #endif /* WISP_BOOT_HW_H */
