@@ -1,0 +1,19 @@
+{
+  "image": "stage-0b",
+  "bytes": 70936,
+  "end": "0x449518",
+  "image_sha256": "e5c70fb4d6a90ce21beb3e4e75f00093cf1e218100c6d40e2c8212da98ca587d",
+  "image_crc32": "d10cc7b6",
+  "wisp_boot_bin_sha256": "7cec83a056bacf7d8b64e1c77fe56e3ebbd758b58428b00d7e06b8df48d19ef7",
+  "wisp_boot_bin_bytes": 11536,
+  "wisp_boot_slot_sha256": "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d",
+  "app_bin_sha256": "3404c6deb0c254cb2a433749928cc9fc6ea0e0b2496a1526c7fbaa46d4429335",
+  "app_bin_bytes": 5400,
+  "app_hardware_image": true,
+  "app_bare_metal": true,
+  "wisp_boot_observe_only": true,
+  "boot_elf_sha256": "4ac19138a9c7395b8bf741f2b6a269681cb0ebb8c5650185f5a0018b9b991373",
+  "boot_map_sha256": "be2835c4555b6363af68a2e8c6cea8ac52cf33eb90ad7b2fa0655985eff8abd4",
+  "app_elf_sha256": "3f2ad33772fe9a56467ea1e48ffa595a3e7e8f70f53791ea08fef8961765136a",
+  "app_map_sha256": "3650b6c7159809fc65823040f82e33080afe1378f1b21ad8848fee630c8534ee"
+}

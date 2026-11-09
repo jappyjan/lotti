@@ -1,0 +1,27 @@
+{
+  "note": "PINNED at W24d-0 (PR #88): the \"image\" and \"wisp_boot\" entries are in wisp_w18/pins.py, copied unchanged. write_bound is install-wisp's end bound (the image rounded up to 16 B); manifest.json's \"end\" is the image's own end.",
+  "image": {
+    "commit": "91035fc",
+    "image_sha256": "e5c70fb4d6a90ce21beb3e4e75f00093cf1e218100c6d40e2c8212da98ca587d",
+    "image_bytes": 70936,
+    "elf_sha256": "961c8a651a680f052e3eebbf276ec46cd0cf5d7bd3f80571046cf2be046c7fca",
+    "map_sha256": "3650b6c7159809fc65823040f82e33080afe1378f1b21ad8848fee630c8534ee",
+    "gates": [
+      "check_rule8",
+      "no-mram-write"
+    ],
+    "crc32": "0xd10cc7b6",
+    "crc32_aligned_over_stock": "0x1ad236d1",
+    "wisp_boot_slot_sha256": "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d"
+  },
+  "wisp_boot": {
+    "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 91035fc",
+    "wisp_boot_bin_sha256": "7cec83a056bacf7d8b64e1c77fe56e3ebbd758b58428b00d7e06b8df48d19ef7",
+    "suites": {
+      "stock-2.4.0.24": "observe suite 8/8 pass (builder's run, rung4.md W24d)",
+      "patched-87e2d4e0": "observe suite 8/8 pass (builder's run, rung4.md W24d)"
+    }
+  },
+  "write_bound": "0x449520",
+  "peek_wisp_boot_status": "0x2037533c"
+}

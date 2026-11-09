@@ -143,12 +143,17 @@ PEEK_REGIONS = {
                                     "started this session (the case reset: external), unless STAT accumulates"),
     "wisp-record": (0x2037_0000, 64, "Wisp's diagnostics record (wisp_diag.h): the last boot's cause, boot "
                                      "counter, last stage and its time, fault; written by Wisp Boot and the app"),
-    "wisp-boot-status": (0x2037_5330, 692, "Wisp Boot's status block v2 (`st`) of the stage-0 Wisp Boot "
-                                           "(slot 7a5c399b..., b54ee856...) only: its `prev` is the record of "
+    # Wisp Boot's status block `st` moves with each build, so each Wisp Boot has its own region; peek the
+    # one of the image installed (app-check names it). Reading the other one is harmless: 692 B of
+    # something else, which the decoder reports as not a sealed status block.
+    "wisp-boot-status": (0x2037_533C, 692, "Wisp Boot's status block v2 (`st`) of the stage-0b Wisp Boot "
+                                           "(slot e673d6cd..., 7cec83a0...; W24d-0): its `prev` is the record of "
                                            "the boot before the last one"),
+    "wisp-boot-status-stage-0": (0x2037_5330, 692, "the same block of the stage-0 Wisp Boot (slot 7a5c399b..., "
+                                                   "b54ee856...), for a temple that still runs stage-0"),
 }
 # Regions in SSRAM group 2: read only after "ssram-power" shows that group powered.
-PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status")
+PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-stage-0")
 PEEK_SSRAM_GROUP2 = 0x4
 PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 
@@ -217,8 +222,10 @@ SIDES = ("left", "right")
 # on t3-worker and byte-identical to the reviewed one (image and app map); the committed files are
 # in data/native-0/ (README.md there). W24b-0 pinned stage-0 the same way after its independent
 # review: the build of commit 9bfac4d, rebuilt on t3-worker byte-identical (image, stripped ELFs,
-# Wisp Boot); the committed files are in data/stage-0/. Every other image is refused before the
-# case is touched.
+# Wisp Boot); the committed files are in data/stage-0/. W24d-0 pinned stage-0b after its independent
+# review (PR #88, APPROVE: rebuilt byte-identical from commit 91035fc, observe suite 8/8 on both
+# bootloaders); the entries are data/stage-0b/proposed-pin.json, copied unchanged. Every other image
+# is refused before the case is touched.
 R4_1_APPROVED = True
 WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
 # Wisp Boot builds that passed rung 3, by the SHA-256 of the padded 64 KiB slot, with the suites
@@ -247,6 +254,19 @@ WISP_BOOT_PASSED: dict[str, dict] = {
         "suites": {
             "stock-2.4.0.24": "observe suite 8/8 pass",
             "patched-87e2d4e0": "observe suite 8/8 pass",
+        },
+    },
+    # stage-0b's observe-only Wisp Boot with the W24d fixes (half-duplex case UART, MSPICFG read-modify-
+    # write and a bounded NOR phase, D-cache cleans; wisp_boot.bin 7cec83a0..., 11,536 B, padded with
+    # 0xFF to 64 KiB). `wisp-fw:boot-test --suite observe` 8/8 on both bootloaders, run by the builder
+    # and rerun by the independent review (PR #88, rung4.md "W24d"). The fallback build's suite is
+    # still owed (19/19 of a partial stock run); it is not in this image.
+    "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d": {
+        "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 91035fc",
+        "wisp_boot_bin_sha256": "7cec83a056bacf7d8b64e1c77fe56e3ebbd758b58428b00d7e06b8df48d19ef7",
+        "suites": {
+            "stock-2.4.0.24": "observe suite 8/8 pass (builder and independent review)",
+            "patched-87e2d4e0": "observe suite 8/8 pass (builder and independent review)",
         },
     },
 }
@@ -290,6 +310,22 @@ WISP_IMAGES: dict[str, dict] = {
         # Over [0x438000, 0x449460): the image and the 8 bytes of the stock 2.4.0.24 main after it.
         "crc32_aligned_over_stock": 0x19B3_E002,
         "wisp_boot_slot_sha256": "7a5c399bdfeb05a0683f8ef9fba4452cc4147e22b57de55e2c9754227117b185",
+    },
+    # W24d-0: stage-0b at commit 91035fc (wisp-fw:build-native stage-0b), data/stage-0b/proposed-pin.json
+    # copied unchanged. Same form as stage-0: the stripped ELF, the map as built (absolute paths of the
+    # canonical checkout). 70,936 B, so install-wisp writes [0x438000, 0x449520) and its final CRC over
+    # the stock main (the image and the 8 stock bytes after it) is 1ad236d1; over stage-0 or stage-0b
+    # those 8 bytes are still stock's, over a longer image they are not (rung4.md W24d runbook).
+    "stage-0b": {
+        "commit": "91035fc",
+        "image_sha256": "e5c70fb4d6a90ce21beb3e4e75f00093cf1e218100c6d40e2c8212da98ca587d",
+        "image_bytes": 70_936,
+        "elf_sha256": "961c8a651a680f052e3eebbf276ec46cd0cf5d7bd3f80571046cf2be046c7fca",
+        "map_sha256": "3650b6c7159809fc65823040f82e33080afe1378f1b21ad8848fee630c8534ee",
+        "gates": ("check_rule8", "no-mram-write"),
+        "crc32": 0xD10C_C7B6,
+        "crc32_aligned_over_stock": 0x1AD2_36D1,
+        "wisp_boot_slot_sha256": "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d",
     },
 }
 BATTERY_MIN_PERCENT = 80

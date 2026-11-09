@@ -22,6 +22,15 @@
 //             Exception, only when a case asks (`rstgen RetainRange <base> <size>`): that range
 //             keeps its contents across every reset but a power cut, so the diagnostics record
 //             (wisp_diag.h) can be tested end to end. Whether silicon keeps it is open [?].
+//             D-cache model (`rstgen CacheModel true`, rung4.md "W24d: stage-0b"): on silicon the
+//             bootloader hands off with the D-cache on and SRAM write-back cacheable, so a write
+//             reaches SRAM only when its line is cleaned (or evicted, which nothing guarantees).
+//             Renode has no cache. With the model on, the retained range keeps across a warm reset
+//             only what was cleaned: a shadow copy of the range is taken at every reset, and lines
+//             are copied from RAM into it only when Wisp code calls its clean function
+//             (`rstgen CleanHook <addr>`, every copy of wisp_dcache_clean by its symbol; r0 = start,
+//             r1 = bytes, whole 32-byte lines). At the next warm reset the shadow, not RAM, is what
+//             survives. CleanLog lists the cleans (count and ranges).
 //   * restart: the Ambiq SBL is not available, so the model performs its hand-off: VTOR =
 //             0x410000, MSP = word 0, PC = word 1 of the Even bootloader's vector table
 // The harness reads Resets / LastCause and the reset log (one line per reset) from the monitor.
@@ -61,6 +70,62 @@ namespace Antmicro.Renode.Peripherals.Wisp
         {
             retainStart = start;
             retainLength = length;
+            shadow = null;
+        }
+
+        // Set after RetainRange: the range as it is now is what SRAM holds until the first clean.
+        public bool CacheModel
+        {
+            get => cacheModel;
+            set
+            {
+                cacheModel = value;
+                shadow = value && retainLength > 0 ? machine.SystemBus.ReadBytes(retainStart, (int)retainLength) : null;
+            }
+        }
+        private bool cacheModel;
+        public ulong Cleans { get; private set; }
+
+        public void CleanHook(ulong addr)
+        {
+            foreach(var c in machine.SystemBus.GetCPUs())
+            {
+                if(c is ICPUWithHooks h)
+                {
+                    h.AddHook(addr, (cpu, a) => Clean(cpu.GetRegister(0).RawValue, cpu.GetRegister(1).RawValue));
+                }
+            }
+        }
+
+        public string CleanLog()
+        {
+            return $"cleans={Cleans}\n" + string.Join("\n", cleanLog);
+        }
+
+        private void Clean(ulong start, ulong length)
+        {
+            if(retainLength == 0 || length == 0 || length > 0x1000)
+            {
+                return;
+            }
+            var lo = Math.Max(start & ~31UL, retainStart);
+            var hi = Math.Min((start + length + 31) & ~31UL, retainStart + retainLength);
+            if(lo >= hi)
+            {
+                return;
+            }
+            if(shadow == null)
+            {
+                shadow = machine.SystemBus.ReadBytes(retainStart, (int)retainLength);
+            }
+            var bytes = machine.SystemBus.ReadBytes(lo, (int)(hi - lo));
+            Array.Copy(bytes, 0, shadow, (int)(lo - retainStart), bytes.Length);
+            Cleans++;
+            var key = $"0x{lo:X8}+{hi - lo}";
+            if(!cleanLog.Contains(key) && cleanLog.Count < 64)
+            {
+                cleanLog.Add(key);
+            }
         }
 
         public static uint StatFor(string cause)
@@ -141,6 +206,11 @@ namespace Antmicro.Renode.Peripherals.Wisp
             WispStrict.InWisp = false;
             var bus = machine.SystemBus;
             var keep = retainLength > 0 && !cause.StartsWith("power") ? bus.ReadBytes(retainStart, (int)retainLength) : null;
+            if(keep != null && cacheModel && shadow != null)
+            {
+                // Only cleaned lines reached SRAM; the rest is what the range held when this boot began.
+                keep = shadow;
+            }
             var fill = new byte[0x10000];
             for(var i = 0; i < fill.Length; i++)
             {
@@ -154,6 +224,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 bus.WriteBytes(keep, retainStart);
             }
+            shadow = retainLength > 0 ? bus.ReadBytes(retainStart, (int)retainLength) : null;
             foreach(var cpu in bus.GetCPUs())
             {
                 if(cpu is CortexM cm)
@@ -175,6 +246,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private Dictionary<long, uint> regs;
         private bool resetPending;
         private ulong retainStart, retainLength;
+        private byte[] shadow;
+        private readonly List<string> cleanLog = new List<string>();
         private string pendingCause;
     }
 }
