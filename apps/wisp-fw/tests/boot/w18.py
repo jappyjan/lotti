@@ -119,6 +119,7 @@ HELO_PREFIX = "5aa5ff100001030c48454c4f"
 STAGE_0_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0"
 POWER_ON = APP_DIR / "images/pmic-poweron-w24.json"
 RELAY_EXCHANGE_S = 0.0175  # one relay exchange on hardware (W18 F1d: 17.5 ms)
+RELAY_POLL_BOUND_S = 31.0  # an unanswered exchange waits this long for a temple frame (recovery.md)
 APP_KICK_WITHIN_S = 3.0     # the app's first PMIC kick after Wisp Boot's, every boot
 
 
@@ -911,31 +912,56 @@ class Harness:
         return data, elf, map_text, facts
 
     @staticmethod
-    def watch(run, hook, seconds: float, until=None) -> dict:
-        """boot-watch's loop (status.watch) at the relay's cadence, by injection: one request per
-        RELAY_EXCHANGE_S of virtual time, every temple frame decoded, the loader's HELO a reboot."""
-        out = {"answers": [], "helo": 0, "foreign": 0, "seconds": 0.0}
-        seen = len(run.frames())
+    def watch(run, hook, seconds: float, until=None, await_helo=False) -> dict:
+        """boot-watch's loop (status.watch) as the real relay runs it (case_exchange.c), by
+        injection: the protocol times each request (hook.wait), then the exchange is pending until
+        the first temple frame or RELAY_POLL_BOUND_S, and nothing else is sent meanwhile; frames
+        that come while no exchange is pending are lost (the relay re-arms before each wait). The
+        loader's HELO is a reboot and re-anchors the protocol's timing. `await_helo`: the first
+        exchange is an empty G2TX (listen only), for a reboot that the harness itself caused."""
+        out = {"answers": [], "helo": 0, "foreign": 0, "unanswered": 0, "seconds": 0.0, "exchanges": []}
         t, i = 0.0, 0
+        first = True
         while t < seconds:
-            run.r.cmd(f'uart2 Inject "{hook.request(i).hex()}"')
-            i += 1
-            run.step(RELAY_EXCHANGE_S)
-            t += RELAY_EXCHANGE_S
-            frames = run.frames()
-            for f in frames[seen:]:
-                b = bytes.fromhex(f)
-                if status.is_loader_hello(b):
-                    out["helo"] += 1
-                    hook.reset()
-                    hook.reboots += 1
-                    continue
-                d = hook.decode(b)
+            listen = first and await_helo
+            first = False
+            wait = None if listen else hook.wait(t)
+            if wait and wait > 0:
+                run.step(min(wait, seconds - t))
+                t += min(wait, seconds - t)
+                if t >= seconds:
+                    break
+            seen = len(run.frames())
+            req = b"" if listen else hook.request(i)
+            if req:
+                run.r.cmd(f'uart2 Inject "{req.hex()}"')
+                i += 1
+            sent, got = t, None
+            while t - sent < RELAY_POLL_BOUND_S and t < seconds:
+                run.step(RELAY_EXCHANGE_S)
+                t += RELAY_EXCHANGE_S
+                frames = run.frames()
+                if len(frames) > seen:
+                    got = bytes.fromhex(frames[seen])  # the first frame; the relay drops the rest
+                    break
+            out["exchanges"].append({"t": round(sent, 3), "req": req[4:8].hex(), "waited": round(t - sent, 3),
+                                     "got": got[4:12].hex() if got else None})
+            if got is None:
+                out["unanswered"] += 1
+                if t - sent >= RELAY_POLL_BOUND_S:  # not when the watch merely ran out
+                    hook.no_answer(t)
+            elif status.is_loader_hello(got):
+                out["helo"] += 1
+                hook.reset()
+                hook.reboots += 1
+                hook.anchor(t, "helo")
+            else:
+                hook.at(t)
+                d = hook.decode(got)
                 if d is None:
                     out["foreign"] += 1
                 else:
                     out["answers"].append({"t": round(t, 3), **d})
-            seen = len(frames)
             if until and until(out):
                 break
         out["seconds"] = round(t, 3)
@@ -958,7 +984,9 @@ class Harness:
             self.native_probes(run, STAGE_0_DIR / "wisp_boot.elf")
             run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
             pmic_realism(run)
-            run.r.cmd("rstgen RetainRange 0x20370000 0x40")
+            # Wisp Boot's whole RAM survives warm resets (the record and its status block `st`, which
+            # the peek in part 4 reads); the silicon question is the same for both.
+            run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
 
             def host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
@@ -971,7 +999,11 @@ class Harness:
                 t += 1
             writes = self.write_log(run)
             # 1. The first boot after CONT: the protocol until it is complete and stage-0 has measured.
-            first = self.watch(run, hook, 12, until=lambda o: hook.complete(o["answers"]))
+            # The harness steps 1 s at a time while the host session runs, so CONT was up to 1 s ago:
+            # the report is asked 2 s in, from stage-0 (Wisp Boot's window is aimed in 2 and 3).
+            hook.report_at = (2.0,)
+            first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
+            hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
             summary1 = hook.summary(first["answers"])
             # stage-0's first measurement starts 2 s after it started and takes about 1.1 s.
             run.step(3)
@@ -981,15 +1013,30 @@ class Harness:
             n_reports = len(hook.reports)
             code, _ = recovery_case_uart.decode_reply(self.inject(run, recovery_case_uart.reset_request()),
                                                       recovery_case_uart.OP_RESET)
-            second = self.watch(run, hook, 4, until=lambda o: len(hook.reports) > n_reports and hook.ident)
+            second = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                                await_helo=True)
             report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
             # 3. The case's reset line (on hardware: the relay's start).
             n_reports = len(hook.reports)
             run.r.cmd('rstgen Request "case-reset"')
-            third = self.watch(run, hook, 4, until=lambda o: len(hook.reports) > n_reports and hook.ident)
+            third = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                               await_helo=True)
             report_case = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
             run.step(2)
-            t += first["seconds"] + second["seconds"] + third["seconds"] + 5
+            # 4. The W24b runbook's peek after step 7: a case reset into a held loader, then what the
+            # interrupted boot left in Wisp Boot's RAM, read through dump_fed (pins.PEEK_REGIONS).
+            def peek_host(link):
+                with Session(link, log=log.append, temple_feed=True) as s:
+                    s.require_patched_bootloader(self.patched)
+                    return {n: s.peek(n) for n in ("ssram-power", "rstgen-stat", "wisp-record", "wisp-boot-status")}
+            pthread, presult = run.attach(peek_host)
+            run.r.cmd('rstgen Request "case-reset"')
+            tp = 0.0
+            while pthread.is_alive() and tp < 300:
+                run.step(0.5)
+                tp += 0.5
+            peeked = presult.get("value") or {}
+            t += first["seconds"] + second["seconds"] + third["seconds"] + 5 + tp
             live = liveness(run, fails)
             strict_bad = strict_check(run, fails)
             pc_log = run.r.cmd("pmicwdt PmicPcLog")
@@ -1036,6 +1083,29 @@ class Harness:
             fails.append(f"boot report after the case reset ({third['helo']} HELO): {report_case}")
         if not (report_reset.get("boot", 0) + 1 == report_case.get("boot", -1)):
             fails.append(f"boot counter {report_reset.get('boot')} -> {report_case.get('boot')}")
+        if report_reset.get("asked_s_after_release") is None:
+            fails.append("the report after RESET did not come from Wisp Boot's window at an aimed offset")
+        for part, w in (("RESET", second), ("case reset", third)):
+            rep = [e["t"] for e in w["exchanges"] if e["req"] == "57535004" and e["got"]]
+            idents = [e["t"] for e in w["exchanges"] if e["req"] == "57535001"]
+            if not rep or not idents or idents[0] - rep[0] < recovery_case_uart.WispStatus.APP_AFTER_REPORT_S:
+                fails.append(f"{part}: IDENT not {recovery_case_uart.WispStatus.APP_AFTER_REPORT_S} s after the report: "
+                             f"{w['exchanges'][:4]}")
+        peek_record, peek_status = {}, {}
+        if "error" in presult or not peeked:
+            fails.append(f"peek after the case reset: {presult.get('error')!r}")
+        else:
+            peek_record = recovery_case_uart.decode_diag_record(peeked["wisp-record"], check=False)
+            try:
+                peek_status = recovery_case_uart.decode_boot_status(peeked["wisp-boot-status"])
+            except ValueError as error:
+                peek_status = {"error": str(error)}
+            if not (peek_record.get("valid") and peek_record.get("stage") in ("s0-loop", "s0-measure")
+                    and peek_record.get("boots") == report_case.get("boot")
+                    and peek_record.get("reset_cause_names") == ["external"]):
+                fails.append(f"peek of the record after the case reset: {peek_record}")
+            if not ((peek_status.get("prev") or {}).get("valid") and peek_status.get("rstgen_stat") == 1):
+                fails.append(f"peek of Wisp Boot's status block: {peek_status}")
         ok = bool(v) and not fails and "error" not in result
         state = (f"stage-0 ({len(data)} B, CRC {v.get('crc_after')}) written through the loader, vectors first and last; "
                  f"boot-watch's wisp protocol at 17.5 ms: IDENT kind {ident.get('image_kind')} {ident.get('stage')}, "
@@ -1043,12 +1113,16 @@ class Harness:
                  f"RESET -> HELO -> Wisp Boot's report: prev {report_reset.get('prev_stage')} "
                  f"{report_reset.get('prev_stage_ms')} ms, cause {report_reset.get('reset_cause_names')}; case reset -> "
                  f"HELO -> prev {report_case.get('prev_stage')}, cause {report_case.get('reset_cause_names')}, boot "
-                 f"{report_case.get('boot')}; PMIC: {wb_kicks} Wisp Boot kicks + stage-0's, nothing else, no power cycle; "
+                 f"{report_case.get('boot')}; Wisp Boot's report asked {report_reset.get('asked_s_after_release')} s after "
+                 f"the release; peek after a held case reset: record boot {peek_record.get('boots')} stage "
+                 f"{peek_record.get('stage')}, status prev {(peek_status.get('prev') or {}).get('stage')}; "
+                 f"PMIC: {wb_kicks} Wisp Boot kicks + stage-0's, nothing else, no power cycle; "
                  f"{live}; strict clean" if ok else f"{'; '.join(fails)} {result.get('error')!r}")
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
         (run.dir / "boot-watch.json").write_text(json.dumps(
             {"first": first, "second": second, "third": third, "summary": hook.summary(),
+             "peek": {k: v.hex() for k, v in peeked.items()}, "peek_record": peek_record,
              "strict_unallowed": strict_bad}, indent=2, default=str))
 
     @staticmethod

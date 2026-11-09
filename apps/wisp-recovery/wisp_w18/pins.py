@@ -133,7 +133,23 @@ PEEK_REGIONS = {
     "power-callbacks": (0x2002_6E44, 8, "power pre/post callbacks; the loader requires both zero"),
     "flag": (0x007F_E000, 16, "the update-flag record"),
     "nor-records": (0x0043_36A0, 32, "the bootloader's two NOR ops records (MRAM)"),
+    # rung4.md W24 D1 and "W24b results": what the last Wisp boot left in RAM, read in a held loader
+    # after the case reset that started the session. Read only if PWRCTRL says SSRAM group 2 (the top
+    # MiB, Wisp Boot's RAM) is powered (PEEK_SSRAM_GATE). The patched bootloader's only SSRAM use is
+    # its heap, [0x20081000, 0x2013C800) (memset + heap init at 0x41FD70; no literal points higher).
+    "ssram-power": (0x4002_1028, 4, "PWRCTRL.SSRAMPWRST: bit 0/1/2 = SSRAM group 0/1/2 (1 MiB each) powered; "
+                                    "group 2 holds Wisp Boot's RAM and its record"),
+    "rstgen-stat": (0x4000_885C, 4, "RSTGEN.STAT as the held loader sees it: the cause of the reset that "
+                                    "started this session (the case reset: external), unless STAT accumulates"),
+    "wisp-record": (0x2037_0000, 64, "Wisp's diagnostics record (wisp_diag.h): the last boot's cause, boot "
+                                     "counter, last stage and its time, fault; written by Wisp Boot and the app"),
+    "wisp-boot-status": (0x2037_5330, 692, "Wisp Boot's status block v2 (`st`) of the stage-0 Wisp Boot "
+                                           "(slot 7a5c399b..., b54ee856...) only: its `prev` is the record of "
+                                           "the boot before the last one"),
 }
+# Regions in SSRAM group 2: read only after "ssram-power" shows that group powered.
+PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status")
+PEEK_SSRAM_GROUP2 = 0x4
 PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 
 # --- The case relay (case SRAM, loaded through the STM32 ROM like step 0) [D link.py] ----------

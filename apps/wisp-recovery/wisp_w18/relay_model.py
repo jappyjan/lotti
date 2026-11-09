@@ -31,6 +31,12 @@ keeps SRAM and leaves the case in its ROM, which answers no relay frame: the sam
 the same record as the stops above. `idle_s` stays the old relay's 12 s; the feeding relay's empty-G2TX
 bound is about 31 s on hardware.
 
+A request the temple does not answer blocks the relay (case_exchange.c relay_receive): it waits,
+deaf to the host, for the first temple bytes up to the same poll bound (`idle_s`), so the model
+advances the clock by that bound and answers status 2, or by less if the temple has
+`wait_frame(bound_s)` and sends something by itself sooner (a rebooting temple's HELO). W24b
+(rung4.md) showed this on hardware: one unanswered BOOTREP held the relay until the next HELO.
+
 `not_idle` models the pogo switch read right after two quick case app restarts (W18 F1d split): the
 bridge finds no seated-idle YHM baseline, selects no route, writes nothing and answers G2RQ with
 the 13-byte G2RS of status 3, then resets the case.
@@ -64,6 +70,7 @@ class RelayModel:
         self.watchdog_reset = False
         self.t0 = clock() if clock else 0.0  # Go: the relay starts with its banner
         self.idles = 0
+        self.waits = 0  # unanswered requests that waited out the poll bound or a temple frame
         self.timeout = 6.0
         self.is_open = True
         self.state = "rq"
@@ -170,6 +177,13 @@ class RelayModel:
                     reply = self.temple.next_frame()
                 else:
                     self.idles += 1
+                if not reply and n:
+                    # relay_receive: nothing came, so the relay waits for the first temple bytes up
+                    # to its poll bound, deaf to the host (the empty G2TX already paid it in _dies).
+                    reply = self._wait_temple()
+                    if reply is None:
+                        self.state = "hung"
+                        return
                 if not (len(reply) >= 4 and reply[:3] == b"\x5a\xa5\xff" and reply[3] in (8, 16, 24, 27)
                         and len(reply) == reply[3] + 5):
                     reply, status = b"", 2
@@ -184,15 +198,33 @@ class RelayModel:
         """Advance the clock by this exchange; True if the case stops during it."""
         if frame and self.hang_when is not None and self.hang_when(frame):
             return True
-        if self.clock is not None:
-            self.clock.advance(self.exchange_s if frame else self.idle_s)
-            if self.hang_after_s is not None and self.clock() - self.t0 >= self.hang_after_s:
-                return True
-            if (self.watchdog_s is not None and not self.feeds_watchdog
-                    and self.clock() - self.t0 >= self.watchdog_s):
-                self.watchdog_reset = True  # last feed: the relay start
-                return True
+        if self._advance(self.exchange_s if frame else self.idle_s):
+            return True
         return bool(frame) and self.hang_after_exchanges is not None and self.sent >= self.hang_after_exchanges
+
+    def _advance(self, seconds: float) -> bool:
+        """Advance the clock; True if the case stops by then (hang_after_s, its YHM4005)."""
+        if self.clock is None:
+            return False
+        self.clock.advance(seconds)
+        if self.hang_after_s is not None and self.clock() - self.t0 >= self.hang_after_s:
+            return True
+        if self.watchdog_s is not None and not self.feeds_watchdog and self.clock() - self.t0 >= self.watchdog_s:
+            self.watchdog_reset = True  # last feed: the relay start
+            return True
+        return False
+
+    def _wait_temple(self) -> bytes | None:
+        """A request the temple did not answer: the relay's wait for a temple frame. A temple with
+        `wait_frame(bound_s) -> (frame, seconds)` says what it sends by itself within the bound (a
+        rebooting temple: the loader's HELO); any other stays silent for the whole bound. Returns
+        the frame (b"" = status 2), or None if the case stopped meanwhile."""
+        if hasattr(self.temple, "wait_frame"):
+            reply, waited = self.temple.wait_frame(self.idle_s)
+        else:
+            reply, waited = b"", self.idle_s
+        self.waits += 1
+        return None if self._advance(waited) else reply
 
     def _exit(self, status: int, restore: bool = True) -> None:
         """Back in the bridge: restore the route, record, G2RS, then the bridge resets the case."""

@@ -49,9 +49,9 @@ import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import image, native, pins, status
+from . import case_uart, image, native, pins, status
 from .links import CaseRelayLink, PogoNotIdle, SocketLink
-from .session import BLOCK, AppImage, AppWriter, Session, SessionError
+from .session import BLOCK, AppImage, AppWriter, RefusedError, Session, SessionError
 
 RUNS = Path(__file__).resolve().parents[1] / "runs"
 # The left temple's relay sessions stopped 19.5-22.2 s after the relay started (link-soak) and
@@ -464,6 +464,22 @@ def describe_peek(name: str, data: bytes) -> dict:
         out["zero"] = data == bytes(8)
     elif name == "flag":
         out["word0"] = f"{struct.unpack_from('<I', data)[0]:#010x}"
+    elif name == "ssram-power":
+        value = struct.unpack("<I", data)[0]
+        out.update(groups_powered=[g for g in range(3) if value >> g & 1], wisp_ram_powered=bool(value & 4))
+    elif name == "rstgen-stat":
+        value = struct.unpack("<I", data)[0]
+        out.update(value=f"{value:#010x}", causes=case_uart.rstgen_stat_names(value))
+    elif name == "wisp-record":
+        out["record"] = case_uart.decode_diag_record(data, check=False)
+    elif name == "wisp-boot-status":
+        try:
+            boot = case_uart.decode_boot_status(data)
+            out["status"] = {k: boot.get(k) for k in ("stage", "action", "rstgen_stat", "reset_cause_names",
+                                                      "pmic_kick", "window_answers", "window_ms", "uart_result",
+                                                      "prev_valid", "prev")}
+        except ValueError as error:
+            out["error"] = f"not a sealed v2 status block ({error}): another Wisp Boot, or never written"
     return out
 
 
@@ -473,7 +489,12 @@ def cmd_peek(args) -> int:
     def body(session, patched):
         found = {}
         for name in names:
-            found[name] = describe_peek(name, session.peek(name))
+            try:
+                found[name] = describe_peek(name, session.peek(name))
+            except RefusedError as error:
+                if name not in pins.PEEK_SSRAM_GATED:
+                    raise
+                found[name] = {"refused": str(error)}  # SSRAM group 2 off: a finding, not a stop
             print(f"{name}: {json.dumps(found[name])}", flush=True)
         return {"peek": found}
 
@@ -621,8 +642,11 @@ def cmd_boot_watch(args) -> int:
         print(f"REFUSED: no case-UART status protocol {args.protocol!r} (registered: {sorted(status.PROTOCOLS)}). "
               "Nothing was sent", file=sys.stderr)
         return 2
-    protocol = factory()
-    if not status.relay_request_ok(protocol.request(0)):
+    if args.report_at is not None and factory is not case_uart.WispStatus:
+        print(f"REFUSED: --report-at is for --protocol wisp, not {args.protocol!r}. Nothing was sent", file=sys.stderr)
+        return 2
+    protocol = factory(report_at=args.report_at) if args.report_at is not None else factory()
+    if not status.relay_request_ok(factory().request(0)):  # a throwaway: request() may change state
         print(f"REFUSED: {protocol.name}: its first request is not a frame the case relay forwards; nothing was sent",
               file=sys.stderr)
         return 2
@@ -649,6 +673,17 @@ def cmd_boot_watch(args) -> int:
 
 
 WATCH_SLEEP = time.sleep  # tests replace it with the relay model's virtual clock
+
+
+def seconds_list(text: str) -> tuple[float, ...]:
+    """`--report-at`: comma-separated seconds, each within [-0.6, 5]."""
+    try:
+        values = tuple(float(v) for v in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a list of seconds: {text!r}") from None
+    if not values or any(not -0.6 <= v <= 5.0 for v in values):
+        raise argparse.ArgumentTypeError(f"each value must be within [-0.6, 5] s: {text!r}")
+    return values
 
 
 def print_summary(summary: dict) -> None:
@@ -690,7 +725,8 @@ def print_summary(summary: dict) -> None:
         print(f"  boot report (t = {r.get('t', '?')} s, from {r['source']}): boot {r['boot']}, reset cause "
               f"{r['reset_cause']:#06x} {r['reset_cause_names']}, previous boot's last stage {r['prev_stage']} at "
               f"{r['prev_stage_ms']} ms" + (f", FAULT pc {fault['pc']:#010x} lr {fault['lr']:#010x} cfsr "
-                                            f"{fault['cfsr']:#010x}" if fault else ""))
+                                            f"{fault['cfsr']:#010x}" if fault else "")
+              + (f"; asked {r['asked_s_after_release']} s after release" if "asked_s_after_release" in r else ""))
     clock = summary.get("clock")
     if clock:
         print(f"  stage-0 clocks: LFRC {clock['lfrc_hz']} Hz (min {clock['lfrc_hz_min']}, max {clock['lfrc_hz_max']}, "
@@ -997,6 +1033,11 @@ def main(argv=None) -> int:
                          "nothing, record what the temple sends")
     sp.add_argument("--watch-s", type=float, default=60.0, help="how long to watch after CONT (default 60)")
     sp.add_argument("--interval-s", type=float, default=1.0, help="at most one query this often (default 1)")
+    sp.add_argument("--report-at", type=seconds_list, default=None,
+                    help="wisp only: when to ask for the boot report, in s after the loader releases the boot "
+                         "(CONT, or its HELO + 0.512 s), one value per boot, cycling until one is answered "
+                         f"(default {','.join(map(str, case_uart.WispStatus.REPORT_AT_S))}); the relay allows one "
+                         "try per boot (rung4.md, W24b results)")
     sp = sub.add_parser("ble-scan", help="read-only, no case: listen for Wisp and Even temple adverts from this "
                                           "machine (rung4.md W24); never connects")
     common(sp, link=False)

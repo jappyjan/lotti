@@ -288,6 +288,10 @@ Built on t3-worker on 2026-11-08 for rung 4's W20/W21/W24 ([rung4.md §4](rung4.
 | `uart2` | `0x20000490`, 28 B | UART2's table entry as the loader leaves it (handle set, pin table `0x434210`, no callback, awake 1: the loader checked awake = 0, then woke UART2) |
 | `power-callbacks` | `0x20026E44`, 8 B | both zero |
 | `flag` | `0x7FE000`, 16 B | the flag record |
+| `ssram-power` | `0x40021028`, 4 B | `PWRCTRL.SSRAMPWRST`: which 1-MiB SSRAM groups are powered; group 2 (bit 2) holds Wisp Boot's RAM |
+| `rstgen-stat` | `0x4000885C`, 4 B | `RSTGEN.STAT` in the held loader: the reset that started this session (a case reset: `external`), unless STAT accumulates |
+| `wisp-record` | `0x20370000`, 64 B | Wisp's diagnostics record (rung4.md W24 D1): what the boot that the session's case reset interrupted left, its boot counter, reset cause, last stage and its time, fault. Read only if `ssram-power` shows group 2 on |
+| `wisp-boot-status` | `0x20375330`, 692 B | Wisp Boot's status block (`st`) of the stage-0 Wisp Boot only (slot `7a5c399b…`); its `prev` is the record of the boot before. Same gate |
 | `nor-records` | `0x4336A0`, 32 B | the two NOR ops records (MRAM) |
 
 **`pmic_read.bin` (G3)**, 504 B, SHA-256 `491f98f55dc65a81…`, built by `programs/build.sh` with the other programs:
@@ -301,7 +305,11 @@ Built on t3-worker on 2026-11-08 for rung 4's W20/W21/W24 ([rung4.md §4](rung4.
 
 **`app-check` (G2)** is rung4.md exit item 5 minus the PMIC (run `pmic-read --compare` beside it): the bootloader CRC twice, the flag with its meaning, the 16 vector bytes (zero = an interrupted write), and the app region's CRC over each known image's own length. The pinned stock CRC is over the 3,700,068 image bytes. F2's final CRC `d9864941` was over the 16-byte-rounded 3,700,080 B, so it includes 12 bytes past the image.
 
+The two Wisp regions read RAM that only Wisp writes, in the held loader after the case reset that started the session (rung4.md, "W24b results"): the patched bootloader's only SSRAM use is its heap, `[0x20081000, 0x2013C800)` (a memset and the heap init at `0x41FD70`; no literal in it points higher) [C, static]. Whether SRAM keeps its contents across the case reset, and what the SBL does, is for the record's magic and CRC to show [?]. In Renode the `stage-0` case of `w18-test` reads both after a held case reset.
+
 **`boot-watch` (G2)** releases the boot (`CONT`, `RLSD`) and keeps the relay running: each `G2TX` hands one frame to the temple and returns the first `5A A5 FF` frame within the relay's poll bound. The questions are a pluggable `StatusProtocol` (`wisp_w18/status.py`).
+
+- **A request nobody answers blocks the relay** (W24b; `case_exchange.c` `relay_receive`): after sending, the relay waits, without reading the host port, for the first four temple bytes, up to its poll bound (about 31 s with the feed). It ends early only on four bytes that are no frame header, or a UART error flag (status 2). In a reboot loop the next frame is the loader's `HELO`. The host must not send again meanwhile, and temple frames sent while no exchange is pending are lost. So a short window gets one try per boot, aimed: `--protocol wisp` asks the boot report at `--report-at` seconds after the loader's release (`CONT`, or `HELO` + 0.512 s), and IDENT 2 s after the report. `relay_model.RelayModel` now blocks the same way (an unanswered request costs the poll bound, or less if the fake temple sends a frame by itself), and `tests/test_boot_watch_timing.py` reproduces W24b with it.
 
 - The relay constrains every protocol: requests are 9, 25 or 32 bytes starting `7E 00 01 n-5` (or empty: listen only), and replies are 13, 21, 29 or 32-byte `5A A5 FF` frames. The stock version query `24 00 01 00 a7` cannot go through this relay, so G10's Wisp protocol has to fit these shapes.
 - Only `listen` is registered today. G10 (apps/wisp-fw) registers the Wisp protocol with its tests.

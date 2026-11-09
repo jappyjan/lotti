@@ -149,15 +149,14 @@ class Stage0Hook(unittest.TestCase):
         blocks = {1: status_body(stage=6), 2: boot_block(), 3: clock, 4: bytes(rec)}
         hook = c.WispStatus()
         answers = []
-        # Wisp Boot's window answers the second request; then IDENT and every block.
-        replies = [b"", bootrep_reply()]
+        # Wisp Boot's window answers the one BOOTREP; then IDENT and every block.
+        replies = [bootrep_reply()]
         for i in range(200):
             req = hook.request(i)
             self.assertTrue(status.relay_request_ok(req), req.hex())
             reply = replies.pop(0) if replies else self.answer(req, blocks, None)
-            if i < 2:
+            if i == 0:
                 self.assertEqual(req, c.bootrep_request())
-                self.assertTrue(hook.urgent() if i == 0 else True)
             d = hook.decode(reply) if reply else None
             if d:
                 answers.append(d)
@@ -176,7 +175,7 @@ class Stage0Hook(unittest.TestCase):
         hook.reboots += 1
         self.assertEqual(hook.request(0), c.bootrep_request())
         hook.decode(bootrep_reply(boot=3, cause=0x40, prev_stage=0x46, fault=(0x448123, 0x448001, 0x20000)))
-        self.assertFalse(hook.urgent())
+        self.assertFalse(hook.report_due())
         self.assertEqual([r["boot"] for r in hook.reports], [2, 3])
         self.assertEqual(hook.reports[1]["reset_cause_names"], ["watchdog"])
         self.assertEqual(hook.reports[1]["prev_fault"]["pc"], 0x448123)
@@ -186,19 +185,25 @@ class Stage0Hook(unittest.TestCase):
         self.assertIn("boot report", text)
         self.assertIn("FAULT pc 0x00448123", text)
 
-    def test_watch_does_not_wait_while_the_report_is_due(self):
+    def test_the_report_is_asked_once_per_boot_at_its_scheduled_time(self):
+        """One BOOTREP per boot, timed from the release (CONT: t = 0; a HELO: + 512 ms), cycling
+        through report_at until Wisp Boot answers; IDENT waits APP_AFTER_REPORT_S after the report."""
         hook = c.WispStatus()
-        sleeps = []
-        now = [0.0]
-
-        class Link:
-            def query(self, frame):
-                now[0] += 0.0175
-                return 2, b"", 0.0175  # no answer (relay status 2)
-
-        status.watch(Link(), hook, 1.0, interval_s=0.5, clock=lambda: now[0], sleep=sleeps.append, log=lambda m: None)
-        self.assertEqual(sleeps[:10], [])  # back to back while urgent
-        self.assertGreaterEqual(hook.report_asked, 50)
+        self.assertAlmostEqual(hook.wait(0.0), c.WispStatus.REPORT_AT_S[0])
+        self.assertEqual(hook.request(0), c.bootrep_request())
+        self.assertIsNone(hook.wait(0.2))  # missed (status 2 after the poll bound): IDENT at the interval
+        self.assertEqual(hook.request(1), c.ident_request())
+        hook.reset()
+        hook.anchor(10.0, "helo")
+        self.assertAlmostEqual(hook.wait(10.0), 0.512 + c.WispStatus.REPORT_AT_S[1])
+        hook.request(2)
+        hook.decode(bootrep_reply())
+        self.assertAlmostEqual(hook.wait(10.9), hook.report_answered_at + c.WispStatus.APP_AFTER_REPORT_S - 10.9)
+        hook.reset()
+        hook.anchor(20.0, "helo")
+        self.assertAlmostEqual(hook.wait(20.0), 0.512 + c.WispStatus.REPORT_AT_S[1])  # kept once it worked
+        custom = c.WispStatus(report_at=(0.4,))
+        self.assertAlmostEqual(custom.wait(0.0), 0.4)
 
 
 class WispApp:
