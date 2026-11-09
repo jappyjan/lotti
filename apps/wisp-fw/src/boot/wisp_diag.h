@@ -68,6 +68,31 @@ enum wisp_diag_stage {
 	WISP_DIAG_S0_MEASURE = 0x46,    /* measuring LFRC against the crystal (watchdog not fed) */
 	WISP_DIAG_S0_RESET_REQ = 0x47,  /* resetting on a case-UART RESET */
 	WISP_DIAG_S0_FAULT = 0x4F,      /* a fault handler in stage-0 ran */
+	/* The Zephyr app (native-1 on, src/diag/wisp_app_diag.c): last value wins. */
+	WISP_DIAG_APP_SOC = 0x80,       /* soc_early_init_hook entered (z_prep_c done) */
+	WISP_DIAG_APP_SOC_DONE = 0x81,  /* ... its power, clock and cache set-up returned */
+	WISP_DIAG_APP_PRE1 = 0x82,      /* PRE_KERNEL_1 started */
+	WISP_DIAG_APP_PRE1_END = 0x83,  /* PRE_KERNEL_1 devices (GPIO, UARTs) done */
+	WISP_DIAG_APP_PRE2 = 0x84,      /* PRE_KERNEL_2 started (the system timer comes up here) */
+	WISP_DIAG_APP_STIMER_OK = 0x85, /* the STIMER counts (D5) */
+	WISP_DIAG_APP_POST = 0x86,      /* POST_KERNEL started: threads run */
+	WISP_DIAG_APP_POST_BUSES = 0x87,/* POST_KERNEL: I2C, SPI and MSPI controllers done */
+	WISP_DIAG_APP_POST_END = 0x88,  /* POST_KERNEL devices (sensors, panel) done */
+	WISP_DIAG_APP_PMIC_THREAD = 0x89, /* the PMIC watchdog thread runs */
+	WISP_DIAG_APP_PMIC_ARMED = 0x8A,  /* the nPM1300 watchdog armed with stock's writes */
+	WISP_DIAG_APP_MAIN = 0x8B,      /* main() entered */
+	WISP_DIAG_APP_CASE = 0x8C,      /* the case-UART thread started */
+	WISP_DIAG_APP_HAL = 0x8D,       /* the native HAL is up */
+	WISP_DIAG_APP_DISPLAY = 0x8E,   /* the boot screen is drawn (or the panel refused) */
+	WISP_DIAG_APP_BT_START = 0x8F,  /* bt_enable() running (the EM9305 bring-up) */
+	WISP_DIAG_APP_BT_UP = 0x90,     /* Bluetooth up, advertising */
+	WISP_DIAG_APP_BT_FAILED = 0x91, /* Bluetooth unavailable */
+	WISP_DIAG_APP_IDLE = 0x92,      /* main's start-up is over */
+	WISP_DIAG_APP_SESSION = 0x93,   /* a BLE session completed HELLO */
+	WISP_DIAG_APP_STIMER_DEAD = 0x9E, /* D5: the STIMER does not count; the fallback loop runs */
+	WISP_DIAG_APP_FAULT = 0x9F,     /* the app's fatal-error handler ran (fault recorded) */
+	WISP_DIAG_APP_RESET_REQ = 0xA0, /* resetting on a case-UART RESET */
+	WISP_DIAG_APP_WDT_STARVED = 0xA1, /* the liveness check stopped feeding the Apollo WDT */
 };
 
 #define WISP_DIAG_F_FAULT 0x0001u /* the fault fields are set */
@@ -146,6 +171,25 @@ static inline uint32_t wisp_diag_crc32(const void *data, uint32_t n)
 	return ~crc;
 }
 
+/* Clean (write back) the D-cache lines over [p, p + n): the bootloader hands off with the D-cache
+ * on (rung4.md W24c), and a line still dirty when the watchdog resets the chip is lost. SCB
+ * DCCMVAC, 32-byte lines (Cortex-M55); harmless with the cache off. Firmware only. */
+static inline void wisp_dcache_clean(const volatile void *p, uint32_t n)
+{
+#if defined(__arm__)
+	uint32_t a = (uint32_t)(uintptr_t)p & ~31u, end = (uint32_t)(uintptr_t)p + n;
+
+	__asm volatile("dsb" ::: "memory");
+	for (; a < end; a += 32u) {
+		*(volatile uint32_t *)0xE000EF68u = a;
+	}
+	__asm volatile("dsb\n isb" ::: "memory");
+#else
+	(void)p;
+	(void)n;
+#endif
+}
+
 static inline volatile struct wisp_diag_record *wisp_diag(void)
 {
 	return (volatile struct wisp_diag_record *)WISP_DIAG_ADDR;
@@ -154,6 +198,7 @@ static inline volatile struct wisp_diag_record *wisp_diag(void)
 static inline void wisp_diag_seal(volatile struct wisp_diag_record *r)
 {
 	r->crc = wisp_diag_crc32((const void *)r, __builtin_offsetof(struct wisp_diag_record, crc));
+	wisp_dcache_clean(r, sizeof(*r));
 }
 
 static inline int wisp_diag_valid(const volatile struct wisp_diag_record *r)
