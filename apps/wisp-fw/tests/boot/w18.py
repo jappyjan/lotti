@@ -385,7 +385,10 @@ class Harness:
 
     def record(self, name, ok, state, detail):
         self.rows.append((name, ok, state, detail))
-        print(f"{'PASS' if ok else 'FAIL'} {name}: {state} ({detail})", flush=True)
+        line = f"{'PASS' if ok else 'FAIL'} {name}: {state} ({detail})"
+        print(line, flush=True)
+        with (self.work / "rows.log").open("a") as f:  # survives a run that is stopped before its table
+            f.write(line + "\n")
 
     # --- cases ---
     def control(self, name, bootloader):
@@ -1099,34 +1102,42 @@ class Harness:
             # 1. The first boot after CONT: the protocol until it is complete and stage-0 has measured.
             # The harness steps 1 s at a time while the host session runs, so CONT was up to 1 s ago:
             # the report is asked 2 s in, from stage-0 (Wisp Boot's window is aimed in 2 and 3).
-            hook.report_at = (2.0,)
-            first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
-            hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
-            summary1 = hook.summary(first["answers"])
-            # stage-0's first measurement starts 2 s after it started and takes about 1.1 s.
-            run.step(3)
-            try:
-                raw = case_uart.read_block(lambda r: self.inject(run, r), case_uart.BLOCK_CLOCK)
-            except RuntimeError as error:  # no reply (the old stage-0 on the half-duplex wire)
-                raw, summary1["clock_error"] = None, str(error)
-            summary1["clock"] = case_uart.decode_clock(raw) if raw else None
-            # 2. RESET over the case UART, then the reboot's boot report (through the loader's window).
-            n_reports = len(hook.reports)
-            try:
-                code, _ = recovery_case_uart.decode_reply(self.inject(run, recovery_case_uart.reset_request()),
-                                                          recovery_case_uart.OP_RESET)
-            except RuntimeError:
-                code = None
-            second = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
-                                await_helo=True)
-            report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
-            # 3. The case's reset line (on hardware: the relay's start).
-            n_reports = len(hook.reports)
-            run.r.cmd('rstgen Request "case-reset"')
-            third = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
-                               await_helo=True)
-            report_case = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
-            run.step(2)
+            if old:
+                # The pinned stage-0: one boot behind the loader is enough for the pad and MSPI findings
+                # (nothing answers on the half-duplex wire, so the long watches below would only wait out
+                # the relay bound), then the peek after a case reset shows the record lost.
+                hook.report_at = (2.0,)
+                first = self.watch(run, hook, 4)
+                run.step(3)
+            else:
+                hook.report_at = (2.0,)
+                first = self.watch(run, hook, 20, until=lambda o: hook.complete(o["answers"]))
+                hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
+                summary1 = hook.summary(first["answers"])
+                # stage-0's first measurement starts 2 s after it started and takes about 1.1 s.
+                run.step(3)
+                try:
+                    raw = case_uart.read_block(lambda r: self.inject(run, r), case_uart.BLOCK_CLOCK)
+                except RuntimeError as error:  # no reply (the old stage-0 on the half-duplex wire)
+                    raw, summary1["clock_error"] = None, str(error)
+                summary1["clock"] = case_uart.decode_clock(raw) if raw else None
+                # 2. RESET over the case UART, then the reboot's boot report (through the loader's window).
+                n_reports = len(hook.reports)
+                try:
+                    code, _ = recovery_case_uart.decode_reply(self.inject(run, recovery_case_uart.reset_request()),
+                                                              recovery_case_uart.OP_RESET)
+                except RuntimeError:
+                    code = None
+                second = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                                    await_helo=True)
+                report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
+                # 3. The case's reset line (on hardware: the relay's start).
+                n_reports = len(hook.reports)
+                run.r.cmd('rstgen Request "case-reset"')
+                third = self.watch(run, hook, 10, until=lambda o: len(hook.reports) > n_reports and hook.ident,
+                                   await_helo=True)
+                report_case = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
+                run.step(2)
             # 4. The W24b runbook's peek after step 7: a case reset into a held loader, then what the
             # interrupted boot left in Wisp Boot's RAM, read through dump_fed (pins.PEEK_REGIONS).
             def peek_host(link):
