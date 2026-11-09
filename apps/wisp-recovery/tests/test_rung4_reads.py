@@ -120,12 +120,15 @@ class Peek(unittest.TestCase):
         self.assertEqual((out["status"]["prev"]["boots"], out["status"]["prev"]["stage"]), (6, "boot-mounted"))
 
     def test_the_wisp_regions_are_the_pinned_stage0_boots(self):
-        """wisp-record is wisp_diag_slot and wisp-boot-status is `st` (692 B) in the committed
-        stage-0 Wisp Boot ELF; both inside Wisp Boot's RAM, the top 64 KiB of SSRAM group 2, and
+        """wisp-record is wisp_diag_slot in both committed Wisp Boot ELFs; wisp-boot-status is `st`
+        (692 B) of stage-0b's and wisp-boot-status-stage-0 that of stage-0; both inside Wisp Boot's RAM, the top 64 KiB of SSRAM group 2, and
         above the patched bootloader's only SSRAM use, its heap [0x20081000, 0x2013C800)."""
         symbols = elf_symbols(Path(__file__).resolve().parents[1] / "wisp_w18/data/stage-0/wisp_boot.elf")
         self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (symbols["wisp_diag_slot"][0], 64))
-        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], symbols["st"])
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status-stage-0"][:2], symbols["st"])
+        stage0b = elf_symbols(Path(__file__).resolve().parents[1] / "wisp_w18/data/stage-0b/wisp_boot.elf")
+        self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (stage0b["wisp_diag_slot"][0], 64))
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], stage0b["st"])  # moved at W24d-0
         for name in pins.PEEK_SSRAM_GATED:
             address, length, _ = pins.PEEK_REGIONS[name]
             self.assertTrue(0x2037_0000 <= address and address + length <= 0x2038_0000)

@@ -154,7 +154,7 @@ int nor_init(uint32_t *rdid)
 	M_CQCFG &= ~CQCFG_CQEN;   /* no command queue, no DMA, no XIP: PIO only */
 	M_DMACFG &= ~DMACFG_DMAEN;
 	M_DEV0XIP &= ~DEV0XIP_XIPEN;
-	/* No continuous APB clock, no IOM handshake, FIFOs and the module out of reset. */
+	/* No continuous APB clock, IOMSEL 0 (unused: no command queue), resets and FIFO released. */
 	M_MSPICFG = (M_MSPICFG & ~(MSPICFG_APBCLK | MSPICFG_IOMSEL | MSPICFG_FIFORESET)) | MSPICFG_PRSTN |
 		    MSPICFG_IPRSTN;
 	M_PADOUTEN = 0x10Fu;      /* CLK + D0..D3, as stock */

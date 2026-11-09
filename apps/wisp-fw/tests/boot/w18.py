@@ -64,9 +64,8 @@ Cases (end states):
                 CRC, no watchdog bite and no PMIC power cycle, every PMIC write a kick (Wisp Boot's
                 once per boot, stage-0's every second), the clock measurement (LFRC 900 Hz as
                 modelled), and no write by Wisp code to an unmodelled power, clock or trim register
-  stage-0b      rung4.md W24d: the same as stage-0, with the committed stage-0b (data/stage-0b/, NOT
-                pinned: its proposed-pin.json is added to the pin tables in this process only, so that
-                install-wisp's own gate runs on the committed files), on the W24d models: the case link
+  stage-0b      rung4.md W24d: the same as stage-0, with the committed stage-0b (data/stage-0b/, pinned at
+                W24d-0, through install-wisp's own gate), on the W24d models: the case link
                 as ONE half-duplex wire (WispCaseLink HalfDuplex, on in every case here: a byte sent
                 while pad 42 is not UART2TX is lost, a byte from the case is received once pad 44 is
                 UART2RX, corrupted if pad 42 drives then), MSPICFG's PRSTN/IPRSTN (WispMspiNor: MSPI1
@@ -976,28 +975,23 @@ class Harness:
 
     @staticmethod
     def stage_0b_files() -> tuple[bytes, bytes, bytes, dict]:
-        """The committed stage-0b (data/stage-0b/), NOT pinned (rung4.md W24d: pinning follows an
-        independent review). This process (Renode, never a case) adds its proposed pin
-        (proposed-pin.json) to the pin tables in memory, next to the repository's own, so that
-        install-wisp's whole gate (native.resolve) runs on the committed files as it would after
-        pinning. Wisp Boot's status block `st` moved in this build: the peek region is taken from
-        the committed wisp_boot.elf, as the pin will have to record it."""
+        """The committed stage-0b (data/stage-0b/, pinned at W24d-0), through install-wisp's own gate
+        against the repository's pins. The pin must be proposed-pin.json unchanged, and the peek
+        region of Wisp Boot's status block must be `st` of the committed wisp_boot.elf."""
         prop = json.loads((STAGE_0B_DIR / "proposed-pin.json").read_text())
         pin = {k: (tuple(v) if k == "gates" else int(v, 16) if k.startswith("crc32") else v)
                for k, v in prop["image"].items()}
-        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "stage-0b": pin}
-        pins.WISP_BOOT_PASSED = {**pins.WISP_BOOT_PASSED, pin["wisp_boot_slot_sha256"]: prop["wisp_boot"]}
+        if pins.WISP_IMAGES.get("stage-0b") != pin:
+            raise native.NativeRefused("pins.WISP_IMAGES['stage-0b'] is not proposed-pin.json's entry")
         st = nm_all(STAGE_0B_DIR / "wisp_boot.elf", "st", kinds="bB")
-        if len(st) != 1 or st[0] != int(prop["peek_wisp_boot_status"], 16):
-            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not proposed-pin.json's peek address")
-        _, size, what = pins.PEEK_REGIONS["wisp-boot-status"]
-        pins.PEEK_REGIONS = {**pins.PEEK_REGIONS, "wisp-boot-status": (st[0], size, what)}
+        if st != [pins.PEEK_REGIONS["wisp-boot-status"][0]]:
+            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not pins.PEEK_REGIONS['wisp-boot-status']")
         data = (STAGE_0B_DIR / "stage-0b.bin").read_bytes()
         elf = (STAGE_0B_DIR / "stage0.elf").read_bytes()
         map_text = (STAGE_0B_DIR / "stage0.map").read_bytes()
         facts = native.resolve(data, elf, map_text, image.sha(data)[:12])
         if facts["name"] != "stage-0b":
-            raise native.NativeRefused(f"resolved as {facts['name']}, not stage-0b's proposed pin")
+            raise native.NativeRefused(f"resolved as {facts['name']}, not the stage-0b pin")
         return data, elf, map_text, facts
 
     @staticmethod
@@ -1149,7 +1143,10 @@ class Harness:
             def peek_host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
                     s.require_patched_bootloader(self.patched)
-                    return {n: s.peek(n) for n in ("ssram-power", "rstgen-stat", "wisp-record", "wisp-boot-status")}
+                    status = "wisp-boot-status-stage-0" if old else "wisp-boot-status"
+                    out = {n: s.peek(n) for n in ("ssram-power", "rstgen-stat", "wisp-record", status)}
+                    out["wisp-boot-status"] = out.pop(status)
+                    return out
             pthread, presult = run.attach(peek_host)
             run.r.cmd('rstgen Request "case-reset"')
             tp = 0.0

@@ -177,7 +177,7 @@ class Pinned(unittest.TestCase):
 
     def test_exactly_native_0_stage_0_and_their_wisp_boots_are_pinned(self):
         self.assertTrue(pins.R4_1_APPROVED)
-        self.assertEqual(set(pins.WISP_IMAGES), {"native-0", "stage-0"})
+        self.assertEqual(set(pins.WISP_IMAGES), {"native-0", "stage-0", "stage-0b"})
         pin = pins.WISP_IMAGES["native-0"]
         self.assertEqual(pin["image_sha256"], NATIVE_0_SHA)
         self.assertEqual(pin["image_bytes"], 230_428)
