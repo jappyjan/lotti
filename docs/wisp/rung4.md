@@ -531,7 +531,7 @@ This is H1's candidate list made concrete; it does not say which write (if any) 
 | Suite | Stock 2.4.0.24 bootloader | Patched `87e2d4e0…` bootloader |
 | --- | --- | --- |
 | rung 3 observe (`wisp-fw:boot-test`) | **8/8 pass**: the six earlier cases, `obs-diag-wdt` (a watchdog reset with SRAM kept: the next boot reports prev stage `boot-handoff`, cause `watchdog`), `obs-stage-0` (IDENT kind 16, LFRC 922 Hz, a case-UART RESET, then Wisp Boot's window reports prev `s0-reset-request`, cause `sw-por`) | **8/8 pass** |
-| rung 3 fallback | **28/28 pass** (reference, the 25 fault and power-cut cases, `native-app-runs`, `native-app-unconfirmed`) | PATCHED_FALLBACK |
+| rung 3 fallback | **28/28 pass** (reference, the 25 fault and power-cut cases, `native-app-runs`, `native-app-unconfirmed`) | reference, `app-hangs`, `native-app-runs`, `native-app-unconfirmed` **pass**; the other 24 cases: RUNNING |
 | every rung-3 case | Wisp Boot's PMIC writes are only `07 04 01`, once per run (by PC); no Wisp Boot write to an unmodelled power, clock or trim register | same |
 | `w18-test` (patched bootloader) | — | 16 earlier cases **pass** under the new models (control, hello, info, the four `recover` variants, temple watchdog, `rung4-reads`, `install-wisp` and its cut); **`stage-0` passes** (install `19b3e002`, boot-watch at 17.5 ms, the reports after RESET and after the case reset, 3 Wisp Boot kicks, no bite, strict clean); **`native-0` and `native-0-recover` FAIL** on the strict record only (the table above) |
 
