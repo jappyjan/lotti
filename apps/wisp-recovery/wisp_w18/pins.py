@@ -199,7 +199,10 @@ SIDES = ("left", "right")
 # Jan approved R4-1 on 2026-11-08 (rule 1's W18 exception extended to pinned Wisp images; commit
 # 9181c94). W23 pinned native-0 after its independent review: the build of commit 8374f9a, rebuilt
 # on t3-worker and byte-identical to the reviewed one (image and app map); the committed files are
-# in data/native-0/ (README.md there). Every other image is refused before the case is touched.
+# in data/native-0/ (README.md there). W24b-0 pinned stage-0 the same way after its independent
+# review: the build of commit 9bfac4d, rebuilt on t3-worker byte-identical (image, stripped ELFs,
+# Wisp Boot); the committed files are in data/stage-0/. Every other image is refused before the
+# case is touched.
 R4_1_APPROVED = True
 WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
 # Wisp Boot builds that passed rung 3, by the SHA-256 of the padded 64 KiB slot, with the suites
@@ -217,6 +220,17 @@ WISP_BOOT_PASSED: dict[str, dict] = {
         "suites": {
             "stock-2.4.0.24": "observe suite 6/6 pass",
             "patched-87e2d4e0": "observe suite 6/6 pass",
+        },
+    },
+    # stage-0's observe-only Wisp Boot with the W24b diagnostics (D1 record, PMIC kick, D2 window;
+    # wisp_boot.bin b54ee856faaf9b82..., 11,056 B, padded with 0xFF to 64 KiB). `wisp-fw:boot-test
+    # --suite observe` (8 cases, obs-diag-wdt and obs-stage-0 new), PR #81 (rung4.md "W24b").
+    "7a5c399bdfeb05a0683f8ef9fba4452cc4147e22b57de55e2c9754227117b185": {
+        "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 9bfac4d",
+        "wisp_boot_bin_sha256": "b54ee856faaf9b82de4f4d743d279ca824d9da0038262783e48689e4ac1668f9",
+        "suites": {
+            "stock-2.4.0.24": "observe suite 8/8 pass",
+            "patched-87e2d4e0": "observe suite 8/8 pass",
         },
     },
 }
@@ -243,6 +257,23 @@ WISP_IMAGES: dict[str, dict] = {
         # main (W24 on the left temple) it reads efde0857: the value the W24 report must show.
         "crc32_aligned_over_stock": 0xEFDE_0857,
         "wisp_boot_slot_sha256": "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816",
+    },
+    # W24b-0: stage-0 at commit 9bfac4d (wisp-fw:build-native stage-0): the observe-only Wisp Boot
+    # above and the bare-metal app of src/stage0/. The ELF is stage0.elf after `objcopy
+    # --strip-debug`, the map the build's own (absolute paths, pinned as built). The build ran
+    # check_rule8 and check_no_mram_write over the app; the review reran the no-MRAM-write gate
+    # over all 70,744 bytes, Wisp Boot's slot included.
+    "stage-0": {
+        "commit": "9bfac4d",
+        "image_sha256": "fc267e0b0de465f229afa5aab739ea20dc9c8b71856a7b13c65a1d446fe85c40",
+        "image_bytes": 70_744,
+        "elf_sha256": "e1bd148b40fc29793e5e56674c4fb259e7485069a485ae1a8bd78052b161a23d",
+        "map_sha256": "6df0f5ea055c707b296c9da3f1662b6efbdf8acce15adca3fac02504ac399eaf",
+        "gates": ("check_rule8", "no-mram-write"),
+        "crc32": 0x96AA_F1C7,
+        # Over [0x438000, 0x449460): the image and the 8 bytes of the stock 2.4.0.24 main after it.
+        "crc32_aligned_over_stock": 0x19B3_E002,
+        "wisp_boot_slot_sha256": "7a5c399bdfeb05a0683f8ef9fba4452cc4147e22b57de55e2c9754227117b185",
     },
 }
 BATTERY_MIN_PERCENT = 80

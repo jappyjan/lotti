@@ -4,7 +4,8 @@
 
 - `resolve`: the image must be listed in pins.WISP_IMAGES, and R4-1 must be approved
   (pins.R4_1_APPROVED; approved 2026-11-08). W23 pinned native-0 (the reviewed build of 8374f9a,
-  committed in data/native-0/); every other image is refused. The ELF and
+  committed in data/native-0/), W24b-0 stage-0 (the reviewed build of 9bfac4d, in data/stage-0/);
+  every other image is refused. The ELF and
   map files must match their pins, the build must have passed the gates the pin records, and
   the first 64 KiB (Wisp Boot) must be a build that passed both rung-3 suites R4-1 names.
 - `rule3`: safety.md rule 3 on the bytes the writer is about to send, in both implementations
@@ -270,6 +271,10 @@ def elf_matches(elf: bytes, data: bytes) -> int:
 NATIVE_0_DIR = Path(__file__).resolve().parent / "data/native-0"
 NATIVE_0_FILES = {"image": NATIVE_0_DIR / "native-0.bin", "elf": NATIVE_0_DIR / "zephyr.elf",
                   "map": NATIVE_0_DIR / "zephyr.map"}
+# The committed files of the pinned stage-0 (W24b-0; data/stage-0/README.md).
+STAGE_0_DIR = Path(__file__).resolve().parent / "data/stage-0"
+STAGE_0_FILES = {"image": STAGE_0_DIR / "stage-0.bin", "elf": STAGE_0_DIR / "stage0.elf",
+                 "map": STAGE_0_DIR / "stage0.map"}
 
 
 def find_pin(sha256: str) -> tuple[str, dict] | None:

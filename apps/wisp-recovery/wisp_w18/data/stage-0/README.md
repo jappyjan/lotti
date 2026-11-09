@@ -1,8 +1,8 @@
-# stage-0 (built, not pinned)
+# stage-0 (pinned, W24b-0)
 
 The next image for the left temple after W24 (docs/wisp/rung4.md, "W24b: stage-0"): the observe-only Wisp Boot with the W24 diagnostics, and a bare-metal app of about 5 KiB at `0x448000` (`apps/wisp-fw/src/stage0/`, no Zephyr, no Ambiq HAL start-up). It feeds the Apollo watchdog, kicks the nPM1300 watchdog (`07 04 01`, its only PMIC write), answers the case-UART protocol (IDENT, READ blocks 1–4, the boot report, RESET), measures the LFRC against the 32 kHz crystal, and leaves breadcrumbs in the diagnostics record. MIT, our own code; nothing of Even's.
 
-**Not pinned.** `install-wisp` refuses it until an independent review has checked these files and a reviewed commit adds them to `wisp_w18/pins.py` (`WISP_IMAGES`, and its Wisp Boot slot to `WISP_BOOT_PASSED` with the rung-3 results), as W23 did for native-0. The Renode case `wisp-fw:w18-test stage-0` pins it in memory only, to run install-wisp's own gate on these exact files.
+**Pinned (W24b-0, 2026-11-09)** after an independent review of these files and the tree they were built from (rung4.md, "W24b-0 review"): `wisp_w18/pins.py` lists the image in `WISP_IMAGES["stage-0"]` (image, stripped ELF and map hashes, both gates, `crc32` and `crc32_aligned_over_stock`) and its Wisp Boot slot in `WISP_BOOT_PASSED` (observe suite 8/8 on the stock 2.4.0.24 and the patched `87e2d4e0…` bootloader). The review rebuilt it from commit `9bfac4d` on t3-worker: `stage-0.bin`, `wisp_boot.bin`, the stripped `stage0.elf` and the stripped `wisp_boot.elf` came out byte-identical (the maps differ only in the checkout's absolute paths, so the map is pinned as built). A build of a later tree differs in the 10-byte revision string stage-0 reports (`STAGE0_REV`), nothing else. `tests/test_stage0.py` runs install-wisp's whole gate on these files and refuses a one-byte change to any of them; `wisp-fw:w18-test stage-0` installs them through the patched loader in Renode against the repository's pin.
 
 | File | SHA-256 | What |
 | --- | --- | --- |

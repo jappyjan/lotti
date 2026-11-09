@@ -53,9 +53,8 @@ Cases (end states):
                 main in one session with recover_fed.bin under the armed PMIC watchdog; the region's
                 CRC over the stock image equals the stock pin (9c66404b); CONT; stock boots
   stage-0       rung4.md W24b: install-wisp writes the committed stage-0 (apps/wisp-recovery/wisp_w18/
-                data/stage-0/, accepted by install-wisp's own gate with an in-memory pin, as
-                install-wisp's synthetic case does: the repository does not pin it) over a running
-                stock app through the patched loader; CONT; then boot-watch's own `wisp` protocol
+                data/stage-0/, pinned at W24b-0 and accepted by install-wisp's own gate) over a
+                running stock app through the patched loader; CONT; then boot-watch's own `wisp` protocol
                 (wisp_w18/case_uart.py) at the relay's cadence (one request every 17.5 ms virtual):
                 the boot report on every exchange until one answers, IDENT, every block. Then a
                 case-UART RESET and a case reset (the reset line): after each, Wisp Boot's window
@@ -901,18 +900,14 @@ class Harness:
     # --- stage-0 (rung4.md W24b) ---
     @staticmethod
     def stage_0_files() -> tuple[bytes, bytes, bytes, dict]:
-        """The committed stage-0 (data/stage-0/), pinned in this process only (as wisp_image does:
-        the repository pins it only after its review), then through install-wisp's own gate."""
-        data = (STAGE_0_DIR / "stage-0.bin").read_bytes()
-        elf = (STAGE_0_DIR / "stage0.elf").read_bytes()
-        map_text = (STAGE_0_DIR / "stage0.map").read_bytes()
-        slot = image.sha(data[: pins.WISP_BOOT_SLOT_BYTES])
-        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "stage-0 (renode)": {
-            "image_sha256": image.sha(data), "image_bytes": len(data), "elf_sha256": image.sha(elf),
-            "map_sha256": image.sha(map_text), "gates": pins.WISP_GATES, "wisp_boot_slot_sha256": slot}}
-        pins.WISP_BOOT_PASSED = {**pins.WISP_BOOT_PASSED, slot: {
-            "build": "observe-only, this tree (renode only)", "suites": {s: "renode" for s in pins.WISP_BOOT_SUITES}}}
+        """The committed stage-0 (data/stage-0/, pinned at W24b-0), through install-wisp's own
+        gate against the repository's pins."""
+        data = native.STAGE_0_FILES["image"].read_bytes()
+        elf = native.STAGE_0_FILES["elf"].read_bytes()
+        map_text = native.STAGE_0_FILES["map"].read_bytes()
         facts = native.resolve(data, elf, map_text, image.sha(data)[:12])
+        if facts["name"] != "stage-0":
+            raise native.NativeRefused(f"resolved as {facts['name']}, not the stage-0 pin")
         return data, elf, map_text, facts
 
     @staticmethod
@@ -1005,6 +1000,9 @@ class Harness:
         v = result.get("value") or {}
         if mram[0x38000:0x38000 + len(data)] != data:
             fails.append("stage-0 not in MRAM")
+        want_crc = f"{pins.WISP_IMAGES['stage-0']['crc32_aligned_over_stock']:08x}"
+        if v.get("crc_after") != want_crc:
+            fails.append(f"final CRC {v.get('crc_after')}, pinned for W24b {want_crc}")
         if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
             fails.append("bootloader region changed")
         if not (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
