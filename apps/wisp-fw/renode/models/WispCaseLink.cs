@@ -28,11 +28,12 @@
 //   - a DR write reaches the wire only while pad 42 is UART2TX (FNCSEL 4); otherwise the byte is
 //     lost (TxLost);
 //   - bytes from the case are heard only while pad 44 is UART2RX and pad 42 is NOT driving the
-//     line (FNCSEL 4 on pad 42 holds it high against the case's start bits). The model applies
-//     this when the temple looks at its receiver (an FR or DR read): pending case bytes seen in
-//     any other pad state are lost (RxLost). This is the order on the real wire: the case sends
-//     only after the temple's frame, and stock, the loader and Wisp from native-1 on turn the
-//     wire back to receive before they read; native-0 and stage-0 never did.
+//     line (FNCSEL 4 on pad 42 holds it high against the case's start bits). The model is
+//     lockstep, so it cannot say when on the wire the case's bytes arrive: they wait as pending
+//     and are delivered the first time the temple looks at its receiver (an FR or DR read) in
+//     that pad state. If the temple transmits again first, or never listens, they are lost
+//     (RxLost). Stock, the loader and Wisp from native-1 on turn the wire back to receive after
+//     each frame; native-0 and stage-0 never did, so nothing reaches them.
 // Not modelled: the case's own turn-round time (a temple that answers too quickly), the settle.
 using System;
 using System.Collections.Generic;
@@ -71,7 +72,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public ulong RxBytes { get; private set; }
         public bool HalfDuplex { get; set; } = true;
         public ulong TxLost { get; private set; }
-        public ulong RxLost { get; private set; }
+        private ulong rxLost;
+        public ulong RxLost => rxLost + (ulong)pending.Count;
         public string HalfDuplexStats()
         {
             return $"tx_bytes={TxBytes} tx_lost={TxLost} rx_lost={RxLost}";
@@ -89,21 +91,33 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         private bool RxListening => Fn(PinCfg44) == FnUart && !TxDriving;
 
-        // The temple looks at its receiver: pending case bytes it cannot hear are gone.
-        private void Listen()
+        // The temple looks at its receiver: pending case bytes arrive if it can hear them now.
+        private void Hear()
         {
-            if(HalfDuplex && rx.Count > 0 && !RxListening)
+            if(pending.Count > 0 && (!HalfDuplex || RxListening))
             {
-                RxLost += (ulong)rx.Count;
-                if(RxLost == (ulong)rx.Count)
+                while(pending.Count > 0)
                 {
-                    this.Log(LogLevel.Warning, "W18 case link: {0} case byte(s) lost: pad 42 FNCSEL {1}, pad 44 FNCSEL {2} (half duplex)",
-                        rx.Count, Fn(PinCfg42), Fn(PinCfg44));
+                    rx.Enqueue(pending.Dequeue());
                 }
-                rx.Clear();
             }
         }
-        public bool HostAttached => client != null;
+
+        // The temple talks again: whatever of the case's bytes it never heard is gone.
+        private void Drop()
+        {
+            if(pending.Count == 0)
+            {
+                return;
+            }
+            if(rxLost == 0)
+            {
+                this.Log(LogLevel.Warning, "W18 case link: {0} case byte(s) never heard: pad 42 FNCSEL {1}, pad 44 FNCSEL {2} (half duplex)",
+                    pending.Count, Fn(PinCfg42), Fn(PinCfg44));
+            }
+            rxLost += (ulong)pending.Count;
+            pending.Clear();
+        }
 
         // Peripheral reset (also on every emulated power cut): registers and FIFOs only. The host
         // link and the frame log survive, like the case relay survives a temple reset.
@@ -112,6 +126,11 @@ namespace Antmicro.Renode.Peripherals.Wisp
             regs = new Dictionary<long, uint>();
             rx = new Queue<byte>();
             tx = new List<byte>();
+            if(pending != null)
+            {
+                rxLost += (ulong)pending.Count; // the temple reset before it heard them
+            }
+            pending = new Queue<byte>();
         }
 
         public void Listen(int port)
@@ -181,7 +200,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 for(var i = 0; i + 1 < h.Length; i += 2)
                 {
-                    rx.Enqueue(Convert.ToByte(h.Substring(i, 2), 16));
+                    pending.Enqueue(Convert.ToByte(h.Substring(i, 2), 16));
                 }
             }
         }
@@ -195,7 +214,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         {
             if(o == 0x00 || o == 0x18)
             {
-                Listen();
+                Hear();
             }
             if(o == 0x00)
             {
@@ -233,6 +252,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 }
                 return;
             }
+            Drop();
             TxBytes++;
             tx.Add((byte)v);
             // Resynchronise on the 5A A5 FF prefix; drop anything before it.
@@ -281,7 +301,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 }
                 foreach(var b in ReadExact(n))
                 {
-                    rx.Enqueue(b);
+                    pending.Enqueue(b);
                 }
             }
             catch(Exception e)
@@ -345,6 +365,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly IMachine machine;
         private Dictionary<long, uint> regs;
         private Queue<byte> rx;
+        private Queue<byte> pending;
         private List<byte> tx;
         private TcpListener listener;
         private TcpClient client;

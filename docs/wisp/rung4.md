@@ -23,6 +23,7 @@ Tags as elsewhere: **[C]** confirmed (code, log, static analysis), **[I]** infer
   - *Update, W23 (2026-11-08, emulation only):* the reviewed `native-0` (`5d373fd8…`, commit `8374f9a`) is pinned and committed, `boot-watch` speaks its case-UART status, and W24 has a [runbook](#w24-runbook-first-native-flash-left).
   - *Update, W24 (2026-11-08, hardware):* native-0 was written and verified on the left temple, and the loader answered after it, but on silicon the image reboots about every 10.4 s (Wisp Boot's watchdog), never answers on the case UART and never advertises. The PMIC came back at its reset values after its own watchdog fired. W24 stopped at step 9. Analysis, the next images and the diagnostics they carry: [W24 result and analysis](#w24-result-and-analysis).
   - *Update, W24b prepared (2026-11-08, emulation only):* Wisp Boot carries the diagnostics (D1 record, reset cause, the boot report on the case UART, the PMIC watchdog kick at every boot); `stage-0`, a bare-metal app of about 5 KiB, is built and committed, and pinned after its independent review (W24b-0, 2026-11-09); Renode now runs the LFRC at 900 Hz, models `RSTGEN.STAT` and the PMIC's power-on values, and fails native cases on unreviewed writes to unmodelled power, clock and trim registers. The next hardware step: [W24b](#w24b-stage-0-the-next-hardware-step).
+  - *Update, W25 prepared (2026-11-09, emulation only):* Jan's direction: one MVP image instead of more micro-steps. **native-1** (observe-only Wisp Boot with every W24c fix, the full app with no console, timer-fed watchdog, D3–D5 diagnostics, half-duplex case UART, BLE, and a boot screen on the panel through gated rail switches) is built and committed but **not pinned**; Renode now models the one-wire case link, MSPICFG's resets and the buck's status, and native-0 and stage-0 fail there as on silicon. A Mac session tool (G14) exists. See [W25: native-1 (MVP)](#w25-native-1-mvp), with its runbook. BLE install of the next image (5) is a follow-up.
   - *Update, W24b (2026-11-09, hardware, then analysis on t3-worker):* stage-0 installed (`19b3e002`) and recovered (`d9864941`); it looped every ≈10.68 s and boot-watch got nothing. The silence is the tool's: the relay holds an unanswered request until the temple's next frame, and the one report request per boot landed in the loader's window. Fixed host-side (the report is aimed at Wisp Boot's window); a second read path added (`peek` of the record in a held loader); the loop analysed (most likely Wisp Boot hangs after its window, in its NOR phase). See [W24b results and the fix](#w24b-results-and-the-fix), with a rerun runbook for the same stage-0.
 
 ## The short answer
@@ -298,7 +299,7 @@ Jan's standing permission of 2026-11-07 covers starting RO runs. Every **W** ste
 | W23 | **Done 2026-11-08** (emulation only, [Tooling status](#tooling-status)). Independent review of `native-0` and `install-wisp`; pin the image, ELF and map hashes. Pinned: `5d373fd8…` from commit `8374f9a` | — | W22 |
 | W24 | **Ran 2026-11-08, stopped at step 9** ([analysis](#w24-result-and-analysis)). **First native flash, left** ([runbook](#w24-runbook-first-native-flash-left)). `loader-hello` and `pmic_read` → `install-wisp native-0` → `boot-watch --protocol wisp` (`CONT`, then the case-UART status and the `/firmware/*` inventory) → **a BLE advertising scan from the Mac** (`ble-scan`). **Then, the first thing after the first native boot: a case reset and `loader-hello` (stop if it fails), `pmic_read` (diff against W21), and `recover` back to stock (about 72 min).** Stock boots and the Even app works. Exit item 4, from a running native image. *Changed at W23:* no `HELLO` or session from the Mac here. There is no Mac session tool yet (G14), and observe-only Wisp Boot's `confirm()` does nothing, so a `HELLO` would only exercise the call path; that moves to W25, at no safety cost | **W** | W19 (R4-1, R4-2, R4-4, R4-7), W21, W23 |
 | W24b | **Next, prepared 2026-11-08 (emulation only).** `stage-0` on the left temple ([runbook](#w24b-stage-0-the-next-hardware-step)): does the hand-off reach code at `0x448000`, do UART2 and the PMIC kick work with our own register sequences, how fast is the LFRC really, and does SRAM keep the diagnostics record across resets. W24b-0 (independent review, then pin): **done 2026-11-09** | **W** (MRAM via the case, twice: install and `recover`) | review + pin (W24b-0, done), G1 |
-| W25 | `install-wisp native-1`: the first NOR writes by Wisp Boot, and the JBD test pattern with the gated BUCK1. The first `HELLO` and session from the Mac (G14). 10 confirmed boots, the record read back through the status, a `HELLO` after every session, the PMIC diff at every session. Then F5 (a dead image, then `recover`). **Checkpoint 4a logged.** Gate: W20's answer on missing `/firmware/*`, and W24's inventory matching the pinned bundle | **W** | W24 |
+| W25 | **Built in emulation 2026-11-09, not pinned** ([W25](#w25-native-1-mvp)). `install-wisp native-1` over whatever the temple runs: the W24c fixes, the JBD test pattern through the gated rails, the first `HELLO` and session from the Mac (G14). Changed from the plan: Wisp Boot stays observe-only (no NOR write before the fixed read path has run once on silicon), and the temple stays native afterwards (Jan, 2026-11-09). **Checkpoint 4a logged** when its runbook passes | **W** | review + pin, Jan's go for the panel rails' task writes |
 | W26 | Build `native-2`: storage HAL (only `wisp/`), update service (receive, rule-3 checks on the glasses, an allowlist of Wisp Boot hashes and stock, stage, the flag through Wisp Boot's services, reset), file-put, authentication, Wisp Boot's PMIC kick, flag clear and image-keyed record, the loader's `flag-clear` program. Rung 3 reruns with the new cases. A native_sim end-to-end test of the update service; a Mac sender | — | G16–G24, G26, R4-3, R4-6 |
 | W27 | `install-wisp native-2` → put `rescue.bin` over BLE → Wisp Boot's check reported OK and equal to the pin. **`flag-clear` proven on hardware**, with the flag already clear and stock staged | **W** (MRAM via the case, NOR via Wisp, the clear flag record) | W26 |
 | W28 | Over BLE through the update service: Wisp → Wisp (a version bump: staging, flag, Even bootloader install, Wisp Boot clears the flag); then Wisp → pure stock 2.4.0.24 main; stock boots and the Even app works (**exit item 2**). Then `install-wisp native-2` again | **W** | W27 |
@@ -702,6 +703,133 @@ Written on t3-worker on 2026-11-09. **No hardware was touched**: disassembly of 
 
 **Plan.** These three are fixed in Wisp Boot and stage-0, and the Renode harness learns half-duplex and the MSPI reset bits, so the old image fails there (separate PR; the new image is called stage-0b). Then stage-0b gets an independent review, pinning and the W24b-style cycle. The RAM probes designed for W24c (`uart_probe`: one loader-format frame in each pad mode; `sram_probe`: patterns with and without a cache clean across a case reset) are **deferred**. Run them only if stage-0b still stays silent.
 
+### W25: native-1 (MVP)
+
+Written on t3-worker on 2026-11-09, **emulation and static analysis only; no hardware was touched**. Jan's direction the same day: stop micro-stepping, build one image that does the job (the left temple is ours during development, case recovery is proven, no return to stock after each test). native-1 is that image. **It is not pinned**: an independent review and the pin are the next step, and `install-wisp` refuses it until then (`tests/test_native1.py` checks both).
+
+**In one paragraph.** native-1 is the full app behind the observe-only Wisp Boot, with every silicon bug W24c found fixed in both, the W24 fix plan carried out, and the diagnostics built in so that a failure names its step. On silicon it should (1) boot steadily through the Even bootloader and Wisp Boot into Zephyr, (2) answer IDENT, READ and the boot report on the case UART, (3) advertise and take a session from the Mac (`HELLO`, `PING`, `TIME_SYNC`, with the new Mac session tool), and (4) draw a test pattern and "Wisp" on the JBD4010 for 60 s after each boot. (5), installing its successor over BLE, is not in it: see [Follow-up: native-2's update path](#follow-up-native-2s-update-path).
+
+#### What is in it
+
+**Wisp Boot** (observe-only, `-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF`; rule 12 below). Its NOR, littlefs and flag write paths are still compiled out: the first NOR access with the fixed MSPI set-up is a read, and its known answer (the staging CRC word, the `/firmware` inventory) is in the status block.
+
+- **Half-duplex case UART** (W24c bug 1, `stage/boot_uart.c`): pad 42 parked (GPIO function 3, output off) and pad 44 on UART2RX at rest; a reply waits about 6 ms (the loader's 6-tick wait), parks pad 44, puts pad 42 on UART2TX, sends, waits for the last stop bit (bounded), and turns back. Stock's `0x57B292` and the loader's `direction()` (`0x435220`, called around every send at `0x4350BC`/`0x435108`) do the same.
+- **MSPICFG read-modify-write** (W24c bug 2, `stage/boot_nor.c`): no longer written 0; PRSTN/IPRSTN (bits 31/30) are set, the rest kept as the bootloader left it. `nor_read` feeds the watchdog per 4 KiB block, so littlefs's loops cannot starve it. Audit of every other whole-register write in Wisp Boot: none of them holds an active-low reset (UART2 `CR`/`IBRD`/`FBRD`/`LCRH`, IOM7's set-up, MSPI1 `DEV0CFG`/`PADOUTEN`/`INTEN`/`CQCFG`/`DMACFG`/`DEV0XIP` as before).
+- **D-cache** (W24c bug 3): the record is cleaned (`DCCMVAC`, 32-byte lines) at every breadcrumb (`wisp_diag_seal`) and the status block at every seal, so a watchdog reset cannot drop them.
+- **Hand-off** (W24 fix plan 3, `stage/boot_hw.c hw_jump`): SysTick off, `ICSR` PendSV/SysTick un-pended, `MSPLIM`/`PSPLIM` 0, MSP = PSP = the app's SP, `CONTROL` 0 (Thread mode on MSP), then `cpsie i` and the jump.
+- The PMIC kick at every boot, the record, the boot-report window: as in stage-0 (W24b).
+
+**The app** (`images/native-1/`, a hardware image; `scripts/build_native.sh native-1`):
+
+- **SoC start-up as stock's** (`src/soc/wisp_soc_init.c`, Zephyr patch 0003 makes the fork's hook weak). The static comparison (below) found that native-0's start-up makes the same three HAL calls as stock 2.4.0.24 and the bootloader, in the same order, with the same values. So they stay; what stock never does goes (`SCB.CCR.LOB`, the `MCUCTRL.SCRATCH0` clear), `RSTGEN.STAT` is captured before `low_power_init` clears `BORSTAT` (as stock reads it first), and a breadcrumb follows each call.
+- **No console** (fix plan 3): UART1 disabled, no console, no log, no printk; the hardware-image gate (`cmake/hwimage.cmake`) and `check_native.py` refuse any of them.
+- **Watchdogs** (fix plan 3): the Apollo WDT is fed from a `k_timer` callback (it cannot block or log) while the PMIC thread has run within 5 s, and once more before each PMIC transfer; the PMIC thread arms the nPM1300 watchdog with stock's writes and kicks it every second, and never logs.
+- **Diagnostics** (D3–D5, `src/diag/`): breadcrumbs (`app-soc` … `app-idle`, [case-uart.md](case-uart.md#native-1s-breadcrumbs-stage-codes-0x80-on)) in Wisp Boot's record, cleaned from the D-cache; a fatal-error handler that records the fault (PC, LR, xPSR, CFSR, HFSR, BFAR, MMFAR) and resets by SWPOR at once; the STIMER liveness check at the end of `PRE_KERNEL_2`, with a polled fallback loop that keeps the temple observable on the case UART if the timer is dead.
+- **Case UART**: half duplex as Wisp Boot (pinctrl default parks pad 42; `src/case/wisp_case.c` turns the wire round per reply); BOOTREP and READ block 4 (the record) from the app; status bytes 42/43 carry the display's state.
+- **BLE**: as native-0 (the patched EM9305 driver, rule 8's gates, the Wisp GATT service and wisp-core session; `confirm()` after `HELLO`, a no-op count in observe-only Wisp Boot).
+- **The panel** (G11's pattern): the JBD4010 with stock's pins and order, powered by `src/drivers/npm1300_switch.c` instead of Zephyr's nPM13xx drivers (still off, G12). It writes only the rails' task registers, and only after reading back that the rail is configured as stock left it (W21): BUCK1 `VOUT_NORM` 0x01 and `SW_CTRL` 0x03, LDSW2 `LDOSEL` 0x00. After a PMIC power cycle (W24) those read their power-on values, the gate refuses, and the panel stays off (display state 3, "refused"). The boot screen (`src/display/boot_screen.c`) is composed by wisp-core's display engine (layers, fills, and its text path with a built-in 5×7 "Wisp" font, `scripts/gen_boot_font.py`): a 4-pixel frame at the edges, "Wisp" centred at y 180–259, 16 grey bands at y 380–439. It stays on 60 s, then the panel is powered down in stock's order.
+
+**Every PMIC write native-1 can make** (Renode checks the list on every write; `images/pmic-baseline-w21.json`):
+
+| Writer | Bytes | What | Status |
+| --- | --- | --- | --- |
+| Wisp Boot | `07 04 01` | watchdog kick, once per boot | as stage-0 (pinned, W24b-0) |
+| app | `07 05 0A`, `07 08 00 3C 00`, `07 03 01`, `07 00 01`, then `07 04 01` every second | arm the watchdog with stock's values, kick | as native-0 |
+| app | `05 00 01` | one VBAT conversion per battery read | as native-0 |
+| app | `08 02 01`, `04 00 01` (on); `04 01 01`, `08 03 01` (off) | LDSW2 and BUCK1 on and off for the panel, after the gate's reads | **new: needs Jan's go.** Task registers, the same ones stock uses for the panel; no configuration register is written |
+
+**Left out on purpose:** the update service and storage HAL ((5), below), the fallback Wisp Boot (NOR writes, `boot.rec`, rescue), G10b (the case app's `0x13` poll, so a native-1 temple in a case running its own app is still reset about every 3 minutes), sensors in `HELLO`'s caps.
+
+#### The start-up writes, stock against native-0/native-1
+
+The 33 writes W24b's strict record listed (16 registers), from a static comparison of the pinned native-0 ELF with stock 2.4.0.24 and the patched bootloader (disassembled from `.wisp-cache`, nothing of Even's committed). Stock's start-up: `main` (`0x578606`) waits 200 ms, then its first init-table entry (`0x5781BC` → `0x4E9394`) calls `low_power_init` (`0x4951D0`), `SIMOBUCK_INIT` (`0x495588`) and `temp_update(25.0)` (`0x495710`); the bootloader makes the same calls at `0x41FA50`. [C] unless marked.
+
+| Register (native-0 PC) | Stock 2.4.0.24 | Verdict |
+| --- | --- | --- |
+| `RSTGEN.STAT` BORSTAT clear, ERR027 (`0x453A88`) | same, `0x4951EC`; bootloader `0x41C4D0` | keep; native-1 reads STAT first |
+| `MCUCTRL.DBGCTRL` bits 3:0 (`0x453AA6`/`AB2`) | same, `0x495212`/`21A` | keep |
+| `MCUCTRL.WICCONTROL` \|= 1 (`0x453AD0`) | same, `0x495230` | keep |
+| `MCUCTRL.FORCEAXICLKEN`, `PWRCTRL.SSRAMRETCFG`, `MMSOVERRIDE` (memory and SRAM config, `0x453C98`/`C9E`) | same calls `0x4952C4`/`CC`, same defaults (ITCM 256K/DTCM 512K, NVM0+1; 3 MB SRAM on and retained) | keep |
+| `CLKGEN.MISC` = (MISC \| 0xFBBFC0) & ~0x4000 (`0x453CB0`) | same mask, `0x4952D4`–`E4` | keep |
+| `CLKGEN.CLKCTRL` = 0 (`0x453CB6`) | same, `0x4952EC` | keep |
+| `MCUCTRL.AUDADCPWRDLY` AUDADCPWR1 = 4 (`0x453CC8`) | same, `0x4952FA` | keep |
+| `MCUCTRL.PWRSW0` bit 30, `PWRSW1` bits 16 and 12 (`0x453DD6`/`DE2`/`DEE`) | same, `0x4954A6`/`B2`/`BA` | keep |
+| `MCUCTRL.VRCTRL` ×10 (0xF01EF), `SIMOBUCK15` bit 31, `SIMOBUCK0` \|= 0xF, `PWRCTRL.VRCTRL` = 1 (`0x45384C`–`0x453908`) | bit for bit the same, `0x4954FE`–`0x4955D2` (bootloader `0x41C7E8`–`0x41C8B6`) | same as stock, and **skipped on silicon**: the bootloader leaves the buck on, so `SIMOBUCK_INIT` returns at its first check (`VRSTATUS.SIMOBUCKST`), in stock (`0x4955A0`) as in native-1 [I, strong]. Renode now models that check |
+| `CLKGEN.MISC` FRCHFRC, repeatedly (`hfrc_force_on`, from clock requests) | the same mechanism in stock's HAL [I] | keep |
+| `SCB.CCR.LOB` (`0x44AEAE`) | not done [I] | **dropped** in native-1 |
+| `MCUCTRL.SCRATCH0` = 0, only with the 0xA86 magic (`0x44AECC`) | never written | **dropped** in native-1 |
+
+What stays silicon-only: the SPOT manager's trim path (`am_hal_spotmgr_init`, selected by `CHIPREV` and the INFO1 trim revision; Renode reads both as 0 and never takes it). Stock runs the same call with its own, older HAL, so native-1 may write different trim values for the same trim revision [?]. The breadcrumbs `app-soc` → `app-soc-lp` bracket exactly that call. Stock also sets the clock manager's board info (`0x4E93C0`: no high-speed crystal, the 32 kHz crystal, a 12 MHz external reference); native-1 keeps the HAL's default, and nothing requests the high-speed crystal [I].
+
+**In Renode** these writes are now on the strict allowlist (`tests/boot/strict_allowlist.json`) with their exact values and stock's addresses, one entry per register and value, and `WispPwrctrl` answers `VRSTATUS.SIMOBUCKST` from `VRCTRL.SIMOBUCKEN`, so the SIMO buck block disappears from the record as on silicon.
+
+#### Renode now models
+
+- **The one-wire case link** (`WispCaseLink`): a byte goes out only while pad 42 is UART2TX; the case's bytes are heard only while pad 44 is UART2RX and pad 42 lets go (they wait for the temple's next look at its receiver, and are lost if it transmits again first or never listens). native-0 and stage-0 now fail here as on silicon.
+- **MSPICFG's resets** (`WispMspiNor`): a transfer started while PRSTN or IPRSTN is 0 never completes. The register comes up released (hal_ambiq never writes those bits, and the bootloader and stock use the NOR).
+- **The buck's status** (`WispPwrctrl`), above.
+- **The nPM1300 keeps its registers across Apollo resets** when a case asks (`WispPmicWdt KeepRegisters`, preloaded with W21's snapshot): the panel gate reads stock's configuration.
+- **The panel** (`WispMspiPanel` on MSPI0 in the native-1 case): the frame the app sent is checked pixel by pixel against the pattern and the font.
+
+#### Evidence (t3-worker, 2026-11-09, emulation)
+
+EVIDENCE_TABLE
+
+#### What stays unproven until silicon
+
+- Everything W24c could only read statically: that the half-duplex turn-round is what the case expects (its timing too), that MSPI1 works with the resets released, that the cleaned record survives a watchdog reset or an SWPOR.
+- The SPOT manager's trim path and the rest of the HAL start-up on this chip revision (Renode never runs it); the start-up is stock's calls, but not stock's HAL.
+- The EM9305 under Zephyr's HCI driver (W11's risk): Renode has no EM9305, so every Renode boot ends in `bt-failed`; BLE is proven only on native_sim with a virtual controller. `bt-failed` on silicon is a finding, not a stop.
+- The panel: the JBD4010 sequence is stock's as read statically; the voltages behind the codes are [I]. The gate only proves that the configuration is stock's.
+- The Mac session tool against a real temple (CoreBluetooth's cached GATT database, MTU).
+
+#### W25 runbook: native-1, left
+
+**Before any step:** the independent review of native-1 and its pin (as W23 and W24b-0: rebuild from the reviewed commit, pin image, stripped ELF and map in `pins.WISP_IMAGES["native-1"]` and its Wisp Boot slot in `WISP_BOOT_PASSED`), and Jan's go for the panel rails' four task writes (above). The temple may run anything the loader can reach (stock, stage-0, native-0): `install-wisp` writes over whatever is there (it reads the tail of the last 16-byte unit back and keeps it), and nothing in it assumes stock (`tests/test_native1.py` installs native-1 over native-0 and over stage-0).
+
+**One step writes MRAM: step 5. It needs Jan's go naming the image hash** (rule 4). `recover` (step 13) is conditional and needs its own go. Everything else is read-only plus the usual PMIC kick, and every session ends with `CONT`, which boots native-1 again.
+
+Setup as W24b (rule 6, case session; `git pull`; `pnpm nx run wisp-ota:build`; `w18 …` = `caffeinate -i uv run --with pyserial==3.5 python -I apps/wisp-recovery/w18.py …`), plus `pnpm nx run wisp-sdk-ts:build` for the session tool. `N1=apps/wisp-recovery/wisp_w18/data/native-1`. Every case command must end with relay exit status 6, the route restored and the case back on 1.2.57.
+
+| # | Command | Expect | Stop if |
+| --- | --- | --- | --- |
+| 1 | `w18 loader-hello --side left` | CRC `63cd8dda` twice, flag `0xffffffff`, feed status 0 | anything else (§8) |
+| 2 | `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json` | exit 0 | exit 3: the PMIC is not as stock configured it (a W24-style power cycle): **stop**, send the report; with Jan's go, `recover` (stock reprograms the PMIC), then start again |
+| 3 | `w18 app-check --side left` | the installed image named (`stock 2.4.0.24`, `Wisp stage-0`, `Wisp native-0` MATCH, or no match: all fine), flag clear | the flag not clear |
+| 4 | `uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py ble-scan --side left --seconds 30` | a baseline | — (informational) |
+| 5 | **Jan's go for native-1's hash**, then `w18 install-wisp --side left --image $N1/native-1.bin --elf $N1/zephyr.elf --map $N1/zephyr.map --expect <its first 12 hex digits> --battery <N>` (N: the Even app's percentage if stock runs, else the last Wisp status's `<mV>mV`, at least 3900) | `install-wisp: native-1 …`; the loader-hello gate; `vectors zeroed`; body written and read back (about 5 min for 245 KB); `OK: Wisp native-1 written and verified (<crc>)`; boot released. **Write down the CRC**: it covers 8 bytes past the image that keep what was installed before | any `REFUSED` (do not work around it); a stop during the write (the vectors are zero: the temple boots nothing; resume with `--resume-at` or another install, with a new go) |
+| 6 | `w18 boot-watch --side left --protocol wisp --watch-s 70 --interval-s 0.1` (at once after 5) | per boot a `boot report (from wisp-boot)`; then `IDENT: Wisp … kind 1`, stage `bt-up`; no `HELO` after `CONT`; app status: flags `pmic-wdt`, `boot-services`, `boot-status`, `boot-observe`, PMIC kicks rising, errors 0, **display `on`**; Wisp Boot v2: NOR `0x3925c2` result 0 (**the first NOR read with MSPICFG's resets kept**), mount 0, staging id and the four `/firmware` files as on W24, `PMIC kick 0x0`. **Write down the battery mV.** If the lens can be seen: a frame at the edge, "Wisp" in the middle, 16 grey bands below, for 60 s | the NOR stop of W24 step 6 (a NOR id other than MX, or a failed mount: stock would format it after a `recover`); otherwise see "Reading step 6" |
+| 7 | Take the temple out of the case (within 3 minutes of step 6: the case app resets a temple that does not answer its `0x13` poll, G10b) and keep it next to the Mac | — | the temple gets warm |
+| 8 | `uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py ble-scan --side left --seconds 30` | `OK: 1 Wisp advertiser(s)` (name `Wisp`, service `cf099bf1-…`) | — (none: a finding, go to 10) |
+| 9 | `node apps/wisp-fw/tests/ble/session.mts --bridge "uv run --with bleak==0.22.3 python -I apps/wisp-fw/tests/ble/bleak_bridge.py"`, twice | JSON with `"ok": true`: `connect` (MTU), `hello` (`wisp-native`, protocol 0.2), `time-sync`, `idle 12 s on keepalive PINGs` (the session outlives its 10 s timeout on PINGs alone), `bye` | — (a failure is a finding: keep the JSON) |
+| 10 | Seat the temple, then `w18 boot-watch --side left --protocol wisp --watch-s 30 --interval-s 0.1` | its relay start resets the temple: the first report says `reset cause … external`, and, if the record survived the reset (the D-cache clean), `previous boot's last stage app-idle` or `app-session` with its time; then IDENT kind 1 | — |
+| 11 | `w18 loader-hello --side left` | as step 1 | as step 1; a CRC other than `63cd8dda`: stop, no further reset |
+| 12 | `w18 pmic-read --side left --compare …W21…` and `w18 app-check --side left` | exit 0; `Wisp native-1: … MATCH`, flag clear. **The temple stays on native-1** (11's `CONT` boots it); the health check is read-only | exit 3: stop, send the report |
+| 13 | **Only if** a stop above calls for it, or Jan wants stock back: **Jan's go for `recover`**, then `w18 recover --side left --image .wisp-cache/stock/g2-2.4.0.24.bin` | as W24 step 11 (about 72 min, `d9864941`) | as W24 step 11 |
+
+Then a hardware-log row "rung 4 W25 (native-1, checkpoint 4a)" with the reports of 1–12, the install CRC, the boot reports of 6 and 10, the session JSONs and the battery mV.
+
+**Reading step 6** (and 10): every boot's report names the previous boot's last breadcrumb ([case-uart.md](case-uart.md#native-1s-breadcrumbs-stage-codes-0x80-on)).
+
+| What boot-watch shows | Means | Next |
+| --- | --- | --- |
+| IDENT kind 1 `bt-up`, display `on`, no `HELO` | (1)–(4) on silicon, as far as the case can see | 7–12 |
+| IDENT kind 1 `bt-failed` | the app runs; the EM9305 did not come up under Zephyr (W11's risk) | a finding; skip 8–9; the HCI bring-up is the next work |
+| display `refused` | the rail gate read a PMIC configuration that is not stock's | step 12's `pmic-read` says which; no rail was switched |
+| display `failed` (error in byte 43) | the panel's power-up or init failed after the rails | a finding; the error and the panel sequence are the next work |
+| `HELO` loop, reports with `prev stage app-…` and cause `watchdog` | the app stopped there (a hang): the stage names the step | fix that step |
+| reports with `prev-fault` (cause `sw-por`, stage `app-fault`) | the fatal-error handler ran: PC, LR and CFSR in the report | `arm-none-eabi-addr2line -e $N1/zephyr.elf <pc>` |
+| `prev stage app-stimer-dead`, or IDENT answers but nothing else moves | the STIMER does not count; the fallback loop answers | the clock set-up |
+| `prev stage app-wdt-starved` | the PMIC thread stopped running for 5 s; the feed stopped on purpose | the scheduler or I2C7 |
+| `prev stage boot-…` (`boot-window-end` … `boot-decided`), cause `watchdog` | Wisp Boot hung in its NOR phase (W24b's A) despite the fixes | NOR breadcrumbs per call; or skip the NOR phase |
+| no report at all, no IDENT | Wisp Boot's window and the app are both silent: the half-duplex turn-round is not what the case expects, or UART2 TX fails | the deferred W24c `uart_probe` |
+
+**Stop conditions:** §8's list, W24's (`loader-hello` twice without `HELO` after a reseat, a bootloader CRC other than `63cd8dda`, a flag not clear, `pmic-read` exit 3, an `install-wisp` refusal or stop, a relay exit status other than 6, the case not back on 1.2.57, the temple warm), and from native-1 on: the panel showing anything but the boot screen, or staying lit longer than about 70 s after a boot.
+
+#### Follow-up: native-2's update path
+
+(5) is not in native-1. What it needs, none of which exists yet: the storage HAL (littlefs on MSPI1 in Zephyr, writes only under `wisp/`, G19), the update service with its rule-3 checks and allowlist (G20) and authentication (G22, R4-6), the flag through Wisp Boot's single function in the fallback build (with its full rung-3 run on the patched bootloader, still due), Wisp Boot's flag clear and image-keyed record (G17, G24), `flag-clear` proven on the temple (G26), and the flag trap closed before the first BLE install (§3). Each of these writes the NOR or the flag on a temple whose NOR path has not yet run once on silicon with the MSPICFG fix. The order that keeps every write recoverable: native-1 on silicon first (the NOR read path's known answer), then native-2 with the storage HAL and the update service in emulation (a native_sim end-to-end test and a Renode case with the real bootloader's install), then W27. Until then every image goes on through `install-wisp` (about 5 min for native-1's 245 KB).
+
 ### Gaps
 
 Size: **S** < 1 day, **M** 1–3 days, **L** > 3 days, for one thread.
@@ -718,12 +846,12 @@ Size: **S** < 1 day, **M** 1–3 days, **L** > 3 days, for one thread.
 | G8 | **Built (W22).** `confirm()` through the services table after `HELLO` | wisp-fw | S | yes: a rung-3 `good`-style case | W24 |
 | G9 | **Built (W22).** The observe-only Wisp Boot build (writes compiled out, decision forced to `run-app`), the RAM status block with the `/firmware/*` inventory, and its own rung-3 suite | wisp-fw | M | yes | W24 |
 | G10 | **Firmware side and spec built (W22, [case-uart.md](case-uart.md)); the `0x13` reply is G10b.** Case-UART status: a UART2 node; answers to the `24` version query and to a Wisp status query; a reset command (also over BLE); the host side in step 0 and `boot-watch` | wisp-fw + wisp-recovery | M | yes: `WispCaseLink` in Renode, fake case | W24 |
-| G11 | **No default panel, JBD4010 named, panel off: built (W22); the pattern is native-1.** No default panel; JBD4010 for hardware 5 (or a runtime choice from the ADC strap); BUCK1's code gated against W21's snapshot; the test pattern (`native-1`) | wisp-fw | S | yes: `drivers-test` JBD | W24 (no default), W25 (pattern) |
+| G11 | **No default panel, JBD4010 named, panel off: built (W22); the pattern: built (W25, native-1's boot screen through the gated rails).** No default panel; JBD4010 for hardware 5 (or a runtime choice from the ADC strap); BUCK1's code gated against W21's snapshot; the test pattern (`native-1`) | wisp-fw | S | yes: `drivers-test` JBD | W24 (no default), W25 (pattern) |
 | G12 | **Built (W22) with W21's snapshot: native-0 writes no PMIC configuration (checked against `images/pmic-baseline-w21.json` in Renode); the development DTS still differs (listed in the W22 status).** PMIC values checked against W21's snapshot over every register the Zephyr MFD, charger and regulator drivers write; a review that the app never enters ship or hibernate mode and never changes charger limits from stock's | wisp-fw | S–M | partly | W24 |
 | G13 | **Built (W22).** A no-MRAM-write gate over `[0x448000, end)`, post-link like `check_rule8.py`: no `am_hal_mram_*`, `nv_program_*`, `0x0200FF20` or `0x12344321`, and the MRAM flash driver off | wisp-fw | S | yes (negative build) | W24 |
-| G14 | A Mac-side session tool (the TS SDK's `Transport` over a Node BLE binding, or a bleak bridge). Test from the Mac, not iOS, so that iOS's cached stock GATT database for that address doesn't interfere. *Moved from W24 to W25 at W23: W24 only scans for adverts (`w18.py ble-scan`)* | wisp-sdk-ts / tools | S–M | yes: native_sim + Bumble | W25 |
+| G14 | **Built (W25).** A Mac-side session tool: `apps/wisp-fw/tests/ble/session.mts` runs the TS SDK (HELLO, TIME_SYNC, idle on PINGs past the session timeout, BYE) over `bleak_bridge.py` (the Mac's radio, bleak) or the Bumble bridge; `wisp-fw:test` runs it against the native_sim firmware. Test from the Mac, not iOS, so that iOS's cached stock GATT database for that address doesn't interfere | wisp-sdk-ts / tools | S–M | yes: native_sim + Bumble | W25 |
 | G15 | **Built (W22).** A `w18-test` case: `install-wisp` into the stock app region, `CONT`, then Wisp Boot and the app booting behind the real patched bootloader, PMIC watchdog armed. Note: Renode resets every register on reset, so it cannot catch state that persists on silicon; W21 and W24 do | wisp-fw (Renode) | S–M | yes | W24 |
-| G16 | **First half built (W24b, emulation only):** Wisp Boot kicks once at every boot (`stage/boot_pmic.c`, its own polled IOM7 write with the bootloader's register values; rung 3 proves it is its only PMIC write). Still open: Wisp Boot kicks the nPM1300 watchdog during long work, the rescue copy above all (a PIO I2C7 write as in `pmic_kick.h`); rung-3 cases with `WispPmicWdt` armed | wisp-fw | M | yes | W27, W29, and any BLE install |
+| G16 | **First half built (W24b, emulation only; native-1 keeps it):** Wisp Boot kicks once at every boot (`stage/boot_pmic.c`, its own polled IOM7 write with the bootloader's register values; rung 3 proves it is its only PMIC write). Still open: Wisp Boot kicks the nPM1300 watchdog during long work, the rescue copy above all (a PIO I2C7 write as in `pmic_kick.h`); rung-3 cases with `WispPmicWdt` armed | wisp-fw | M | yes | W27, W29, and any BLE install |
 | G17 | Wisp Boot clears the flag after a new install, with the documented clear record through the same single function (R4-3); rung-3 cases including power cuts around it | wisp-fw | S | yes | W28 |
 | G18 | **Not needed: W21 read the MX record on the left temple (not GD).** GD25LE256H support in Wisp Boot's NOR driver, and a NOR model answering `C8 60 19`. **Only if W21 finds GD.** Same command modes as stock: no QPI/OPI, no volatile-configuration writes | wisp-fw | S–M | yes | W24 |
 | G19 | Storage HAL: littlefs on MSPI1 in Zephyr, sharing Wisp Boot's geometry and driver, writes **only under `wisp/`**, stock's NOR command modes only, coexisting with the Even bootloader's `boot_count` writes. A Renode NOR model whose mode persists across an Apollo reset | wisp-fw | M–L | yes: Renode NOR model | W26 |

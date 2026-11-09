@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_install_wisp import PinnedWisp, run  # noqa: E402
+from test_rung4_reads import elf_symbols  # noqa: E402
 from test_session_guard import Case  # noqa: E402
 from test_w18 import temple  # noqa: E402
 from wisp_w18 import image, native, pins  # noqa: E402
@@ -50,6 +51,13 @@ class Native1(unittest.TestCase):
             facts = native.resolve(f["image"], f["elf"], f["map"], image.sha(f["image"])[:12])
         self.assertEqual(facts["bytes"], len(f["image"]))
         self.assertGreaterEqual(facts["elf_segments_checked"], 1)
+
+    def test_peek_finds_native1s_record_and_status_block(self):
+        """`peek`'s wisp-record and wisp-boot-status (pinned from stage-0's Wisp Boot) are where
+        native-1's Wisp Boot keeps them too, so the W25 runbook can peek them."""
+        symbols = elf_symbols(DIR / "wisp_boot.elf")
+        self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (symbols["wisp_diag_slot"][0], 64))
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], symbols["st"])
 
     def test_installs_over_a_temple_running_another_wisp_image(self):
         f = files()

@@ -1532,8 +1532,8 @@ class Harness:
         fails, t0 = [], time.time()
         try:
             self.native_probes(run, boot_elf)
-            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
-            run.step(12)
+            # 0.1 s steps: a long RunFor through the patched loader's boot window can stall Renode.
+            run.run_until(lambda: False, 12, step=0.1)
             answered = 0
             for req in (case_uart.ident_request(), case_uart.bootrep_request(), case_uart.ident_request()):
                 try:
