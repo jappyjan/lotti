@@ -63,6 +63,73 @@ class RecordDecoding(unittest.TestCase):
         self.assertIn("normal", links.RELAY_EXIT_STATUS[6])
 
 
+class _ExitPort:
+    """Answers G2EX with one prepared G2RS."""
+
+    def __init__(self, reply: bytes):
+        self.reply, self.written = bytearray(reply), bytearray()
+
+    def write(self, data):
+        self.written += data
+
+    def flush(self):
+        pass
+
+    def read(self, n):
+        out = bytes(self.reply[:n])
+        del self.reply[:n]
+        return out
+
+
+def g2rs(status=6, uart_errors=0, route=None, tail_len=0, bad_sum=False):
+    route = case_pins.ROUTES["left"] if route is None else route
+    head = bytearray(b"G2RS\x01" + bytes((2, route, links.pins.RELAY_SEQUENCE, status, tail_len, uart_errors, 0)))
+    body = bytes(head) + bytes(tail_len)
+    return body + bytes(((sum(body) + bad_sum) & 255,))
+
+
+class ExitRelay(unittest.TestCase):
+    """G2EX/G2RS: byte 10 is the bridge's UART error flags (W24b rerun: a valid exit with flags 2 was
+    rejected as 'invalid restoration framing')."""
+
+    def exit(self, reply):
+        events = []
+        link = links.RelayPortLink(_ExitPort(reply), "left", log=events.append)
+        return link, events
+
+    def test_uart_error_flags_are_accepted_and_logged(self):
+        link, events = self.exit(g2rs(uart_errors=2))
+        self.assertEqual(link._exit_relay(), 6)
+        self.assertEqual(link.port.written, b"G2EX")
+        exit_event = next(e for e in events if "relay_exit_status" in e)
+        self.assertEqual(exit_event["relay_exit_uart_errors"], 2)
+        self.assertEqual(exit_event["relay_exit_raw"], g2rs(uart_errors=2).hex())
+
+    def test_clean_exit(self):
+        link, events = self.exit(g2rs())
+        self.assertEqual(link._exit_relay(), 6)
+        self.assertEqual(events[-1]["relay_exit_uart_errors"], 0)
+
+    def test_bad_checksum_names_the_bytes(self):
+        reply = g2rs(uart_errors=2, bad_sum=True)
+        link, events = self.exit(reply)
+        with self.assertRaises(links.LinkError) as caught:
+            link._exit_relay()
+        self.assertIn(reply.hex(), str(caught.exception))
+        self.assertEqual(events[-1]["relay_exit_raw"], reply.hex())
+
+    def test_wrong_route_and_unexpected_tail_still_refused(self):
+        for reply in (g2rs(route=case_pins.ROUTES["right"]), g2rs(tail_len=1)):
+            link, _ = self.exit(reply)
+            with self.assertRaises(links.LinkError):
+                link._exit_relay()
+
+    def test_other_exit_status_still_raises(self):
+        link, _ = self.exit(g2rs(status=2, uart_errors=1))
+        with self.assertRaisesRegex(links.LinkError, "relay exit status 2"):
+            link._exit_relay()
+
+
 class ThroughRelayModel(unittest.TestCase):
     def session(self, mram, **model):
         backend = FakeLoaderLink(mram)
@@ -80,7 +147,9 @@ class ThroughRelayModel(unittest.TestCase):
         self.assertEqual(mram.read(0x438000, len(stock)), stock)
         self.assertEqual(result["crc_after"], f"{zlib.crc32(mram.read(0x438000, 6000)):08x}")  # 6000 = 16-aligned
         self.assertEqual(relay.state, "reset")  # G2EX -> G2RS, exit status 6
-        self.assertIn({"relay_exit_status": 6, "relay_exit_meaning": links.RELAY_EXIT_STATUS[6]}, link.events)
+        exits = [e for e in link.events if "relay_exit_status" in e]
+        self.assertEqual([(e["relay_exit_status"], e["relay_exit_meaning"], e["relay_exit_uart_errors"]) for e in exits],
+                         [(6, links.RELAY_EXIT_STATUS[6], 0)])
         self.assertFalse(backend.held)  # CONT -> RLSD before G2EX
         d = links.decode_relay_record(bytes(relay.record))
         self.assertEqual((d["phase"], d["exit_status"], d["yhm_writes_ok"]), (2, 6, "0x1ff"))
