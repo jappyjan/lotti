@@ -899,7 +899,7 @@ EVIDENCE_TABLE
 - The panel: the JBD4010 sequence is stock's as read statically; the voltages behind the codes are [I]. The gate only proves that the configuration is stock's.
 - The Mac session tool against a real temple (CoreBluetooth's cached GATT database, MTU).
 
-#### W25 runbook: native-1, left
+#### W25 runbook: native-1, left (first)
 
 **Before any step:** the independent review of native-1 and its pin (as W23 and W24b-0: rebuild from the reviewed commit, pin image, stripped ELF and map in `pins.WISP_IMAGES["native-1"]` and its Wisp Boot slot in `WISP_BOOT_PASSED`), and Jan's go for the panel rails' four task writes (above). The temple may run anything the loader can reach (stock, stage-0, native-0): `install-wisp` writes over whatever is there (it reads the tail of the last 16-byte unit back and keeps it), and nothing in it assumes stock (`tests/test_native1.py` installs native-1 over native-0 and over stage-0).
 
@@ -917,7 +917,7 @@ Setup as W24b (rule 6, case session; `git pull`; `pnpm nx run wisp-ota:build`; `
 | 6 | `w18 boot-watch --side left --protocol wisp --watch-s 70 --interval-s 0.1` (at once after 5) | per boot a `boot report (from wisp-boot)`; then `IDENT: Wisp … kind 1`, stage `bt-up`; no `HELO` after `CONT`; app status: flags `pmic-wdt`, `boot-services`, `boot-status`, `boot-observe`, PMIC kicks rising, errors 0, **display `on`**; Wisp Boot v2: NOR `0x3925c2` result 0 (**the first NOR read with MSPICFG's resets kept**), mount 0, staging id and the four `/firmware` files as on W24, `PMIC kick 0x0`. **Write down the battery mV.** If the lens can be seen: a frame at the edge, "Wisp" in the middle, 16 grey bands below, for 60 s | the NOR stop of W24 step 6 (a NOR id other than MX, or a failed mount: stock would format it after a `recover`); otherwise see "Reading step 6" |
 | 7 | Take the temple out of the case (within 3 minutes of step 6: the case app resets a temple that does not answer its `0x13` poll, G10b) and keep it next to the Mac | — | the temple gets warm |
 | 8 | `uv run --with bleak==0.22.3 python -I apps/wisp-recovery/w18.py ble-scan --side left --seconds 30` | `OK: 1 Wisp advertiser(s)` (name `Wisp`, service `cf099bf1-…`) | — (none: a finding, go to 10) |
-| 9 | `node apps/wisp-fw/tests/ble/session.mts --bridge "uv run --with bleak==0.22.3 python -I apps/wisp-fw/tests/ble/bleak_bridge.py"`, twice | JSON with `"ok": true`: `connect` (MTU), `hello` (`wisp-native`, protocol 0.2), `time-sync`, `idle 12 s on keepalive PINGs` (the session outlives its 10 s timeout on PINGs alone), `bye` | — (a failure is a finding: keep the JSON) |
+| 9 | `node apps/wisp-fw/tests/ble/session.mts --bridge "uv run --with bleak==0.22.3 python -I apps/wisp-fw/tests/ble/bleak_bridge.py"`, twice | JSON with `"ok": true`: `connect` (MTU), `hello` (`wisp-native`, protocol 0.2, `"lens": 1`), `time-sync`, `idle 12 s on keepalive PINGs` (the session outlives its 10 s timeout on PINGs alone), `bye` | — (a failure is a finding: keep the JSON) |
 | 10 | Seat the temple, then `w18 boot-watch --side left --protocol wisp --watch-s 30 --interval-s 0.1` | its relay start resets the temple: the first report says `reset cause … external`, and, if the record survived the reset (the D-cache clean), `previous boot's last stage app-idle` or `app-session` with its time; then IDENT kind 1 | — |
 | 11 | `w18 loader-hello --side left` | as step 1 | as step 1; a CRC other than `63cd8dda`: stop, no further reset |
 | 12 | `w18 pmic-read --side left --compare …W21…` and `w18 app-check --side left` | exit 0; `Wisp native-1: … MATCH`, flag clear. **The temple stays on native-1** (11's `CONT` boots it); the health check is read-only | exit 3: stop, send the report |
@@ -941,6 +941,31 @@ Then a hardware-log row "rung 4 W25 (native-1, checkpoint 4a)" with the reports 
 | no report at all, no IDENT | Wisp Boot's window and the app are both silent: the half-duplex turn-round is not what the case expects, or UART2 TX fails | the deferred W24c `uart_probe` |
 
 **Stop conditions:** §8's list, W24's (`loader-hello` twice without `HELO` after a reseat, a bootloader CRC other than `63cd8dda`, a flag not clear, `pmic-read` exit 3, an `install-wisp` refusal or stop, a relay exit status other than 6, the case not back on 1.2.57, the temple warm), and from native-1 on: the panel showing anything but the boot screen, or staying lit longer than about 70 s after a boot.
+
+#### W25 runbook: native-1, right (after the left runs steadily)
+
+Jan cleared installs on the right temple too (2026-11-09). It follows the left, not alongside it: the right is the master temple (it talks to the phone and to the left over the inter-temple link), and a native right ends the Even app's use of the glasses until it is recovered.
+
+**"The left runs steadily"** means, all logged: the left runbook passed through step 12; afterwards, on at least two separate occasions at least an hour apart, `boot-watch` (as step 10) showed the previous boot's last stage `app-idle` or `app-session` with no `HELO` loop, and the session tool (step 9) passed; the left was out of the case for at least an hour between them without getting warm or losing more than about 10 % of its battery; and `pmic-read --compare` still exits 0.
+
+**The right's image** is **native-1-right**: native-1 with `CONFIG_WISP_LENS=2` and the advertised name "Wisp R" (`scripts/build_native.sh native-1-right`, `images/native-1/right.conf`; native-1 itself reports lens 1 in `HELLO`). Build and package it from the commit the left ran (only those two settings differ: Wisp Boot's slot is byte-identical), then the same review and pin as native-1, under its own name and hash.
+
+**The right's own preconditions** (rule 11 and W21 are per temple; W21 ran on the left only):
+
+| # | Command | Expect | Stop if |
+| --- | --- | --- | --- |
+| R0 | `w18 loader-hello --side right` | CRC `63cd8dda` twice, flag clear (W18 F2 put the patched loader on both) | anything else |
+| R1 | `w18 held-reset-test --side right` | the held right temple comes back with `HELO` (rule 11) | no `HELO`: stop the right's plan |
+| R2 | `w18 pmic-read --side right` (**its first run on the right: Jan's go**, as W21's on the left), then `w18 pmic-read --side right --compare <W21's left snapshot>` | the right's stock snapshot, kept as the right's baseline; the comparison shows what differs between the temples | a difference in a rail or charger register: stop and look before any write (the rail gate in native-1 would still refuse on a BUCK1 or LDSW2 difference) |
+| R3 | `w18 peek --side right --what nor board` and `w18 app-check --side right` | MX NOR record, the JBD4010 strap (hardware 5), stock MATCH | a GD NOR or hardware 6 (A6N-G): stop; native-1 is built for the JBD4010 |
+
+Then the left runbook's steps 1–12 with `--side right`, the image `$N1R=apps/wisp-recovery/wisp_w18/data/native-1-right`, its own `--expect`, `pmic-read --compare` against **R2's right snapshot**, and these changes:
+
+- step 4/8: `ble-scan --side right`: the left is native too, so both temples advertise the Wisp service; the right is "Wisp R";
+- step 9: `node apps/wisp-fw/tests/ble/session.mts --bridge "uv run --with bleak==0.22.3 python -I apps/wisp-fw/tests/ble/bleak_bridge.py --address <the right's CoreBluetooth id from step 8>"`: expect `"lens": 2` in its HELLO;
+- step 7: both temples out of the case; the Even app shows the glasses as unavailable while either temple is native (expected, not a stop).
+
+The right's hardware-log row: "rung 4 W25 right (native-1-right)".
 
 #### Follow-up: native-2's update path
 

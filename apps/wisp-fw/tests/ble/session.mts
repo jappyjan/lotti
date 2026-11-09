@@ -73,6 +73,7 @@ try {
   );
   const caps = glasses.capabilities;
   report.hello = {
+    lens: caps.lens,
     protocol: caps.protocol,
     firmware: caps.firmware,
     maxFrame: caps.maxFrame,
