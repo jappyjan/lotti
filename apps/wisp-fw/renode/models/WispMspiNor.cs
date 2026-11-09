@@ -19,6 +19,13 @@
 //     and erase completes instantly (WIP never reads 1), so a power cut lands between two NOR
 //     operations, never inside one.
 //
+// MSPICFG (0x030) bits 31/30 are PRSTN/IPRSTN, active-low resets (rung4.md W24c): while either
+// is 0 the controller is held in reset, so a PIO START never completes (CTRL.STATUS stays 0, no
+// RX data) and a DMA does nothing. Writing the whole register 0, as Wisp Boot did up to stage-0,
+// therefore kills the NOR path here as it does on silicon. Counter: HeldInReset (starts refused).
+// The register resets to 0 with the machine: whoever uses the MSPI must release the resets, as
+// the bootloader's HAL does.
+//
 // The NOR array is non-volatile: Reset() (any machine reset, incl. the Wisp power-cut model)
 // clears only the controller registers and the device's volatile state (WEL, 4-byte mode, QE is
 // non-volatile and kept). Monitor: `<name> SaveImage @file`, `<name> LoadImage @file`.
@@ -68,6 +75,23 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public event Action<ulong> OpDone;
         public ulong Erases { get; private set; }
         public ulong Reads { get; private set; }
+        public ulong HeldInReset { get; private set; }
+
+        private bool InReset => (Get(MSPICFG) & RESETS_N) != RESETS_N;
+
+        private bool Refuse(string what)
+        {
+            if(!InReset)
+            {
+                return false;
+            }
+            HeldInReset++;
+            if(HeldInReset == 1)
+            {
+                this.Log(LogLevel.Warning, "{0} while MSPICFG = 0x{1:X8}: PRSTN/IPRSTN hold the MSPI in reset, nothing happens", what, Get(MSPICFG));
+            }
+            return true;
+        }
         public int Trace { get; set; }
 
         public void LoadImage(string path)
@@ -145,11 +169,19 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 regs[CTRL] = v;
                 if((v & START) != 0)
                 {
+                    if(Refuse("PIO start"))
+                    {
+                        pioActive = true; /* never completes */
+                        pioBytes = int.MaxValue;
+                        rx.Clear();
+                        tx.Clear();
+                        return;
+                    }
                     StartPio(v);
                 }
                 return;
             case TXFIFO:
-                if(pioActive)
+                if(pioActive && pioBytes != int.MaxValue)
                 {
                     for(var i = 0; i < 4 && tx.Count < pioBytes; i++)
                     {
@@ -176,7 +208,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 return;
             case DMACFG:
                 regs[DMACFG] = v;
-                if((v & DMAEN_MSK) != 0)
+                if((v & DMAEN_MSK) != 0 && !Refuse("DMA"))
                 {
                     RunDma();
                 }
@@ -496,7 +528,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private byte sr, cr;
 
         private const long CTRL = 0x000, ADDR = 0x008, INSTR = 0x00C, TXFIFO = 0x010, RXFIFO = 0x014;
-        private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094;
+        private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094, MSPICFG = 0x030;
+        private const uint RESETS_N = 0xC0000000; /* PRSTN | IPRSTN */
         private const long DMACFG = 0x100, DMASTAT = 0x104, DMATARGADDR = 0x108, DMADEVADDR = 0x10C, DMATOTCOUNT = 0x110;
         private const long INTEN = 0x200, INTSTAT = 0x204, INTCLR = 0x208, INTSET = 0x20C;
         private const long CQCFG = 0x2A0, CQADDR = 0x2A8, CQSTAT = 0x2AC, CQCURIDX = 0x2C0, CQENDIDX = 0x2C4;

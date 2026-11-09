@@ -20,6 +20,20 @@
 // eats into the loader's 500 ms boot window: this is the deterministic equivalent of the case
 // relay's one-request/one-reply G2TX/G2RX exchange. A host that stays silent for HostTimeoutMs
 // real milliseconds is detached.
+//
+// Half duplex (rung4.md W24c; HalfDuplex, on by default): the pogo link is one wire shared by the
+// temple's pad 42 (UART2TX) and pad 44 (UART2RX). The model reads both pads' FNCSEL from the GPIO
+// window (PINCFG42 0x400100A8, PINCFG44 0x400100B0; plain memory in the platform) at the moments
+// that matter:
+//   - a DR write reaches the wire only while pad 42 is UART2TX (FNCSEL 4); otherwise the byte is
+//     lost (TxLost);
+//   - bytes from the case are heard only while pad 44 is UART2RX and pad 42 is NOT driving the
+//     line (FNCSEL 4 on pad 42 holds it high against the case's start bits). The model applies
+//     this when the temple looks at its receiver (an FR or DR read): pending case bytes seen in
+//     any other pad state are lost (RxLost). This is the order on the real wire: the case sends
+//     only after the temple's frame, and stock, the loader and Wisp from native-1 on turn the
+//     wire back to receive before they read; native-0 and stage-0 never did.
+// Not modelled: the case's own turn-round time (a temple that answers too quickly), the settle.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -55,6 +69,40 @@ namespace Antmicro.Renode.Peripherals.Wisp
         public int HostTimeoutMs { get; set; } = 120000;
         public ulong TxBytes { get; private set; }
         public ulong RxBytes { get; private set; }
+        public bool HalfDuplex { get; set; } = true;
+        public ulong TxLost { get; private set; }
+        public ulong RxLost { get; private set; }
+        public string HalfDuplexStats()
+        {
+            return $"tx_bytes={TxBytes} tx_lost={TxLost} rx_lost={RxLost}";
+        }
+
+        private const ulong PinCfg42 = 0x400100A8, PinCfg44 = 0x400100B0;
+        private const uint FnUart = 4;
+
+        private uint Fn(ulong addr)
+        {
+            return (uint)machine.SystemBus.ReadDoubleWord(addr) & 0xFu;
+        }
+
+        private bool TxDriving => Fn(PinCfg42) == FnUart;
+
+        private bool RxListening => Fn(PinCfg44) == FnUart && !TxDriving;
+
+        // The temple looks at its receiver: pending case bytes it cannot hear are gone.
+        private void Listen()
+        {
+            if(HalfDuplex && rx.Count > 0 && !RxListening)
+            {
+                RxLost += (ulong)rx.Count;
+                if(RxLost == (ulong)rx.Count)
+                {
+                    this.Log(LogLevel.Warning, "W18 case link: {0} case byte(s) lost: pad 42 FNCSEL {1}, pad 44 FNCSEL {2} (half duplex)",
+                        rx.Count, Fn(PinCfg42), Fn(PinCfg44));
+                }
+                rx.Clear();
+            }
+        }
         public bool HostAttached => client != null;
 
         // Peripheral reset (also on every emulated power cut): registers and FIFOs only. The host
@@ -145,6 +193,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
 
         public uint ReadDoubleWord(long o)
         {
+            if(o == 0x00 || o == 0x18)
+            {
+                Listen();
+            }
             if(o == 0x00)
             {
                 if(rx.Count == 0)
@@ -170,6 +222,15 @@ namespace Antmicro.Renode.Peripherals.Wisp
             if(o != 0x00)
             {
                 regs[o] = v;
+                return;
+            }
+            if(HalfDuplex && !TxDriving)
+            {
+                TxLost++;
+                if(TxLost == 1)
+                {
+                    this.Log(LogLevel.Warning, "W18 case link: a byte sent with pad 42 FNCSEL {0} never reaches the wire (half duplex)", Fn(PinCfg42));
+                }
                 return;
             }
             TxBytes++;
