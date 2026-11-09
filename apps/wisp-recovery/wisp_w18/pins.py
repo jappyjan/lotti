@@ -146,14 +146,9 @@ PEEK_REGIONS = {
     "wisp-boot-status": (0x2037_5330, 692, "Wisp Boot's status block v2 (`st`) of the stage-0 Wisp Boot "
                                            "(slot 7a5c399b..., b54ee856...) only: its `prev` is the record of "
                                            "the boot before the last one"),
-    # The W24d Wisp Boot (stage-0b's, also native-1's: one more word of .bss before it) keeps `st`
-    # 12 bytes higher; the same block, decoded the same way (tests: test_native1, test_stage0b).
-    "wisp-boot-status-w24d": (0x2037_533C, 692, "Wisp Boot's status block v2 (`st`) of the W24d Wisp Boot "
-                                                "(stage-0b, native-1): its `prev` is the record of the boot "
-                                                "before the last one"),
 }
 # Regions in SSRAM group 2: read only after "ssram-power" shows that group powered.
-PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-w24d")
+PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status")
 PEEK_SSRAM_GROUP2 = 0x4
 PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 

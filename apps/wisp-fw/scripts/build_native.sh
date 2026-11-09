@@ -4,6 +4,7 @@
 # 0x448000, exactly what install-wisp would write at 0x438000 (docs/wisp/rung4.md §2, §3).
 #
 #   scripts/build_native.sh native-1
+#   scripts/build_native.sh native-1-right   (the right temple: lens 2, "Wisp R"; images/native-1/right.conf)
 #   scripts/build_native.sh stage-0b
 #
 # native-1 (rung4.md W25): the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no
@@ -28,7 +29,7 @@ wisp_require_setup
 
 image="${1:?usage: build_native.sh native-1|stage-0b}"
 case "$image" in
-native-1)
+native-1 | native-1-right)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
 	;;
 native-0 | stage-0)
@@ -40,11 +41,19 @@ stage-0b)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_STAGE0=ON)
 	;;
 *)
-	echo "wisp-fw: unknown native image '$image' (known: native-1, stage-0b)" >&2
+	echo "wisp-fw: unknown native image '$image' (known: native-1, native-1-right, stage-0b)" >&2
 	exit 1
 	;;
 esac
 cfg="$APP_DIR/images/$image"
+confs="$cfg/$image.conf"
+overlay="$cfg/$image.overlay"
+if [[ "$image" == native-1-right ]]; then
+	# The right temple's build: native-1's files plus the lens and the name (images/native-1/right.conf).
+	cfg="$APP_DIR/images/native-1"
+	confs="$cfg/native-1.conf;$cfg/right.conf"
+	overlay="$cfg/native-1.overlay"
+fi
 out="$CACHE_DIR/build/$image"
 ota="$REPO_ROOT/packages/wisp-ota/dist/cli.js"
 [[ -f "$ota" ]] || {
@@ -84,7 +93,7 @@ fi
 echo "=== $image: app"
 rm -rf "$out/app" # from scratch: a cached configure would miss a changed overlay or .conf
 WISP_PANEL=none WISP_BUILD_DIR="$out/app" "$APP_DIR/scripts/build.sh" \
-	"-DEXTRA_CONF_FILE=$cfg/$image.conf" "-DEXTRA_DTC_OVERLAY_FILE=$cfg/$image.overlay" \
+	"-DEXTRA_CONF_FILE=$confs" "-DEXTRA_DTC_OVERLAY_FILE=$overlay" \
 	>"$out/app-build.log" 2>&1 || {
 	tail -n 40 "$out/app-build.log" >&2
 	echo "FAIL: $image app build (log: $out/app-build.log)" >&2

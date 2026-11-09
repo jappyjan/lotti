@@ -12,7 +12,7 @@
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 
-image="${1:?usage: package_native.sh stage-0b|native-1}"
+image="${1:?usage: package_native.sh stage-0b|native-1|native-1-right}"
 src="$CACHE_DIR/build/$image"
 dst="$REPO_ROOT/apps/wisp-recovery/wisp_w18/data/$image"
 case "$image" in
@@ -20,7 +20,7 @@ stage-0b)
 	app_elf="$src/boot/stage0.elf"
 	app_map="$src/boot/stage0.map"
 	;;
-native-1)
+native-1 | native-1-right)
 	app_elf="$src/app/zephyr/zephyr.elf"
 	app_map="$src/app/zephyr/zephyr.map"
 	;;
