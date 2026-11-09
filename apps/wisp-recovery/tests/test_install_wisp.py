@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: MIT
 """install-wisp (docs/wisp/rung4.md §3, G1, decision R4-1) against fakes. No hardware.
 
-R4-1 is approved (2026-11-08) and W23 pinned exactly one image, the reviewed native-0 of commit
-8374f9a, committed in wisp_w18/data/native-0/. `Pinned` runs the real command's whole gate on
-those files (and a full fake install of them), and shows that a one-byte change to any of them is
-refused before the case is touched. Every other test pins a synthetic image for its duration
+R4-1 is approved (2026-11-08). W23 pinned the reviewed native-0 of commit 8374f9a, committed in
+wisp_w18/data/native-0/, and W24b-0 the reviewed stage-0 of commit 9bfac4d (data/stage-0/,
+tests/test_stage0.py). `Pinned` runs the real command's whole gate on native-0's files (and a full
+fake install of them), and shows that a one-byte change to any of them is refused before the case
+is touched. Every other test pins a synthetic image for its duration
 (`PinnedWisp`): a 64 KiB "Wisp Boot" slot and a small "app", an ELF whose segments are those
 bytes, a map file, and a Wisp Boot entry with both rung-3 suites.
 """
@@ -172,19 +173,21 @@ def run_until_case(argv):
 
 
 class Pinned(unittest.TestCase):
-    """W23: the one pinned image, the reviewed native-0, and its committed files."""
+    """W23: the reviewed native-0 and its committed files."""
 
-    def test_exactly_native_0_and_its_wisp_boot_are_pinned(self):
+    def test_exactly_native_0_stage_0_and_their_wisp_boots_are_pinned(self):
         self.assertTrue(pins.R4_1_APPROVED)
-        self.assertEqual(set(pins.WISP_IMAGES), {"native-0"})
+        self.assertEqual(set(pins.WISP_IMAGES), {"native-0", "stage-0"})
         pin = pins.WISP_IMAGES["native-0"]
         self.assertEqual(pin["image_sha256"], NATIVE_0_SHA)
         self.assertEqual(pin["image_bytes"], 230_428)
         self.assertEqual(pin["map_sha256"][:8], "28fcb218")
         self.assertEqual(set(pin["gates"]), set(pins.WISP_GATES))
         slot = "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816"
-        self.assertEqual(set(pins.WISP_BOOT_PASSED), {slot})
-        self.assertEqual(set(pins.WISP_BOOT_PASSED[slot]["suites"]), set(pins.WISP_BOOT_SUITES))
+        stage_0_slot = "7a5c399bdfeb05a0683f8ef9fba4452cc4147e22b57de55e2c9754227117b185"
+        self.assertEqual(set(pins.WISP_BOOT_PASSED), {slot, stage_0_slot})
+        for s in (slot, stage_0_slot):
+            self.assertEqual(set(pins.WISP_BOOT_PASSED[s]["suites"]), set(pins.WISP_BOOT_SUITES))
 
     def test_the_committed_files_are_the_pinned_ones(self):
         pin = pins.WISP_IMAGES["native-0"]
