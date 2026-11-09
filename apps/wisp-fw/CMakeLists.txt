@@ -60,9 +60,10 @@ target_include_directories(app PRIVATE src src/hal src/hal/native src/display sr
   src/case src/diag)
 if(CONFIG_BOARD_WISP_G2)
   # Wisp Boot's services table and status block (src/boot/), and the app's diagnostics in its
-  # record (src/diag/). Of Wisp Boot's code the app links only its polled UART2 driver, for the
-  # diagnostics' fallback loop when the STIMER is dead.
+  # record (src/diag/). Of Wisp Boot's code the app links only its polled UART2 driver and its
+  # polled PMIC kick, for the diagnostics' fallback loop when the STIMER is dead.
   target_sources(app PRIVATE src/boot_link.c src/diag/wisp_app_diag.c src/boot/stage/boot_uart.c
+    src/boot/stage/boot_pmic.c
     src/case/wisp_case_proto.c)
   target_include_directories(app PRIVATE src/boot src/boot/stage)
 endif()

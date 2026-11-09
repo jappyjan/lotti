@@ -11,6 +11,10 @@
  *
  *   BUCK1 on 04 00 01, off 04 01 01        LDSW2 on 08 02 01, off 08 03 01
  *
+ * wisp_npm1300_switch_force_off() writes the same disable task, after the same gate, whatever the
+ * refcount says: the PMIC keeps a rail on across every Apollo reset, so the boot screen turns both
+ * off first at boot (a reset inside its 60 s window would otherwise leave them on).
+ *
  * Before an enable it reads the rail's configuration and refuses (-EACCES, nothing written) unless
  * it is stock's (W21's snapshot): BUCK1 VOUT_NORM = the expected code (0x01, the JBD4010's ~1.1 V)
  * and SW_CTRL = 0x03 (software voltage, so VOUT_NORM is what the rail outputs, not the VSET pin);
@@ -104,6 +108,15 @@ static int sw_init(const struct device *dev)
 	}
 	/* Off as far as the refcount goes; nothing is read or written here. */
 	return regulator_common_init(dev, false);
+}
+
+int wisp_npm1300_switch_force_off(const struct device *dev)
+{
+	const struct sw_config *cfg = dev->config;
+	int err = gate(cfg);
+
+	((struct sw_data *)dev->data)->gate = (int8_t)err;
+	return err ? err : sw_disable(dev);
 }
 
 int wisp_npm1300_switch_check(const struct device *dev)

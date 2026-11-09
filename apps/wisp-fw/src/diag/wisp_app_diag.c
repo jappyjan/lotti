@@ -11,8 +11,12 @@
  *      and the BLE side. Last value wins.
  *  D5  STIMER liveness at the end of PRE_KERNEL_2: the counter must move within a bounded
  *      busy loop. If it does not, the kernel would sleep for ever on its first k_sleep(): instead
- *      the record says so and a fallback loop feeds the Apollo WDT and answers BOOTREP, IDENT and
- *      READ on the case UART itself (Wisp Boot's polled driver), so the temple stays observable.
+ *      the record says so and a fallback loop answers BOOTREP, IDENT and READ on the case UART
+ *      itself (Wisp Boot's polled driver), so the temple stays observable. It kicks the nPM1300
+ *      watchdog with Wisp Boot's polled IOM7 kick (boot_pmic.c, reviewed and pinned with stage-0;
+ *      I2C7's driver has not started yet) every KICK_POLLS polls, and feeds the Apollo WDT only
+ *      while those kicks succeed: a failed kick stops the feed, the WDT resets, and Wisp Boot
+ *      kicks again (review F1 of PR #87: never feed the Apollo while the PMIC goes unkicked).
  *
  * The record lives in Wisp Boot's RAM (0x20370000, outside the app's RAM; check_image.py keeps the
  * app below it). It is valid only if Wisp Boot started it this boot; without Wisp Boot every mark
@@ -29,6 +33,7 @@
 #include "app_status.h"
 #include "app_version.h"
 #include "boot_link.h"
+#include "boot_pmic.h"
 #include "boot_uart.h"
 #include "wisp_app_diag.h"
 #include "wisp_boot_status.h"
@@ -96,6 +101,10 @@ MARK_AT(mark_post_end, POST_KERNEL, 99, WISP_DIAG_APP_POST_END);
 
 /* About 2-20 ms at the hand-off clocks; the crystal ticks every 30.5 us. */
 #define STIMER_POLLS 200000u
+/* The fallback loop's polls between PMIC kicks: a poll is a few tens of cycles, so this is well
+ * under a second at the hand-off's 96 MHz and under 10 s even at a few MHz, against the PMIC
+ * watchdog's 30.72 s. */
+#define KICK_POLLS 1000000u
 
 static void wdt_feed(void)
 {
@@ -148,15 +157,23 @@ static FUNC_NORETURN void stimer_dead(void)
 						 .extra_block = fallback_extra};
 	const struct wisp_case_version ver = {.image_kind = (uint8_t)CONFIG_WISP_IMAGE_KIND};
 
+	bool kick_ok = boot_pmic_kick() == 0;
+
 	(void)arch_irq_lock();
 	wisp_app_diag_mark(WISP_DIAG_APP_STIMER_DEAD);
 	(void)boot_uart_init();
 	wisp_case_rx_init(&rx);
-	for (uint32_t idle = 0;; idle++) {
+	for (uint32_t idle = 0, polls = 0;; idle++, polls++) {
 		int ch = boot_uart_getc();
 		bool reset = false;
 
-		wdt_feed();
+		if (polls >= KICK_POLLS) {
+			polls = 0;
+			kick_ok = kick_ok && boot_pmic_kick() == 0;
+		}
+		if (kick_ok) {
+			wdt_feed();
+		}
 		if (ch == -2 || (ch == -1 && rx.len && idle > 400000u)) {
 			wisp_case_rx_init(&rx); /* an error, or a request cut by a long gap */
 		}

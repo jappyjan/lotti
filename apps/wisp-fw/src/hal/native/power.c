@@ -14,11 +14,12 @@
  *
  * Apollo watchdog (G7): Wisp Boot arms and locks it (about 9.1 s, reset); the app restarts it
  * with a raw RSTRT write, once at PRE_KERNEL_1, then every second from a k_timer callback that
- * cannot block or log, as long as the PMIC thread is alive (native-1; native-0 fed from the PMIC
+ * cannot block or log, as long as the PMIC kicks succeed (native-1; native-0 fed from the PMIC
  * thread itself, which also logged on errors: under W24's H1b a stuck console write starved it).
  * The PMIC thread is the highest-priority cooperative thread, started at POST_KERNEL init (before
  * the drivers and long before bt_enable(), whose EM9305 bring-up blocks main for up to 5 s), and
- * never logs; it also feeds once before each PMIC transfer. With no Wisp Boot in front (sim,
+ * never logs. It does not feed the Apollo WDT itself: only a kick that succeeded keeps the feed
+ * going (review F1 of PR #87). With no Wisp Boot in front (sim,
  * driver test) the WDT is off and the RSTRT write does nothing.
  *
  * Two PMIC modes, chosen by the devicetree:
@@ -101,7 +102,8 @@ static __maybe_unused int pmic_read(uint8_t base, uint8_t off, uint8_t *data, si
 
 static struct wisp_watchdog_stats wdt_stats;
 
-/* The PMIC thread's last pass (k_uptime_get_32), for the feed's liveness check. */
+/* The time (k_uptime_get_32) of the last PMIC arm or kick that succeeded, for the feed's liveness
+ * check; set to the start time when the watchdogs start, which gives I2C7 LIVENESS_MS to come up. */
 static atomic_t pmic_alive_ms;
 static atomic_t pmic_started;
 #define LIVENESS_MS 5000u
@@ -115,7 +117,6 @@ static int pmic_kick(void)
 {
 	int err;
 
-	apollo_wdt_feed(); /* before every PMIC transfer: one more feed that cannot block */
 	err = pmic_write(NPM_TIMER_BASE, NPM_TIMER_KICK, (const uint8_t[]){1}, 1);
 	wdt_stats.pmic_last = (int8_t)err;
 	if (err) {
@@ -140,10 +141,13 @@ static int pmic_wdt_arm(void)
 }
 
 /* The Apollo WDT's only regular feed (rung4.md W24 fix plan 3): a k_timer callback, which runs in
- * the system timer's interrupt and can neither block nor log. It feeds while the PMIC thread has
- * passed within LIVENESS_MS (or has not started yet, for that long after the timer's start), so a
- * scheduler that stops running threads, or a PMIC thread stuck on its bus, ends in a WDT reset
- * instead of a temple that answers nothing. */
+ * the system timer's interrupt and can neither block nor log. It feeds only while a PMIC kick (or
+ * the arming) has succeeded within LIVENESS_MS, counting from the watchdogs' start for the first
+ * one. So whatever keeps the nPM1300's watchdog from being kicked (a scheduler that stops running
+ * threads, a PMIC thread stuck on its bus, an I2C7 that never comes up or NAKs every transfer)
+ * ends in an Apollo WDT reset about LIVENESS_MS + 9 s later, and the next boot's Wisp Boot kicks
+ * the PMIC through its own polled IOM7 path. The PMIC's 30.72 s watchdog then never expires, and the
+ * PMIC keeps stock's configuration, charger included (W24's power cycle; review F1 of PR #87). */
 static void feed_timer_fn(struct k_timer *t)
 {
 	uint32_t now = k_uptime_get_32();
@@ -166,24 +170,31 @@ static void pmic_thread(void *a, void *b, void *c)
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
-	bool tried = false;
+	bool armed = false;
 
 	wisp_app_diag_mark(WISP_DIAG_APP_PMIC_THREAD);
-	/* Started from POST_KERNEL init, possibly before I2C7's driver: arm (stock's sequence)
-	 * once the bus is ready, kick every second after that. Never logs. */
+	/* Started from POST_KERNEL init, possibly before I2C7's driver: arm (stock's sequence) once
+	 * the bus is ready, again on every pass until it succeeds, then kick every second. Only a
+	 * success counts as alive for the feed. Never logs. */
 	for (;;) {
-		atomic_set(&pmic_alive_ms, (atomic_val_t)k_uptime_get_32());
 		if (device_is_ready(pmic.bus)) {
-			if (!tried) {
-				tried = true;
-				if (pmic_wdt_arm() == 0) {
+			int err;
+
+			if (!armed) {
+				err = pmic_wdt_arm();
+				armed = err == 0;
+				if (armed) {
 					wisp_app_diag_mark(WISP_DIAG_APP_PMIC_ARMED);
 				}
 			} else {
-				(void)pmic_kick();
+				err = pmic_kick();
+			}
+			if (err == 0) {
+				atomic_set(&pmic_alive_ms, (atomic_val_t)k_uptime_get_32());
 			}
 		}
-		k_sleep(K_MSEC(tried ? 1000 : 10));
+		/* 10 ms while waiting for the bus to come up; once a second after that, armed or not. */
+		k_sleep(K_MSEC(device_is_ready(pmic.bus) ? 1000 : 10));
 	}
 }
 

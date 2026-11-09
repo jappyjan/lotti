@@ -11,8 +11,10 @@
  *   16 grey bands of 40 px across y 380..440, values 0..15 left to right.
  *
  * Before any rail is switched, both rail gates are read (npm1300_switch.c): if the PMIC is not as
- * stock configured it, nothing is written and the state is REFUSED. The panel powers down after
- * CONFIG_WISP_BOOT_SCREEN_S (stock keeps it off while nothing is shown).
+ * stock configured it, nothing is written and the state is REFUSED. Otherwise both rails are first
+ * switched off (a reset in the last boot's window may have left them on), then the panel is
+ * powered and the screen composed. The panel powers down after CONFIG_WISP_BOOT_SCREEN_S (stock
+ * keeps it off while nothing is shown), and at once if composing fails.
  */
 #include "boot_screen.h"
 
@@ -126,6 +128,13 @@ uint8_t wisp_boot_screen_show(int *err)
 			return *err == -EACCES ? WISP_CASE_DISPLAY_REFUSED : WISP_CASE_DISPLAY_FAILED;
 		}
 	}
+	/* The PMIC keeps the rails across every Apollo reset (case reset, WDT, SWPOR, RESET): a reset
+	 * inside the last boot's 60 s window left them on. Switch both off first, in stock's order
+	 * (BUCK1, then LDSW2), with the same disable tasks the power-down uses (review F3 of #87). */
+	(void)wisp_npm1300_switch_force_off(rails[1]);
+	k_msleep(3);
+	(void)wisp_npm1300_switch_force_off(rails[0]);
+	k_msleep(10);
 	/* Power first: the JBD4010's init (stock's sequence) sends a blank frame from the panel's own
 	 * frame buffer, which is also the one the flush composes into, so a screen composed before
 	 * the power-up would be wiped. Composed after it, the commit sends the rows at once. */
@@ -135,6 +144,7 @@ uint8_t wisp_boot_screen_show(int *err)
 	}
 	*err = compose();
 	if (*err) {
+		(void)wisp_hal_display_power(false); /* never leave the rails on after a failure */
 		return WISP_CASE_DISPLAY_FAILED;
 	}
 	k_work_init_delayable(&off_work, off_fn);
