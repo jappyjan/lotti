@@ -322,7 +322,7 @@ class Run:
         return [l.strip() for l in out if l.strip()]
 
     def frame_count(self) -> int:
-        return int(self.r.cmd("uart2 FrameCount").split()[0])
+        return int(self.r.cmd("uart2 FrameCount").split()[0], 0)
 
     def frame(self, i: int) -> str:
         out = self.r.cmd(f"uart2 FrameAt {i}").strip()
@@ -1324,7 +1324,7 @@ class Harness:
         return data, native.resolve(data, elf, map_text, image.sha(data)[:12])
 
     @staticmethod
-    def record(run) -> dict:
+    def diag_record(run) -> dict:
         """Wisp Boot's diagnostics record (D1) as it stands in RAM, read from the bus."""
         words = [int(run.r.cmd(f"sysbus ReadDoubleWord {DIAG_ADDR + 4 * i:#x}").split()[0], 0) for i in range(16)]
         return case_uart.decode_diag_record(struct.pack("<16I", *words), check=False)
@@ -1397,8 +1397,8 @@ class Harness:
                 t += 1
             writes = self.write_log(run)
             # 1. The first boot after CONT: no console; the record's breadcrumbs say how far it got.
-            t += run.run_until(lambda: self.record(run).get("stage") == "app-idle", 60, step=0.25)
-            rec1 = self.record(run)
+            t += run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 60, step=0.25)
+            rec1 = self.diag_record(run)
             ask = lambda r: self.inject(run, r)  # noqa: E731
             q["version"] = case_uart.decode_version(ask(case_uart.STOCK_VERSION_QUERY))
             code_, ident = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
@@ -1438,8 +1438,8 @@ class Harness:
                                 await_helo=True)
             report_reset = hook.reports[n_reports] if len(hook.reports) > n_reports else {}
             t += second["seconds"]
-            t += run.run_until(lambda: self.record(run).get("stage") == "app-idle", 30, step=0.25)
-            rec2 = self.record(run)
+            t += run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 30, step=0.25)
+            rec2 = self.diag_record(run)
             half = run.r.cmd("uart2 HalfDuplexStats").strip()
             held = int(run.r.cmd("nor HeldInReset").split()[0], 0)
             watched = run.r.cmd("nor WatchedLog").split("\n")
@@ -1449,6 +1449,10 @@ class Harness:
             pc_log = run.r.cmd("pmicwdt PmicPcLog")
             pm = self.pmic(run)
             mram = run.mram()
+        except Exception as error:  # noqa: BLE001 - a case failure, not a harness crash
+            (run.dir / "case-uart.json").write_text(json.dumps({"query": q}, indent=2, default=str))
+            self.record(name, False, f"stopped: {error!r}; so far {list(q)}", f"{time.time() - t0:.0f} s wall")
+            return
         finally:
             run.close()
         v = result.get("value") or {}
@@ -1530,12 +1534,15 @@ class Harness:
              "boot_watch": hook.summary(answers), "strict_unallowed": strict_bad}, indent=2, default=str))
 
     def legacy_half_duplex(self, name: str, data: bytes, boot_elf: Path):
-        """A pinned pre-W24c image (native-0, stage-0) in MRAM as install-wisp leaves it over stock:
+        """A pinned pre-W24c image (native-0, stage-0) in MRAM as install-wisp leaves it over stock,
+        behind the stock 2.4.0.24 bootloader:
         under the half-duplex wire and MSPICFG's reset bits it must fail as it did on silicon (the
         case UART never answers: pad 42 holds the wire; stage-0's Wisp Boot also holds MSPI1 in
         reset). A pass here means: it fails, for those reasons."""
         image_ = data + self.app[len(data):]
-        run = Run(self.work, name, self.patched, image_, nor=self.native_nor())
+        # Behind the stock 2.4.0.24 bootloader: the half-duplex failure does not depend on the
+        # bootloader, and the patched loader's boot window runs about 30x slower in Renode.
+        run = Run(self.work, name, self.bl24, image_, nor=self.native_nor())
         fails, t0 = [], time.time()
         try:
             self.native_probes(run, boot_elf)
