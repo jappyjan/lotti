@@ -204,7 +204,8 @@ def silicon_findings(run) -> dict:
     function at once (WispCaseLink, half duplex), MSPI1 accesses while held in reset (WispMspiNor,
     MSPICFG PRSTN/IPRSTN), and the D-cache cleans (WispRstGen)."""
     both = run.r.cmd("uart2 BothUartLog")
-    owners = sorted({strict.owner(int(m[1], 16)) for m in re.finditer(r" pc 0x([0-9A-F]+)", both)})
+    owners = sorted({strict.owner(int(m[1], 16)) + ("" if m[2] == "wisp" else " (not while Wisp ran)")
+                     for m in re.finditer(r" pc 0x([0-9A-F]+) (\w+)", both)})
     in_reset = run.r.cmd("nor InResetLog").splitlines()
     (run.dir / "pads.log").write_text(run.r.cmd("uart2 PadLog") + "\n")
     cleans = run.r.cmd("rstgen CleanLog")

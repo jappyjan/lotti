@@ -126,7 +126,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((ICPUWithRegisters)cpu).PC : 0;
             var t = machine.LocalTimeSource.ElapsedVirtualTime.TotalMilliseconds;
-            var line = $"{t:F3} pad{(address == Pincfg42 ? 42 : 44)} 0x{value:X} pc 0x{pc:X}";
+            // "wisp": written while Wisp code runs (WispStrict: from Wisp Boot's entry to the next reset),
+            // "other": the bootloader, or stock after a rescue (whose code sits at the same addresses).
+            var who = WispStrict.Armed && WispStrict.InWisp ? "wisp" : "other";
+            var line = $"{t:F3} pad{(address == Pincfg42 ? 42 : 44)} 0x{value:X} pc 0x{pc:X} {who}";
             if(Log.Count < 4000)
             {
                 Log.Add(line);

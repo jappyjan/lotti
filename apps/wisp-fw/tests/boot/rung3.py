@@ -282,7 +282,8 @@ def silicon_models(r, elves: list[Path], retain: bool) -> None:
 def wire_findings(res: dict) -> dict:
     """Who left both case-link pads in UART function at once (strict.owner of each PC), and the
     MSPI accesses made while MSPI1 was held in reset."""
-    owners = sorted({strict.owner(int(m[1], 16)) for m in re.finditer(r" pc 0x([0-9A-F]+)", res["both_uart_log"])})
+    # Only writes made while Wisp code ran ("wisp", WispPads): stock after a rescue runs at the same PCs.
+    owners = sorted({strict.owner(int(m[1], 16)) for m in re.finditer(r" pc 0x([0-9A-F]+) wisp", res["both_uart_log"])})
     return {"both_uart": owners, "report": res["wire"].strip(), "nor_in_reset": res["nor_in_reset"],
             "nor_in_reset_log": res["nor_in_reset_log"]}
 
@@ -766,7 +767,7 @@ class Harness:
                         (handoffs >= runs or case.app == "erased"):
                     break
         app_drives_both = case.app == "real" and any(
-            strict.owner(int(m[1], 16)) == "app" for m in re.finditer(r" pc 0x([0-9A-F]+)", r.cmd("uart2 BothUartLog")))
+            strict.owner(int(m[1], 16)) == "app" for m in re.finditer(r" pc 0x([0-9A-F]+) wisp", r.cmd("uart2 BothUartLog")))
         if case.query and case.app == "stage0":
             out["query"] = self.query_stage0(r, d)
         elif case.query and app_drives_both:
