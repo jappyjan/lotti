@@ -32,6 +32,8 @@
 // showed them (images/pmic-poweron-w24.json). A pmic_read afterwards sees the charger off and the
 // watchdog disarmed, as on the left temple.
 //
+// PmicLog also has one line per register read made with the offset phase ("<ms> ms read <hi> <lo> n=<bytes>").
+//
 // PmicPcLog: one line per PMIC data write with the PC that issued its CMD ("<ms> pc 0x<pc>
 // wb=<0|1> write <bytes>"), so a case can prove which code made which write (Wisp Boot's only one is the
 // kick 07 04 01).
@@ -269,6 +271,12 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 word |= ((offsetHi >> (8 * (i - 1))) & 0xFF) << (8 * n);
             }
             word |= (cmd >> 24) << (8 * n);
+            if(devcfg == 0x6B && offsetCount == 2)
+            {
+                // A register read with the offset phase (no write transaction of its own): logged so
+                // a case can see which registers were read, and when, among the writes.
+                log.AppendLine($"{nowMs} ms read {(offsetHi & 0xFF):x2} {(cmd >> 24) & 0xFF:x2} n={tsize}");
+            }
             iom.WriteDoubleWord(0x10C, word);
             iom.WriteDoubleWord(0x120, ((uint)offsetCount << 8) | 1);
         }

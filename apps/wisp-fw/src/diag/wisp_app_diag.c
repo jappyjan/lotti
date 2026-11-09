@@ -44,11 +44,18 @@
 #define RSTGEN_SWPOR 0x40000008u
 #define SWPOR_KEY    0xD4u
 
+/* Set once a mark names why this boot will end (the feed stopped): later progress marks must not
+ * overwrite it, or the next boot's report would show the last progress, not the reason. */
+static bool sticky;
+
 void wisp_app_diag_mark(uint16_t stage)
 {
 	unsigned int key = irq_lock();
 
-	wisp_diag_mark(stage); /* seals and cleans the record's lines */
+	if (!sticky || stage == WISP_DIAG_APP_FAULT || stage == WISP_DIAG_APP_RESET_REQ) {
+		wisp_diag_mark(stage); /* seals and cleans the record's lines */
+		sticky = sticky || stage == WISP_DIAG_APP_WDT_STARVED;
+	}
 	irq_unlock(key);
 }
 

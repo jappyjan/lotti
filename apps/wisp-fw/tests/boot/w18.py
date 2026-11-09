@@ -226,6 +226,18 @@ def silicon_findings(run) -> dict:
             "cleans": int(cleans.split("\n")[0].split("=")[1])}
 
 
+def pmic_ops(log: str) -> list[str]:
+    """WispPmicWdt's PmicLog as one list in time order: every write's bytes, and every register read
+    as its 2-byte address ("04 08"), whether made with the offset phase or as an address write."""
+    out = []
+    for line in log.splitlines():
+        if " ms write " in line:
+            out.append(line.split(" ms write ")[1].strip())
+        elif " ms read " in line:
+            out.append(" ".join(line.split(" ms read ")[1].split()[:2]))
+    return out
+
+
 def silicon_failures(f: dict) -> list[str]:
     out = []
     if f["both_uart_wisp"]:
@@ -1679,8 +1691,9 @@ class Harness:
         rails = [w for w in data_writes if w in RAILS_ON + RAILS_OFF]
         if rails[:6] != RAILS_OFF + RAILS_ON + RAILS_OFF:
             fails.append(f"panel rails switched {rails} (want off {RAILS_OFF} at boot, on {RAILS_ON}, off {RAILS_OFF})")
-        first_on = next((i for i, w in enumerate(app_writes) if w == RAILS_ON[0]), None)
-        if first_on is None or not {"04 08", "04 0f", "08 09"} <= set(app_writes[:first_on]):
+        ops = pmic_ops(pm["log"])
+        first_on = next((i for i, w in enumerate(ops) if w == RAILS_ON[0]), None)
+        if first_on is None or not {"04 08", "04 0f", "08 09"} <= set(ops[:first_on]):
             fails.append("the gate's reads (04 08, 04 0f, 08 09) did not come before the first rail write")
         if pm["expiries"]:
             fails.append(f"PMIC watchdog expired {pm['expiries']}x")
@@ -1742,6 +1755,7 @@ class Harness:
             if mode == "dead":
                 run.r.cmd("pmicwdt NakApp true")
                 run.run_until(lambda: int(run.r.cmd("wdt Bites").split()[0], 0) >= 3, 75, step=0.25)
+                run.run_until(lambda: False, 3, step=0.25)  # the next boot's Wisp Boot and its kick
                 naks = int(run.r.cmd("pmicwdt AppNaks").split()[0], 0)
                 st_words = [int(run.r.cmd(f"sysbus ReadDoubleWord {0x2037533C + 4 * i:#x}").split()[0], 0)
                             for i in range(692 // 4)]
@@ -1792,7 +1806,7 @@ class Harness:
         else:
             st = q.get("status") or {}
             rails = [w for w in data_writes if w.split()[0] in ("04", "08")]
-            gate_reads = [w for w in writes if w in ("04 08", "04 0f")]
+            gate_reads = sorted({w for w in pmic_ops(pm["log"]) if w in ("04 08", "04 0f")})
             if rails:
                 fails.append(f"rail writes with the PMIC at its power-on values: {rails}")
             if not gate_reads:
