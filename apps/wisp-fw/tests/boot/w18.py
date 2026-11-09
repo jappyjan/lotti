@@ -1042,7 +1042,10 @@ class Harness:
             first = False
             wait = None if listen else hook.wait(t)
             if wait and wait > 0:
-                run.step(min(wait, seconds - t))
+                left = min(wait, seconds - t)
+                while left > 1e-9:  # short steps: a long RunFor through the loader's window can stall Renode
+                    run.step(min(0.1, left))
+                    left -= min(0.1, left)
                 t += min(wait, seconds - t)
                 if t >= seconds:
                     break
