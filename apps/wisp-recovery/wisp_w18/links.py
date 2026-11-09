@@ -345,13 +345,18 @@ class _RelayFraming:
         port.flush()
         head = read_exact(port, 12, "restoration header")
         if head[:5] != b"G2RS\1" or head[9] > 64:
+            self.log({"relay_exit_raw": head.hex()})
             raise LinkError(f"invalid restoration response {head.hex()}")
         tail = read_exact(port, head[9] + 1, "restoration tail")
+        # Byte 10 is the bridge's UART error flags (wisp_case/bridge.py reads it as uart_errors; the
+        # relay ORs the temple USART's ISR error bits into it). Non-zero is a finding, not bad framing.
         if (tail[-1] != (sum(head) + sum(tail[:-1])) & 255 or head[5:8] != bytes((2, self.route, pins.RELAY_SEQUENCE))
-                or head[9] or head[10]):
-            raise LinkError("invalid restoration framing")
+                or head[9]):
+            self.log({"relay_exit_raw": (head + tail).hex()})
+            raise LinkError(f"invalid restoration framing {(head + tail).hex()}")
         status = head[8]
-        self.log({"relay_exit_status": status, "relay_exit_meaning": RELAY_EXIT_STATUS.get(status, "unknown")})
+        self.log({"relay_exit_status": status, "relay_exit_meaning": RELAY_EXIT_STATUS.get(status, "unknown"),
+                  "relay_exit_uart_errors": head[10], "relay_exit_raw": (head + tail).hex()})
         if status != RELAY_EXIT_OK:
             raise LinkError(f"relay exit status {status}: {RELAY_EXIT_STATUS.get(status, 'unknown')}")
         return status
