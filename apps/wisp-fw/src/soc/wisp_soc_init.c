@@ -15,11 +15,12 @@
  *   - RSTGEN.STAT is captured before low_power_init clears BORSTAT (ERR027), as stock reads it
  *     first (0x5781C2).
  *
- * Breadcrumbs (Wisp Boot's record) go around every call, so a hang names the step.
+ * Breadcrumbs (Wisp Boot's record) go around every call, so a hang names the step. The HAL's
+ * internal timer (TIMER15, the SPOT manager's) stays connected by the fork's IRQ_CONNECT in its weak
+ * hook: that registration is static, in the ISR table, whichever hook runs.
  */
 #include <zephyr/cache.h>
 #include <zephyr/init.h>
-#include <zephyr/irq.h>
 #include <soc.h>
 
 #include "app_status.h"
@@ -31,9 +32,6 @@ void soc_early_init_hook(void)
 
 	wisp_app_diag_mark(WISP_DIAG_APP_SOC);
 	wisp_app_status.reset_cause = RSTGEN->STAT;
-
-	/* The HAL's internal timer for the SPOT manager, as the fork's hook connects it. */
-	IRQ_CONNECT(TIMER0_IRQn + AM_HAL_INTERNAL_TIMER_NUM_A, 0, hal_internal_timer_isr, 0, 0);
 
 	am_hal_pwrctrl_low_power_init();
 	wisp_app_diag_mark(WISP_DIAG_APP_SOC_LP);
