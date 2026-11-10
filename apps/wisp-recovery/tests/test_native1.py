@@ -54,13 +54,14 @@ class Native1(unittest.TestCase):
 
     def test_peek_finds_native1s_record_and_status_block(self):
         """native-1's Wisp Boot is stage-0b's (W24d, PR #88): its record is `peek`'s wisp-record, and
-        its status block `st` sits where stage-0b's does (0x2037533C), so the move of
-        PEEK_REGIONS["wisp-boot-status"] that stage-0b's pin makes covers native-1 too."""
+        its status block `st` sits where stage-0b's does (0x2037533C), and the move of
+        PEEK_REGIONS["wisp-boot-status"] that stage-0b's pin made (#88) covers native-1 too."""
         symbols = elf_symbols(DIR / "wisp_boot.elf")
         stage0b = elf_symbols(DIR.parent / "stage-0b" / "wisp_boot.elf")
         self.assertEqual(pins.PEEK_REGIONS["wisp-record"][:2], (symbols["wisp_diag_slot"][0], 64))
         self.assertEqual(symbols["st"], stage0b["st"])
         self.assertEqual(symbols["st"], (0x2037_533C, 692))
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], symbols["st"])  # since #88's pin
 
     def test_installs_over_a_temple_running_another_wisp_image(self):
         f = files()
