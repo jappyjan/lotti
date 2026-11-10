@@ -1,5 +1,5 @@
 {
-  "note": "PROPOSED, NOT PINNED: copy into wisp_w18/pins.py only in the reviewed pinning commit (rung4.md W24d). The suites below are the builder's rule-12 runs; the review reruns them.",
+  "note": "PINNED at W24d-0 (PR #88): the \"image\" and \"wisp_boot\" entries are in wisp_w18/pins.py, copied unchanged. write_bound is install-wisp's end bound (the image rounded up to 16 B); manifest.json's \"end\" is the image's own end.",
   "image": {
     "commit": "91035fc",
     "image_sha256": "e5c70fb4d6a90ce21beb3e4e75f00093cf1e218100c6d40e2c8212da98ca587d",
@@ -22,6 +22,6 @@
       "patched-87e2d4e0": "observe suite 8/8 pass (builder's run, rung4.md W24d)"
     }
   },
-  "end": "0x449520",
+  "write_bound": "0x449520",
   "peek_wisp_boot_status": "0x2037533c"
 }

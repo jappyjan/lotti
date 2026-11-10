@@ -80,7 +80,7 @@ def main() -> int:
                 "patched-87e2d4e0": "observe suite: see rung4.md W24d",
             },
         },
-        "end": f"{end:#x}",
+        "write_bound": f"{end:#x}",  # install-wisp's end bound; manifest.json's "end" is the image's own end
         "peek_wisp_boot_status": f"{symbol(d / 'wisp_boot.elf', 'st'):#x}",
     }
     (d / "proposed-pin.json").write_text(json.dumps(out, indent=2) + "\n")

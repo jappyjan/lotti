@@ -1,4 +1,4 @@
-# stage-0b (built, NOT pinned, W24d)
+# stage-0b (pinned, W24d-0)
 
 The image after W24b's stage-0 (docs/wisp/rung4.md, "W24d: stage-0b"): stage-0 with the three silicon fixes of W24d, all in code shared by the observe-only Wisp Boot and the bare-metal app (`apps/wisp-fw/src/boot/stage/`, `src/boot/wisp_diag.h`, `src/stage0/`):
 
@@ -8,7 +8,7 @@ The image after W24b's stage-0 (docs/wisp/rung4.md, "W24d: stage-0b"): stage-0 w
 
 MIT, our own code; nothing of Even's.
 
-**Not pinned.** `wisp_w18/pins.py` does not list it, and `install-wisp` refuses it before the case (`tests/test_stage0b.py`). An independent review and the pinning commit come first. `proposed-pin.json` holds what that commit would copy into `pins.WISP_IMAGES` and `pins.WISP_BOOT_PASSED`, plus the new address of Wisp Boot's status block for `pins.PEEK_REGIONS["wisp-boot-status"]` (`st` moved from `0x20375330` to `0x2037533C`). The Renode harness (`wisp-fw:w18-test stage-0b`) loads it into the pin tables of its own process to run install-wisp's gate on these files.
+**Pinned at W24d-0** (2026-11-09, PR #88) after an independent review that rebuilt these files byte-identical from `91035fc`: `wisp_w18/pins.py` lists the image in `WISP_IMAGES["stage-0b"]` and its Wisp Boot slot in `WISP_BOOT_PASSED` (observe suite 8/8 on the stock 2.4.0.24 and the patched `87e2d4e0…` bootloader), both copied unchanged from `proposed-pin.json`. Wisp Boot's status block `st` moved from `0x20375330` to `0x2037533C`: `pins.PEEK_REGIONS["wisp-boot-status"]` is stage-0b's, `wisp-boot-status-stage-0` stage-0's. In `proposed-pin.json`, `write_bound` is install-wisp's end bound (`0x449520`), while `manifest.json`'s `end` is the image's own end (`0x449518`). `tests/test_stage0b.py` checks the pin against the proposal and runs install-wisp's whole gate on these files.
 
 | File | SHA-256 | What |
 | --- | --- | --- |

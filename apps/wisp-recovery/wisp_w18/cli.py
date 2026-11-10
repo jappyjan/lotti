@@ -472,7 +472,7 @@ def describe_peek(name: str, data: bytes) -> dict:
         out.update(value=f"{value:#010x}", causes=case_uart.rstgen_stat_names(value))
     elif name == "wisp-record":
         out["record"] = case_uart.decode_diag_record(data, check=False)
-    elif name == "wisp-boot-status":
+    elif name.startswith("wisp-boot-status"):
         try:
             boot = case_uart.decode_boot_status(data)
             out["status"] = {k: boot.get(k) for k in ("stage", "action", "rstgen_stat", "reset_cause_names",

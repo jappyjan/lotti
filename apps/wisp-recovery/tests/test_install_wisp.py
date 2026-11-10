@@ -175,9 +175,9 @@ def run_until_case(argv):
 class Pinned(unittest.TestCase):
     """W23: the reviewed native-0 and its committed files."""
 
-    def test_exactly_native_0_stage_0_and_their_wisp_boots_are_pinned(self):
+    def test_exactly_native_0_stage_0_stage_0b_and_their_wisp_boots_are_pinned(self):
         self.assertTrue(pins.R4_1_APPROVED)
-        self.assertEqual(set(pins.WISP_IMAGES), {"native-0", "stage-0"})
+        self.assertEqual(set(pins.WISP_IMAGES), {"native-0", "stage-0", "stage-0b"})
         pin = pins.WISP_IMAGES["native-0"]
         self.assertEqual(pin["image_sha256"], NATIVE_0_SHA)
         self.assertEqual(pin["image_bytes"], 230_428)
@@ -185,8 +185,9 @@ class Pinned(unittest.TestCase):
         self.assertEqual(set(pin["gates"]), set(pins.WISP_GATES))
         slot = "16616d9d82ebc934f1460112b5ac62c481c66ed57a8881d1837dcf59e7c27816"
         stage_0_slot = "7a5c399bdfeb05a0683f8ef9fba4452cc4147e22b57de55e2c9754227117b185"
-        self.assertEqual(set(pins.WISP_BOOT_PASSED), {slot, stage_0_slot})
-        for s in (slot, stage_0_slot):
+        stage_0b_slot = "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d"  # W24d-0
+        self.assertEqual(set(pins.WISP_BOOT_PASSED), {slot, stage_0_slot, stage_0b_slot})
+        for s in (slot, stage_0_slot, stage_0b_slot):
             self.assertEqual(set(pins.WISP_BOOT_PASSED[s]["suites"]), set(pins.WISP_BOOT_SUITES))
 
     def test_the_committed_files_are_the_pinned_ones(self):
