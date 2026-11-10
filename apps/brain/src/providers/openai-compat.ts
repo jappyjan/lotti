@@ -15,6 +15,7 @@ export function toOpenAiMessages(messages: ChatMessage[]): unknown[] {
       return {
         role: 'assistant',
         content: m.content || null,
+        ...(m.reasoning ? { reasoning_content: m.reasoning } : {}),
         ...(m.toolCalls?.length
           ? {
               tool_calls: m.toolCalls.map((c) => ({
@@ -49,6 +50,9 @@ export function parseOpenAiResponse(json: any): CompleteResult {
   return {
     text: typeof msg.content === 'string' ? msg.content : '',
     toolCalls,
+    ...(typeof msg.reasoning_content === 'string' && msg.reasoning_content
+      ? { reasoning: msg.reasoning_content }
+      : {}),
   };
 }
 
@@ -83,6 +87,7 @@ export class OpenAiCompatProvider implements Provider {
       ...(opts.temperature !== undefined
         ? { temperature: opts.temperature }
         : {}),
+      ...this.deps.extraBody?.(),
     };
     if (tools.length) {
       body.tools = tools.map((t) => ({

@@ -32,6 +32,8 @@ struct ProviderInfo: Identifiable, Equatable {
     var active: Bool
     var fallback: Bool
     var model: String
+    /// DeepSeek only: off, low, high or max.
+    var thinking: String?
     var lastError: String?
 
     init?(_ json: JSONValue) {
@@ -43,6 +45,7 @@ struct ProviderInfo: Identifiable, Equatable {
         active = json.flag("active")
         fallback = json.flag("fallback")
         model = json.text("model") ?? ""
+        thinking = json.text("thinking")
         lastError = json.text("lastError")
     }
 

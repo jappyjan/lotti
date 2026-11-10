@@ -9,7 +9,7 @@ const providerId = z.string().min(1);
 function refuseProviderKey(key: string): void {
   if (isProviderManaged(key))
     throw new Error(
-      `${key} is managed by the providers.* operations (providers.set_active, providers.set_model).`,
+      `${key} is managed by the providers.* operations (providers.set_active, providers.set_model, providers.set_thinking).`,
     );
 }
 
@@ -128,6 +128,33 @@ export const coreOps = [
               provider: i.provider,
               model: prev || app.providers.get(i.provider)!.defaultModel,
             },
+          },
+        },
+      );
+    },
+  }),
+  defineOp({
+    name: 'providers.set_thinking',
+    group: 'providers',
+    description:
+      'DeepSeek thinking: off (fastest answers) or its effort low, high or max.',
+    inputSchema: z.object({
+      provider: z.literal('deepseek'),
+      level: z.enum(['off', 'low', 'high', 'max']),
+    }),
+    risk: 'tap',
+    proposalTitle: (i) => `DeepSeek thinking: ${i.level}`,
+    handler(i, { app }) {
+      const key = 'provider.deepseek.thinking';
+      const prev = app.settings.str(key);
+      app.settings.set(key, i.level);
+      return out(
+        { provider: i.provider, level: i.level },
+        {
+          undo: {
+            label: `Thinking back to ${prev}`,
+            op: 'providers.set_thinking',
+            input: { provider: i.provider, level: prev },
           },
         },
       );

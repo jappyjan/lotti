@@ -65,7 +65,12 @@ test('DeepSeek: OpenAI-compatible request, default model, tool calls parsed', as
   assert.equal(seen!.url, 'https://api.deepseek.com/chat/completions');
   assert.equal(seen!.init.headers.authorization, 'Bearer sk-test');
   const body = JSON.parse(seen!.init.body);
-  assert.equal(body.model, 'deepseek-v4-flash');
+  assert.equal(body.model, 'deepseek-flash');
+  assert.deepEqual(
+    body.thinking,
+    { type: 'disabled' },
+    'thinking off by default',
+  );
   assert.deepEqual(body.messages[2], {
     role: 'assistant',
     content: null,
@@ -89,11 +94,11 @@ test('DeepSeek: OpenAI-compatible request, default model, tool calls parsed', as
   // model ids are editable via settings (op)
   await t.app.ops.invoke(
     'providers.set_model',
-    { provider: 'deepseek', model: 'deepseek-reasoner' },
+    { provider: 'deepseek', model: 'deepseek-v4-pro' },
     'app',
   );
   await t.app.providers.complete([{ role: 'user', content: 'x' }], []);
-  assert.equal(JSON.parse(seen!.init.body).model, 'deepseek-reasoner');
+  assert.equal(JSON.parse(seen!.init.body).model, 'deepseek-v4-pro');
   assert.ok(
     !('tools' in JSON.parse(seen!.init.body)),
     'no tools key when none given',
@@ -238,7 +243,11 @@ test('an agent-runtime provider gets the MCP tools URL + internal token and its 
     `http://127.0.0.1:${t.app.config.port}/mcp/tools`,
   );
   assert.equal(req.mcpServers[0].bearerToken, t.app.auth.internalToken());
-  assert.match(req.askId, /^ask-9_\w+$/, 'unique per run, derived from the ask id');
+  assert.match(
+    req.askId,
+    /^ask-9_\w+$/,
+    'unique per run, derived from the ask id',
+  );
   assert.match(req.system, /Lotti/);
 });
 
@@ -253,7 +262,7 @@ test('providers.models falls back to suggestions', async () => {
   assert.ok(r.result.models.includes('claude-sonnet-5-5'));
 });
 
-test('providers.models: live list always includes the V4 suggestions', async () => {
+test('providers.models: live list always includes the suggestions', async () => {
   const t = makeApp({
     fetch: async () =>
       jsonResponse({ data: [{ id: 'deepseek-chat' }, { id: 'deepseek-x' }] }),
@@ -267,16 +276,86 @@ test('providers.models: live list always includes the V4 suggestions', async () 
   assert.equal(r.result.source, 'live');
   assert.deepEqual(
     r.result.models.filter((m: string) => m.startsWith('deepseek-v4')),
-    ['deepseek-v4-flash', 'deepseek-v4-pro'],
+    ['deepseek-v4-pro'],
   );
+  assert.ok(r.result.models.includes('deepseek-flash'));
   assert.ok(r.result.models.includes('deepseek-x'));
   assert.equal(new Set(r.result.models).size, r.result.models.length);
 });
 
-test('a saved DeepSeek model is kept when the default changes', () => {
+test('a saved DeepSeek model is kept when the default changes; retired ids mean the current Flash', () => {
   const t = makeApp();
-  t.app.settings.set('provider.deepseek.model', 'deepseek-chat');
-  assert.equal(t.app.providers.modelFor('deepseek'), 'deepseek-chat');
+  t.app.settings.set('provider.deepseek.model', 'deepseek-v4-pro');
+  assert.equal(t.app.providers.modelFor('deepseek'), 'deepseek-v4-pro');
+  for (const old of [
+    'deepseek-chat',
+    'deepseek-reasoner',
+    'deepseek-v4-flash',
+  ]) {
+    t.app.settings.set('provider.deepseek.model', old);
+    assert.equal(t.app.providers.modelFor('deepseek'), 'deepseek-flash');
+  }
+});
+
+test('DeepSeek thinking: effort setting, reasoning_content sent back with tool calls', async () => {
+  const bodies: any[] = [];
+  const t = makeApp({
+    fetch: async (_url, init) => {
+      bodies.push(JSON.parse(String(init!.body)));
+      return jsonResponse({
+        choices: [
+          {
+            message: {
+              content: 'ok',
+              reasoning_content: 'thought',
+              tool_calls: [
+                {
+                  id: 'c1',
+                  type: 'function',
+                  function: { name: 'weather', arguments: '{}' },
+                },
+              ],
+            },
+          },
+        ],
+      });
+    },
+  });
+  t.app.settings.set('provider.active', 'deepseek');
+  t.app.secrets.set('provider.deepseek.api_key', 'sk-test');
+  assert.equal(
+    t.app.providers.status().find((p) => p.id === 'deepseek')!.thinking,
+    'off',
+  );
+  await t.app.ops.invoke(
+    'providers.set_thinking',
+    { provider: 'deepseek', level: 'high' },
+    'app',
+  );
+  const r = await t.app.providers.complete(
+    [
+      { role: 'user', content: 'Wetter?' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning: 'earlier',
+        toolCalls: [{ id: 'p', name: 'weather', args: {} }],
+      },
+      { role: 'tool', toolCallId: 'p', name: 'weather', content: 'sonnig' },
+    ],
+    tools,
+  );
+  assert.equal(r.reasoning, 'thought');
+  assert.deepEqual(bodies[0].thinking, { type: 'enabled' });
+  assert.equal(bodies[0].reasoning_effort, 'high');
+  assert.equal(bodies[0].messages[1].reasoning_content, 'earlier');
+  assert.throws(() =>
+    t.app.settings.set('provider.deepseek.thinking', 'medium'),
+  );
+  // another OpenAI-compatible endpoint gets no DeepSeek-only fields
+  t.app.settings.set('provider.deepseek.base_url', 'https://llm.example/v1');
+  await t.app.providers.complete([{ role: 'user', content: 'x' }], []);
+  assert.ok(!('thinking' in bodies[1]) && !('reasoning_effort' in bodies[1]));
 });
 
 const key = process.env.DEEPSEEK_API_KEY;
@@ -337,14 +416,20 @@ test('text(): with a subscription runtime active, background work uses a configu
   const st = t.app.providers.status().find((p) => p.id === 'fake_rt')!;
   assert.match(st.warning!, /Background tasks/);
   t.mock.isConfigured = true;
-  assert.equal(t.app.providers.status().find((p) => p.id === 'fake_rt')!.warning, undefined);
+  assert.equal(
+    t.app.providers.status().find((p) => p.id === 'fake_rt')!.warning,
+    undefined,
+  );
 });
 
 test('text() times out (default 45 s) instead of hanging background work', async () => {
   const t = makeApp();
   const { hang } = await import('./testing/helpers.ts');
   t.mock.script(hang);
-  await assert.rejects(t.app.providers.text('s', 'u', undefined, 30), /timed out/);
+  await assert.rejects(
+    t.app.providers.text('s', 'u', undefined, 30),
+    /timed out/,
+  );
   const { TEXT_TIMEOUT_MS } = await import('./providers/registry.ts');
   assert.equal(TEXT_TIMEOUT_MS, 45_000);
 });

@@ -32,8 +32,16 @@ export const SETTING_DEFS: Record<string, SettingDef> = {
     description: 'Fallback provider id (used on error/timeout), empty = none',
   },
   'provider.deepseek.model': {
-    default: 'deepseek-v4-flash',
-    description: 'DeepSeek model id',
+    default: 'deepseek-flash',
+    description:
+      'DeepSeek model id (deepseek-flash = the latest V4.1 Flash, deepseek-v4-pro)',
+  },
+  'provider.deepseek.thinking': {
+    default: 'off',
+    description:
+      'DeepSeek thinking: off (fastest answers), or its effort low, high or max',
+    pattern: /^(off|low|high|max)$/,
+    format: 'off, low, high or max',
   },
   'provider.deepseek.base_url': {
     default: '',
@@ -299,7 +307,8 @@ export class SettingsService {
   }
   /** The language of the phone's last ask; actions confirmed from the inbox have no ask of their own. */
   noteLocale(locale: 'de' | 'en'): void {
-    if (this.kvGet('phone.locale') !== locale) this.kvSet('phone.locale', locale);
+    if (this.kvGet('phone.locale') !== locale)
+      this.kvSet('phone.locale', locale);
   }
   lastLocale(): 'de' | 'en' {
     return this.kvGet('phone.locale') === 'de' ? 'de' : 'en';
