@@ -1,4 +1,4 @@
-# stage-0c (NOT pinned; for review, W24e)
+# stage-0c (pinned at W24e-0)
 
 stage-0b (pinned at W24d-0) with W24e's Wisp Boot fix (docs/wisp/rung4.md, "W24e: stage-0c"). On silicon at W24d, stage-0b's Wisp Boot hung at its first MSPI1 access (last stage `boot-nor`, then the watchdog). The Even bootloader hands off with MSPI1 in deep sleep: `DEVPWREN.PWRENMSPI1` = 0 and `CLKGEN.MSPIIOCLKCTRL` = `0x200` (IO clock gated). stage-0b powered MSPI1 but never ungated its clock. stage-0c's Wisp Boot (`apps/wisp-fw/src/boot/stage/boot_nor.c`) follows the HAL's WAKE order, with every register read-modify-written:
 
@@ -8,7 +8,7 @@ stage-0b (pinned at W24d-0) with W24e's Wisp Boot fix (docs/wisp/rung4.md, "W24e
 
 Before the hand-off it puts MSPI1 back as stock leaves it (powered down, clock gated). Each NOR transfer is bounded in total polls and by the phase's STIMER deadline. The new breadcrumbs are `boot-nor-power`, `boot-nor-clock` and `boot-nor-id`. The app is stage-0b's, version 0.3.0 (IDENT `Wisp 0.3.0 kind 16`). MIT, our own code; nothing of Even's.
 
-**Not pinned.** `wisp_w18/pins.py` does not list it, so install-wisp refuses these files (`tests/test_stage0c.py` checks that). The Renode harness (`wisp-fw:w18-test stage-0c`) and the tests add `proposed-pin.json` to the pin tables in memory only. Pinning is W24e-0, after an independent review: copy `proposed-pin.json`'s `image` into `WISP_IMAGES["stage-0c"]` and its Wisp Boot slot into `WISP_BOOT_PASSED`, then move `PEEK_REGIONS["wisp-boot-status"]` to `st` = `0x20375340` (`wisp-boot-status-stage-0c` reads it until then).
+**Pinned at W24e-0** (2026-11-10, PR #89) after an independent review that rebuilt these files byte-identical from `58a5cf8` at the canonical path: `wisp_w18/pins.py` lists the image in `WISP_IMAGES["stage-0c"]` (`proposed-pin.json`'s `image` copied unchanged, plus `crc32_aligned_over_stage_0b`) and its Wisp Boot slot `f13335bd…` in `WISP_BOOT_PASSED`; `PEEK_REGIONS["wisp-boot-status"]` is stage-0c's `st` (`0x20375340`), stage-0b's stays readable as `wisp-boot-status-stage-0b`. `tests/test_stage0c.py` runs install-wisp's whole gate on these files against the repository's pins and refuses a one-byte change to any of them; `wisp-fw:w18-test stage-0c` installs them through the patched loader in Renode.
 
 | File | SHA-256 | What |
 | --- | --- | --- |

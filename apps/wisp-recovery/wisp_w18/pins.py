@@ -146,18 +146,16 @@ PEEK_REGIONS = {
     # Wisp Boot's status block `st` moves with each build, so each Wisp Boot has its own region; peek the
     # one of the image installed (app-check names it). Reading the other one is harmless: 692 B of
     # something else, which the decoder reports as not a sealed status block.
-    "wisp-boot-status": (0x2037_533C, 692, "Wisp Boot's status block v2 (`st`) of the stage-0b Wisp Boot "
-                                           "(slot e673d6cd..., 7cec83a0...; W24d-0): its `prev` is the record of "
+    "wisp-boot-status": (0x2037_5340, 692, "Wisp Boot's status block v2 (`st`) of the stage-0c Wisp Boot "
+                                           "(slot f13335bd..., 9097fc71...; W24e-0): its `prev` is the record of "
                                            "the boot before the last one"),
     "wisp-boot-status-stage-0": (0x2037_5330, 692, "the same block of the stage-0 Wisp Boot (slot 7a5c399b..., "
                                                    "b54ee856...), for a temple that still runs stage-0"),
-    # stage-0c (rung4.md W24e) is NOT pinned; this read-only region lets a temple running it be peeked. Its
-    # pinning commit moves "wisp-boot-status" here, as W24d-0 did for stage-0b.
-    "wisp-boot-status-stage-0c": (0x2037_5340, 692, "the same block of the stage-0c Wisp Boot (W24e, not pinned; "
-                                                    "`st` of data/stage-0c/wisp_boot.elf)"),
+    "wisp-boot-status-stage-0b": (0x2037_533C, 692, "the same block of the stage-0b Wisp Boot (slot e673d6cd..., "
+                                                    "7cec83a0...; W24d-0), for a temple that still runs stage-0b"),
 }
 # Regions in SSRAM group 2: read only after "ssram-power" shows that group powered.
-PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-stage-0", "wisp-boot-status-stage-0c")
+PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-stage-0", "wisp-boot-status-stage-0b")
 PEEK_SSRAM_GROUP2 = 0x4
 PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 
@@ -228,7 +226,10 @@ SIDES = ("left", "right")
 # review: the build of commit 9bfac4d, rebuilt on t3-worker byte-identical (image, stripped ELFs,
 # Wisp Boot); the committed files are in data/stage-0/. W24d-0 pinned stage-0b after its independent
 # review (PR #88, APPROVE: rebuilt byte-identical from commit 91035fc, observe suite 8/8 on both
-# bootloaders); the entries are data/stage-0b/proposed-pin.json, copied unchanged. Every other image
+# bootloaders); the entries are data/stage-0b/proposed-pin.json, copied unchanged. W24e-0 pinned
+# stage-0c the same way (PR #89, independent review APPROVE: rebuilt byte-identical from commit 58a5cf8
+# at the canonical path, observe 8/8 and nor-off 4/4 on both bootloaders); its entries are
+# data/stage-0c/proposed-pin.json copied unchanged, plus the final CRC over stage-0b. Every other image
 # is refused before the case is touched.
 R4_1_APPROVED = True
 WISP_BOOT_SLOT_BYTES = 0x1_0000  # Wisp Boot padded to 64 KiB at [0x438000, 0x448000)
@@ -268,6 +269,20 @@ WISP_BOOT_PASSED: dict[str, dict] = {
     "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d": {
         "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 91035fc",
         "wisp_boot_bin_sha256": "7cec83a056bacf7d8b64e1c77fe56e3ebbd758b58428b00d7e06b8df48d19ef7",
+        "suites": {
+            "stock-2.4.0.24": "observe suite 8/8 pass (builder and independent review)",
+            "patched-87e2d4e0": "observe suite 8/8 pass (builder and independent review)",
+        },
+    },
+    # stage-0c's observe-only Wisp Boot with the W24e fix (MSPI1 powered and its IO clock ungated in the
+    # HAL's WAKE order, SCK 12 MHz, nor_off before the hand-off, per-transfer poll caps and the deadline
+    # inside every wait; wisp_boot.bin 9097fc71..., 12,000 B, padded with 0xFF to 64 KiB).
+    # `wisp-fw:boot-test` observe 8/8 (and the NOR-off build's suite 4/4) on both bootloaders under the
+    # W24e MSPI1 power/clock model, run by the builder and rerun by the independent review (PR #89,
+    # rung4.md "W24e"). The fallback build's suite is still owed; it is not in this image.
+    "f13335bd9c7aa64b3697386540cf0ab1377a0594f425536c664c235afc70caaa": {
+        "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 58a5cf8",
+        "wisp_boot_bin_sha256": "9097fc71c6c5cf66ea32f0cf0ef6ea2e920b76c858f59393d2c65dbfc87eb535",
         "suites": {
             "stock-2.4.0.24": "observe suite 8/8 pass (builder and independent review)",
             "patched-87e2d4e0": "observe suite 8/8 pass (builder and independent review)",
@@ -330,6 +345,22 @@ WISP_IMAGES: dict[str, dict] = {
         "crc32": 0xD10C_C7B6,
         "crc32_aligned_over_stock": 0x1AD2_36D1,
         "wisp_boot_slot_sha256": "e673d6cd87e3d5abc7a9590ceceb5b1476354d682cc039f7c3b6bff34815136d",
+    },
+    # W24e-0: stage-0c at commit 58a5cf8 (wisp-fw:build-native stage-0c), data/stage-0c/proposed-pin.json's
+    # `image` copied unchanged. Same form as stage-0b. It ends at 0x449518 like stage-0b, so install-wisp
+    # writes [0x438000, 0x449520) and its final CRC is d976c4e8 over the stock main and over stage-0b
+    # (whose 8 bytes after the image are still stock's): the W24e runbook installs it over stage-0b.
+    "stage-0c": {
+        "commit": "58a5cf8",
+        "image_sha256": "b41bfd5d353640edb7671f560a88d3238f2ee6a97d782a8a58040c2223e03d2a",
+        "image_bytes": 70_936,
+        "elf_sha256": "d70495a80d705a06dc8c8cb24ad06e62656400bbcf356e9f002249fc90172ae0",
+        "map_sha256": "c257fe00b42e31c1d11eeff94106f5154c4218a4f4147e041edaa6727c4c1ae8",
+        "gates": ("check_rule8", "no-mram-write"),
+        "crc32": 0xAD4B_C401,
+        "crc32_aligned_over_stock": 0xD976_C4E8,
+        "crc32_aligned_over_stage_0b": 0xD976_C4E8,  # proposed-pin.json crc32_aligned_over["stage-0b"]
+        "wisp_boot_slot_sha256": "f13335bd9c7aa64b3697386540cf0ab1377a0594f425536c664c235afc70caaa",
     },
 }
 BATTERY_MIN_PERCENT = 80

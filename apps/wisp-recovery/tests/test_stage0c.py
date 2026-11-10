@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
-"""stage-0c (docs/wisp/rung4.md W24e), NOT pinned: the committed files agree with their manifest and
-proposed-pin.json and pass rule 3 in both implementations; install-wisp refuses them with the
-repository's pins; with the proposed pin added in memory (as tests/boot/w18.py does), install-wisp's
-whole gate before the case accepts them and refuses a one-byte change; the final CRC over stock and
-over the pinned stage-0b (W24d left it on the left temple) is the proposal's. No hardware."""
+"""stage-0c (docs/wisp/rung4.md W24e), pinned at W24e-0 after its independent review (PR #89): the pin
+in wisp_w18/pins.py is proposed-pin.json's `image` copied unchanged, plus the final CRC over stage-0b;
+the committed files agree with their manifest and the pin and pass rule 3 in both implementations;
+install-wisp's whole gate before the case accepts them and refuses a one-byte change to any file; the
+final CRC over stock and over the pinned stage-0b (W24d left it on the left temple) is the pin's. No
+hardware."""
 
 import json
 import sys
@@ -11,7 +12,6 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,14 +36,6 @@ def proposed_pin() -> dict:
     return {k: (tuple(v) if k == "gates" else int(v, 16) if k.startswith("crc32") else v) for k, v in p.items()}
 
 
-def with_proposal():
-    """The pin tables with stage-0c's proposal added, in memory only."""
-    pin = proposed_pin()
-    return mock.patch.multiple(pins, WISP_IMAGES={**pins.WISP_IMAGES, "stage-0c": pin},
-                               WISP_BOOT_PASSED={**pins.WISP_BOOT_PASSED,
-                                                 pin["wisp_boot_slot_sha256"]: PROPOSED["wisp_boot"]})
-
-
 class Stage0c(unittest.TestCase):
     def setUp(self):
         self.data = FILES["image"].read_bytes()
@@ -51,14 +43,17 @@ class Stage0c(unittest.TestCase):
         self.map = FILES["map"].read_bytes()
         self.manifest = json.loads((DIR / "manifest.json").read_text())
 
-    def test_not_pinned(self):
-        self.assertNotIn("stage-0c", pins.WISP_IMAGES)
-        self.assertIsNone(native.find_pin(image.sha(self.data)))
-        self.assertNotIn(PROPOSED["image"]["wisp_boot_slot_sha256"], pins.WISP_BOOT_PASSED)
-        # Its status block can be peeked already (read-only), at the proposal's `st`.
-        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status-stage-0c"][:2],
-                         (int(PROPOSED["peek_wisp_boot_status"], 16), 692))
-        self.assertIn("wisp-boot-status-stage-0c", pins.PEEK_SSRAM_GATED)
+    def test_pinned_unchanged_from_the_proposal(self):
+        pin = dict(pins.WISP_IMAGES["stage-0c"])
+        self.assertEqual(pin.pop("crc32_aligned_over_stage_0b"), int(PROPOSED["crc32_aligned_over"]["stage-0b"], 16))
+        self.assertEqual(pin, proposed_pin())
+        self.assertEqual(native.find_pin(image.sha(self.data))[0], "stage-0c")
+        passed = pins.WISP_BOOT_PASSED[PROPOSED["image"]["wisp_boot_slot_sha256"]]
+        self.assertEqual(set(passed["suites"]), set(pins.WISP_BOOT_SUITES))
+        self.assertEqual(passed["wisp_boot_bin_sha256"], PROPOSED["wisp_boot"]["wisp_boot_bin_sha256"])
+        # Its status block is the default peek region now; stage-0b's stays readable.
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][:2], (int(PROPOSED["peek_wisp_boot_status"], 16), 692))
+        self.assertIn("wisp-boot-status", pins.PEEK_SSRAM_GATED)
 
     def test_files_match_the_manifest_and_the_proposal(self):
         p, m = PROPOSED["image"], self.manifest
@@ -98,23 +93,21 @@ class Stage0c(unittest.TestCase):
         region[: len(prev)] = prev
         region[: len(self.data)] = self.data
         self.assertEqual(zlib.crc32(bytes(region)), int(PROPOSED["crc32_aligned_over"]["stage-0b"], 16))
+        self.assertEqual(zlib.crc32(bytes(region)), pins.WISP_IMAGES["stage-0c"]["crc32_aligned_over_stage_0b"])
 
-    def test_install_wisp_refuses_it_with_the_repositorys_pins(self):
-        code, stderr = run_until_case(argv())
-        self.assertEqual(code, 2, stderr)
-        self.assertIn("REFUSED", stderr)
+    def test_resolve_accepts_the_committed_image(self):
+        facts = native.resolve(self.data, self.elf, self.map, PROPOSED["image"]["image_sha256"][:12])
+        self.assertEqual((facts["name"], facts["end"]), ("stage-0c", PROPOSED["write_bound"]))
+        self.assertEqual(facts["wisp_boot_sha256"], PROPOSED["image"]["wisp_boot_slot_sha256"])
 
-    def test_with_the_proposal_the_whole_gate_before_the_case_accepts_it(self):
-        with with_proposal():
-            facts = native.resolve(self.data, self.elf, self.map, PROPOSED["image"]["image_sha256"][:12])
-            self.assertEqual((facts["name"], facts["end"]), ("stage-0c", PROPOSED["write_bound"]))
-            reached, stderr = run_until_case(argv())
+    def test_the_whole_gate_before_the_case_accepts_it(self):
+        reached, stderr = run_until_case(argv())
         self.assertIs(reached, True, stderr)
 
-    def test_with_the_proposal_a_one_byte_change_is_refused_before_the_case(self):
+    def test_a_one_byte_change_to_any_file_is_refused_before_the_case(self):
         for which, at in (("image", 0x100), ("image", 0xFFFF), ("image", 0x1_0000), ("image", 70_935),
                           ("elf", None), ("map", None)):
-            with self.subTest(which=which, at=at), tempfile.TemporaryDirectory() as tmp, with_proposal():
+            with self.subTest(which=which, at=at), tempfile.TemporaryDirectory() as tmp:
                 paths = {k: Path(tmp) / v.name for k, v in FILES.items()}
                 for k, v in FILES.items():
                     paths[k].write_bytes(v.read_bytes())

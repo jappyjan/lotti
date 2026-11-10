@@ -72,9 +72,8 @@ Cases (end states):
                 does nothing while held in reset; any access then fails the case), and the D-cache
                 (WispRstGen CacheModel: across a warm reset only lines cleaned by wisp_dcache_clean
                 survive). Also checked: Wisp Boot's NOR phase read the MX id with result 0
-  stage-0c      rung4.md W24e: the same as stage-0b was, with the committed stage-0c (data/stage-0c/, NOT
-                pinned: its proposed-pin.json is added to the pin tables in memory, so install-wisp's
-                own gate runs on the files), on the W24d models plus MSPI1's power and IO clock
+  stage-0c      rung4.md W24e: the same as stage-0b was, with the committed stage-0c (data/stage-0c/, pinned
+                at W24e-0, through install-wisp's own gate), on the W24d models plus MSPI1's power and IO clock
                 (WispMspiNor with WispPower: an access by Wisp code while DEVPWRSTATUS.PWRSTMSPI1 or
                 CLKGEN MSPI1IOCLKEN is 0 halts the CPU until the next reset, GatedStall, and fails
                 the case). Also checked: Wisp Boot's NOR phase read the MX id with result 0, and it
@@ -1006,8 +1005,8 @@ class Harness:
         if pins.WISP_IMAGES.get("stage-0b") != pin:
             raise native.NativeRefused("pins.WISP_IMAGES['stage-0b'] is not proposed-pin.json's entry")
         st = nm_all(STAGE_0B_DIR / "wisp_boot.elf", "st", kinds="bB")
-        if st != [pins.PEEK_REGIONS["wisp-boot-status"][0]]:
-            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not pins.PEEK_REGIONS['wisp-boot-status']")
+        if st != [pins.PEEK_REGIONS["wisp-boot-status-stage-0b"][0]]:
+            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not pins.PEEK_REGIONS['wisp-boot-status-stage-0b']")
         data = (STAGE_0B_DIR / "stage-0b.bin").read_bytes()
         elf = (STAGE_0B_DIR / "stage0.elf").read_bytes()
         map_text = (STAGE_0B_DIR / "stage0.map").read_bytes()
@@ -1018,28 +1017,25 @@ class Harness:
 
     @staticmethod
     def stage_0c_files() -> tuple[bytes, bytes, bytes, dict]:
-        """The committed stage-0c (data/stage-0c/), NOT pinned (rung4.md W24e: pinning follows an
-        independent review). This process (Renode, never a case) adds its proposed pin
-        (proposed-pin.json) to the pin tables in memory, next to the repository's own, so that
-        install-wisp's whole gate (native.resolve) runs on the committed files as it would after
-        pinning. The peek region of Wisp Boot's status block is taken from the committed
-        wisp_boot.elf, as the pin will have to record it."""
+        """The committed stage-0c (data/stage-0c/, pinned at W24e-0), through install-wisp's own gate
+        against the repository's pins. The pin must be proposed-pin.json's `image` unchanged (plus the
+        final CRC over stage-0b), and the peek region of Wisp Boot's status block must be `st` of the
+        committed wisp_boot.elf."""
         prop = json.loads((STAGE_0C_DIR / "proposed-pin.json").read_text())
         pin = {k: (tuple(v) if k == "gates" else int(v, 16) if k.startswith("crc32") else v)
                for k, v in prop["image"].items()}
-        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "stage-0c": pin}
-        pins.WISP_BOOT_PASSED = {**pins.WISP_BOOT_PASSED, pin["wisp_boot_slot_sha256"]: prop["wisp_boot"]}
+        pin["crc32_aligned_over_stage_0b"] = int(prop["crc32_aligned_over"]["stage-0b"], 16)
+        if pins.WISP_IMAGES.get("stage-0c") != pin:
+            raise native.NativeRefused("pins.WISP_IMAGES['stage-0c'] is not proposed-pin.json's entry")
         st = nm_all(STAGE_0C_DIR / "wisp_boot.elf", "st", kinds="bB")
-        if len(st) != 1 or st[0] != int(prop["peek_wisp_boot_status"], 16):
-            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not proposed-pin.json's peek address")
-        if st[0] != pins.PEEK_REGIONS["wisp-boot-status-stage-0c"][0]:
-            raise native.NativeRefused(f"`st` {st[0]:#x} is not pins.PEEK_REGIONS['wisp-boot-status-stage-0c']")
+        if st != [pins.PEEK_REGIONS["wisp-boot-status"][0]] or st[0] != int(prop["peek_wisp_boot_status"], 16):
+            raise native.NativeRefused(f"`st` in wisp_boot.elf {st} is not pins.PEEK_REGIONS['wisp-boot-status']")
         data = (STAGE_0C_DIR / "stage-0c.bin").read_bytes()
         elf = (STAGE_0C_DIR / "stage0.elf").read_bytes()
         map_text = (STAGE_0C_DIR / "stage0.map").read_bytes()
         facts = native.resolve(data, elf, map_text, image.sha(data)[:12])
         if facts["name"] != "stage-0c":
-            raise native.NativeRefused(f"resolved as {facts['name']}, not stage-0c's proposed pin")
+            raise native.NativeRefused(f"resolved as {facts['name']}, not the stage-0c pin")
         return data, elf, map_text, facts
 
     def stage_0b_models(self):
@@ -1267,7 +1263,7 @@ class Harness:
             def peek_host(link):
                 with Session(link, log=log.append, temple_feed=True) as s:
                     s.require_patched_bootloader(self.patched)
-                    status = "wisp-boot-status-stage-0" if old else "wisp-boot-status-stage-0c"
+                    status = "wisp-boot-status-stage-0" if old else "wisp-boot-status"
                     out = {n: s.peek(n) for n in ("ssram-power", "rstgen-stat", "wisp-record", status)}
                     out["wisp-boot-status"] = out.pop(status)
                     return out

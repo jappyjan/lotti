@@ -913,7 +913,7 @@ Two harness fixes were needed on the way, neither of them in Wisp. (a) Halting t
 
 **Not run:** the fallback suite (`WISP_RUNG3_SUITES=fallback`). The fallback build changed too (`nor_off` in `run_app` and `confirm()`, the NOR fix), but it is in no image. Its full runs on both bootloaders come before any fallback Wisp Boot is flashed (rule 12), as at W24d.
 
-#### The stage-0c files (for review; NOT pinned)
+#### The stage-0c files (for install-wisp; pinned at W24e-0)
 
 Built on t3-worker from commit `58a5cf8` (clean tree; the app reports rev `58a5cf87f4`) at the checkout path `/home/jappy/.t3/worktrees/lotti/t3-4445548f` (the map records it), with `apps/wisp-fw/scripts/build_native.sh stage-0c`, packaged by `scripts/package_native.sh stage-0c`; `scripts/propose_pin.py stage-0c --commit 58a5cf8` wrote `proposed-pin.json`. **Reproduced:** a second checkout of `58a5cf8` with its own `.wisp-cache`, bind-mounted at that path in a private mount namespace (the command in `data/stage-0b/README.md`), gives a byte-identical image, map, manifest, `wisp_boot.bin` and stripped ELFs. Gates: `check_image` on both parts, `check_rule8` and `check_no_mram_write` on both, `check_native.py --observe --bare-app-elf`, wisp-ota `pack-main`: `SENDABLE`.
 
@@ -929,11 +929,32 @@ Built on t3-worker from commit `58a5cf8` (clean tree; the app reports rev `58a5c
 | Wisp Boot | `wisp_boot.bin` `9097fc71c6c5cf66ea32f0cf0ef6ea2e920b76c858f59393d2c65dbfc87eb535` (12,000 B); slot (padded to 64 KiB) `f13335bd9c7aa64b3697386540cf0ab1377a0594f425536c664c235afc70caaa` |
 | app part (`stage0.bin`) | 5,400 B at `0x448000`, SHA-256 `255bb864d85ba930a6e355959f1e86085563279ad55ff5a659e7bb43c269df61`, version 0.3.0 |
 | gates | `check_rule8`, `no-mram-write` (both parts) |
-| status block `st` | **`0x20375340`** (stage-0b's `0x2037533C`): read-only peek region `wisp-boot-status-stage-0c` until the pin moves `wisp-boot-status` |
+| status block `st` | **`0x20375340`** (stage-0b's `0x2037533C`): `pins.PEEK_REGIONS["wisp-boot-status"]` moved with the pin (W24e-0); stage-0b's is now `wisp-boot-status-stage-0b` |
 
-#### W24e-0: review and pin (open)
+#### W24e-0: review and pin
 
-stage-0c gets an independent review like W24d-0: rebuild from the commit at the canonical path (the `unshare` bind mount, as in the stage-0b data README), compare every hash, check the fix against `apollo510.h` and the HAL, and check the new allowlist entries and the model. Then the pinning commit copies `proposed-pin.json`'s `image` into `pins.WISP_IMAGES["stage-0c"]` and the slot into `pins.WISP_BOOT_PASSED`, and moves `PEEK_REGIONS["wisp-boot-status"]` to stage-0c's `st` (`0x20375340`; until then `wisp-boot-status-stage-0c` reads it). `w18-test stage-0c` then loads the pin instead of the proposal. **Nothing below runs before that pin.**
+**Done 2026-11-10.** An independent review on t3-worker (PR #89, emulation and static analysis only; no hardware) gave **APPROVE for pinning**. It:
+
+- rebuilt stage-0c from `58a5cf8` with `build_native.sh stage-0c`, bind-mounted at the canonical path `/home/jappy/.t3/worktrees/lotti/t3-4445548f` (the `unshare` command of the stage-0b data README). The result: **`b41bfd5d…`**, byte-identical image, manifest, map, `wisp_boot.bin` (`9097fc71…`) and stripped ELFs. Every gate passed, wisp-ota `pack-main` `SENDABLE`. The commits after `58a5cf8` change no source;
+- recomputed, with its own script over the stock 2.4.0.24 bundle, CRC-32 `ad4bc401`, the slot `f13335bd…` and install-wisp's final CRC **`d976c4e8` over stock and over the committed stage-0b** (the 8 bytes after the image are `88f880070ed5dff8`, stock's, in both);
+- checked against hal_ambiq's `apollo510.h` (offsets from `offsetof` over the header itself): `CLKGEN.MSPIIOCLKCTRL` `0x40004110`, `MSPI1IOCLKEN` bit 5, `MSPI1IOCLKSEL` bits 6–9 (`AM_HAL_MSPI_IO_CLK_HFRC_192MHZ` = 8), `DEVPWREN`/`DEVPWRSTATUS` `+0x4`/`+0x8` bit 15, MSPI1's `DEV0CFG` `+0x84`, `DEV0CFG1` `+0x8C` (`SDR250EN` bit 30), `DEV0XIP`, `DMACFG`, `INTEN`, `CQCFG`. `DEV0CFG` `0x01080860` decodes as `CLKDIV` 8 (the HAL's 12 MHz from HFRC 192 MHz), `TXNEG`, `TURNAROUND` 8 (unused: no `ENTURN`), 1-byte instruction, 4-byte address, serial CE0, mode 0. `nor_init` follows `am_hal_mspi_power_control(WAKE)` and `mspi_clkgen_ctrl`; `nor_off` follows DEEPSLEEP. 12 MHz with the plain `READ4B` is far below the MX25U25643G's normal-read limit and needs no timing scan;
+- found every new loop bounded. The longest stretch without a watchdog feed is `mspi1_up` (100,000 + 2,000 reads) plus one transfer (≤ 2,000,000 polls, deadline-checked), far below the ~9.1 s watchdog. The PMIC kick code is unchanged; the observe build has no NOR write path and no new PMIC write. In the Renode trace, Wisp Boot's only CLKGEN writes are `MSPIIOCLKCTRL` `0x200` and `0x220`, the two allowlisted values (exact-value match in `strict.py`). The hand-off leaves `DEVPWREN` without MSPI1 and `MSPIIOCLKCTRL` `0x200`, stock's state;
+- checked the model: it gates on `DEVPWRSTATUS`/`MSPI1IOCLKEN` as stored by the PWRCTRL and CLKGEN models, counts every gated access, and with `GatedStall` halts on a Wisp one. The bootloader and the stock app trip it 0 times in every run, with 670–1,234 power-downs per run, so the model is wired, and the pinned stage-0b fails under it as on silicon.
+
+**Rule 12**, rerun by the review through nx:
+
+| Suite | Stock 2.4.0.24 | Patched `87e2d4e0…` |
+| --- | --- | --- |
+| rung 3 observe | **8/8 pass**, 0 gated MSPI1 accesses | **8/8 pass**, 0 gated MSPI1 accesses |
+| rung 3 `nor-off` | **4/4 pass** | **4/4 pass** |
+| `w18-test stage-0c stage-0b-models stage-0-models hello rung4-reads` (against the pin) | — | **5/5 pass**: stage-0c final CRC `d976c4e8`; stage-0b stalls at its `INTEN` write (PC `0x43907A`), then prev `boot-nor` 250 ms, `watchdog` |
+| `wisp-recovery:test`, `wisp-fw:test` | pass | |
+
+**The pinning commit** copies `proposed-pin.json`'s `image` unchanged into `pins.WISP_IMAGES["stage-0c"]`, plus `crc32_aligned_over_stage_0b` (`d976c4e8`, the proposal's `crc32_aligned_over["stage-0b"]`: the runbook installs over stage-0b). It adds the slot `f13335bd…` to `pins.WISP_BOOT_PASSED`. It moves `PEEK_REGIONS["wisp-boot-status"]` to `0x20375340` (stage-0c's `st`), and stage-0b's block stays readable as `wisp-boot-status-stage-0b` (`0x2037533C`). `tests/test_stage0c.py` and `w18-test stage-0c` now run on the pin. The fallback build's suite is still owed, as at W24d-0; it is not in this image.
+
+Review findings, none blocking:
+- **(1) Open, silicon only:** the HAL's WAKE also calls `am_hal_clkmgr_clock_request(HFRC)`, which sets `CLKGEN.MISC.FRCHFRC` for the first user. Wisp Boot does not. In Renode, stock hands off with `MISC` `0xFBBFC0` (FRCHFRC 0), the same state the stock app finds. If MSPI1's 192 MHz IO clock needs HFRC forced on while the core runs from another source, step 5 shows a stall with prev stage `boot-nor-clock`. That is the W24d loop again, recoverable through the loader; the reading table already names it. NOR-off is then the fallback.
+- **(2) Note:** the model does not cover HFRC or the pads. A pass under it says nothing about those (see "What stays unproven").
 
 #### W24e runbook draft: stage-0c over stage-0b, left
 
@@ -950,7 +971,7 @@ Mirrors the [W24d runbook](#w24d-runbook-draft-stage-0b-left): the same setup an
 | 5 | `w18 boot-watch --side left --protocol wisp --watch-s 70 --interval-s 0.1` (at once after 4) | `boot report (from wisp-boot) …`, then `IDENT: Wisp 0.3.0 kind 16, stage bare-metal`, the app status with PMIC kicks rising and errors 0, and Wisp Boot's block v2: `PMIC kick 0x0`, **`NOR bound ok, NOR id 0x3925c2 (result 0), mount 0`**, staging `971f4516`, the four `/firmware` files with their sizes, action `run-app`. Then the clock block (write the LFRC and the core clock down). No `HELO` after `CONT` within 70 s (apart from the case app's 180 s reset, which is later) | none (findings are not stops) |
 | 6 | `w18 boot-watch --side left --protocol wisp --watch-s 30 --interval-s 0.1` (its relay start resets the temple) | the first boot's report: cause `external`, `prev-valid`, previous stage `s0-loop` (or `s0-measure`), boot counter +1 | — |
 | 7 | `w18 loader-hello --side left` | `HELO`, CRC `63cd8dda` twice, flag `0xffffffff` | as W24 step 8 |
-| 7b | `w18 peek --side left --what ssram-power rstgen-stat wisp-record wisp-boot-status` (after W24e-0, `wisp-boot-status` is stage-0c's `st`, `0x20375340`; before it, `wisp-boot-status-stage-0c`) | `wisp_ram_powered: true`; `rstgen-stat` `external`; `wisp-record` valid, stage `s0-loop`; `wisp-boot-status` sealed with **`nor_id 0x3925c2`, `nor_result 0`, `mount_result 0`, `nor_bound_hit false`**, `prev` valid | the usual |
+| 7b | `w18 peek --side left --what ssram-power rstgen-stat wisp-record wisp-boot-status` (`wisp-boot-status` is stage-0c's `st`, `0x20375340`, since W24e-0) | `wisp_ram_powered: true`; `rstgen-stat` `external`; `wisp-record` valid, stage `s0-loop`; `wisp-boot-status` sealed with **`nor_id 0x3925c2`, `nor_result 0`, `mount_result 0`, `nor_bound_hit false`**, `prev` valid | the usual |
 | 8 | `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json` | exit 0 | exit 3: STOP before `recover`, send the report |
 | 9 | `w18 app-check --side left` | `Wisp stage-0c: region CRC-32 ad4bc401 over 70,936 B, image ad4bc401: MATCH`, flag clear | no match, or the flag not clear |
 | 10 | **Health check, read-only; stage-0c stays installed:** `w18 loader-hello --side left`; `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json`; `w18 boot-watch --side left --protocol wisp --watch-s 20 --interval-s 0.1` | CRC `63cd8dda` twice, flag clear; PMIC exit 0, `BCHARGER.CHG_STAT` charging or full and `ERR_REASON` 0 while in the case; stage-0c's status answers again (PMIC kicks rising, errors 0) and its Wisp Boot block still reads NOR result 0 | any 10c condition |
