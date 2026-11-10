@@ -6,12 +6,13 @@
 # map as built, and the build's manifest. Pinning (wisp_w18/pins.py) is a separate, reviewed step.
 #
 #   scripts/build_native.sh stage-0c && scripts/package_native.sh stage-0c
+#   scripts/build_native.sh native-1 && scripts/package_native.sh native-1
 #
 # Build from a clean, committed tree: the app embeds `git describe --dirty`.
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 
-image="${1:?usage: package_native.sh stage-0c}"
+image="${1:?usage: package_native.sh stage-0c|native-1|native-1-right}"
 src="$CACHE_DIR/build/$image"
 dst="$REPO_ROOT/apps/wisp-recovery/wisp_w18/data/$image"
 case "$image" in
@@ -19,8 +20,12 @@ stage-0c)
 	app_elf="$src/boot/stage0.elf"
 	app_map="$src/boot/stage0.map"
 	;;
+native-1 | native-1-right)
+	app_elf="$src/app/zephyr/zephyr.elf"
+	app_map="$src/app/zephyr/zephyr.map"
+	;;
 *)
-	echo "wisp-fw: package_native.sh knows stage-0c only (native-0, stage-0 and stage-0b are pinned as reviewed)" >&2
+	echo "wisp-fw: package_native.sh knows stage-0c and native-1 (native-0, stage-0 and stage-0b are pinned as reviewed)" >&2
 	exit 1
 	;;
 esac

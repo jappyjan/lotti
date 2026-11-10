@@ -142,6 +142,13 @@ JUMP_RE = re.compile(r"(just jump to app|APP jumpaddr app)\(0x438000\)")
 HELO_PREFIX = "5aa5ff100001030c48454c4f"
 STAGE_0_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0"
 STAGE_0B_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0b"
+NATIVE_1_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/native-1"
+BASELINE = APP_DIR / "images/pmic-baseline-w21.json"
+DIAG_ADDR = 0x20370000
+STAGE_APP_IDLE = 0x92
+RAILS_ON = ["08 02 01", "04 00 01"]   # LDSW2 on, then BUCK1 on (stock's order, hardware.md "Display")
+RAILS_OFF = ["04 01 01", "08 03 01"]  # BUCK1 off, then LDSW2 off
+PMIC_ARM = ["07 05 0a", "07 08 00 3c 00", "07 03 01", "07 00 01"]
 STAGE_0C_DIR = REPO / "apps/wisp-recovery/wisp_w18/data/stage-0c"
 POWER_ON = APP_DIR / "images/pmic-poweron-w24.json"
 RELAY_EXCHANGE_S = 0.0175  # one relay exchange on hardware (W18 F1d: 17.5 ms)
@@ -236,6 +243,18 @@ def silicon_findings(run) -> dict:
             "cleans": int(cleans.split("\n")[0].split("=")[1])}
 
 
+def pmic_ops(log: str) -> list[str]:
+    """WispPmicWdt's PmicLog as one list in time order: every write's bytes, and every register read
+    as its 2-byte address ("04 08"), whether made with the offset phase or as an address write."""
+    out = []
+    for line in log.splitlines():
+        if " ms write " in line:
+            out.append(line.split(" ms write ")[1].strip())
+        elif " ms read " in line:
+            out.append(" ".join(line.split(" ms read ")[1].split()[:2]))
+    return out
+
+
 def silicon_failures(f: dict) -> list[str]:
     out = []
     if f["both_uart_wisp"]:
@@ -260,7 +279,7 @@ class Run:
     """One Renode machine: the rung-3 platform with WispCaseLink on UART2."""
 
     def __init__(self, work: Path, name: str, bootloader: bytes, app: bytes | None, flag=(0xFFFFFFFF,) * 4,
-                 nor: Path | None = None):
+                 nor: Path | None = None, panel: bool = False):
         self.dir = work / "runs" / name
         shutil.rmtree(self.dir, ignore_errors=True)
         self.dir.mkdir(parents=True)
@@ -277,6 +296,13 @@ class Run:
                           "iom: Wisp.WispIomTypes @ sysbus 0x40050000\n    size: 0x7000\n\n"
                           "pmicwdt: Wisp.WispPmicWdt @ sysbus 0x40057000", repl)
         assert n == 1, "rung-3 platform changed: iom line not found"
+        if panel:
+            # MSPI0 with the microLED panel as a recorder (WispMspiPanel, JBD4010), for native-1's
+            # boot screen; the rung-3 platform keeps MSPI0 as plain storage otherwise.
+            repl, n = re.subn(r"mspi0: Wisp\.WispTrace @ sysbus 0x40060000\n    size: 0x1000\n    trace: 0\n"
+                              r"    baseAddress: 0x40060000",
+                              "panel: Wisp.WispMspiPanel @ sysbus 0x40060000\n    IRQ -> nvic@20", repl)
+            assert n == 1, "rung-3 platform changed: mspi0 line not found"
         # INFO0 (0x42000000), INFOC (0x400C2000) and CRYPTO (0x400C0000) fall into the rung-3
         # platform's plain periph_hi memory: zeros unless a case writes synthetic contents.
         (self.dir / "w18.repl").write_text(repl)
@@ -286,6 +312,9 @@ class Run:
         resc = resc.replace(f"include @{APP_DIR}/renode/models/WispProbe.cs",
                             f"include @{APP_DIR}/renode/models/WispProbe.cs\ninclude @{APP_DIR}/renode/models/WispIomTypes.cs\n"
                             f"include @{APP_DIR}/renode/models/WispPmicWdt.cs")
+        if panel:
+            resc = resc.replace(f"include @{APP_DIR}/renode/models/WispProbe.cs",
+                                f"include @{APP_DIR}/renode/models/WispProbe.cs\ninclude @{APP_DIR}/renode/models/WispMspiPanel.cs")
         resc = re.sub(r"machine LoadPlatformDescription .*", f"machine LoadPlatformDescription @{self.dir / 'w18.repl'}", resc)
         (self.dir / "w18.resc").write_text(resc)
         self.r = Renode(self.dir, free_port())
@@ -378,6 +407,15 @@ class Run:
         if bad:
             raise RuntimeError(f"uart2 FrameLog failed: {bad}")
         return [l.strip() for l in out if l.strip()]
+
+    def frame_count(self) -> int:
+        return int(self.r.cmd("uart2 FrameCount").split()[0], 0)
+
+    def frame(self, i: int) -> str:
+        out = self.r.cmd(f"uart2 FrameAt {i}").strip()
+        if out and not re.fullmatch(r"[0-9a-f]+", out):
+            raise RuntimeError(f"uart2 FrameAt failed: {out}")
+        return out
 
     def mram(self) -> bytes:
         out = self.dir / "mram.bin"
@@ -1128,7 +1166,7 @@ class Harness:
                 t += min(wait, seconds - t)
                 if t >= seconds:
                     break
-            seen = len(run.frames())
+            seen = run.frame_count()
             req = b"" if listen else hook.request(i)
             if req:
                 run.r.cmd(f'uart2 Inject "{req.hex()}"')
@@ -1137,9 +1175,8 @@ class Harness:
             while t - sent < RELAY_POLL_BOUND_S and t < seconds:
                 run.step(RELAY_EXCHANGE_S)
                 t += RELAY_EXCHANGE_S
-                frames = run.frames()
-                if len(frames) > seen:
-                    got = bytes.fromhex(frames[seen])  # the first frame; the relay drops the rest
+                if run.frame_count() > seen:
+                    got = bytes.fromhex(run.frame(seen))  # the first frame; the relay drops the rest
                     break
             out["exchanges"].append({"t": round(sent, 3), "req": req[4:8].hex(), "waited": round(t - sent, 3),
                                      "got": got[4:12].hex() if got else None})
@@ -1394,13 +1431,12 @@ class Harness:
 
     @staticmethod
     def inject(run, req: bytes) -> bytes:
-        before = len(run.frames())
+        before = run.frame_count()
         run.r.cmd(f'uart2 Inject "{req.hex()}"')
         for _ in range(40):
             run.r.cmd('emulation RunFor "0.025"')
-            fr = run.frames()
-            if len(fr) > before:
-                return bytes.fromhex(fr[before])
+            if run.frame_count() > before:
+                return bytes.fromhex(run.frame(before))
         raise RuntimeError(f"no case-UART reply to {req.hex()}")
 
     # --- the pinned native-0 (W23) and its way back (W24) ---
@@ -1550,6 +1586,412 @@ class Harness:
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
 
+    # --- native-1 (rung4.md W25): the MVP behind the patched loader ---
+    @staticmethod
+    def native_1_files() -> tuple[bytes, dict]:
+        """The committed native-1 (data/native-1/) through install-wisp's own gate. native-1 is NOT
+        pinned in the repository (its review and pin are a separate step): this process pins it,
+        and its Wisp Boot slot, in memory only, as the install-wisp case does with its synthetic
+        image, so the rest of the gate (ELF and map against the image, the gates the manifest
+        records, rule 3 in both implementations) runs on the committed files."""
+        data = (NATIVE_1_DIR / "native-1.bin").read_bytes()
+        elf = (NATIVE_1_DIR / "zephyr.elf").read_bytes()
+        map_text = (NATIVE_1_DIR / "zephyr.map").read_bytes()
+        slot = image.sha(data[:pins.WISP_BOOT_SLOT_BYTES])
+        pins.R4_1_APPROVED = True
+        pins.WISP_IMAGES = {**pins.WISP_IMAGES, "native-1 (w18-test only, not pinned)": {
+            "image_sha256": image.sha(data), "image_bytes": len(data), "elf_sha256": image.sha(elf),
+            "map_sha256": image.sha(map_text), "gates": pins.WISP_GATES, "wisp_boot_slot_sha256": slot}}
+        pins.WISP_BOOT_PASSED = {**pins.WISP_BOOT_PASSED, slot: {
+            "build": "observe-only, native-1", "suites": {s_: "w18-test only (rung 3: wisp-fw:boot-test)"
+                                                           for s_ in pins.WISP_BOOT_SUITES}}}
+        return data, native.resolve(data, elf, map_text, image.sha(data)[:12])
+
+    @staticmethod
+    def diag_record(run) -> dict:
+        """Wisp Boot's diagnostics record (D1) as it stands in RAM, read from the bus."""
+        words = [int(run.r.cmd(f"sysbus ReadDoubleWord {DIAG_ADDR + 4 * i:#x}").split()[0], 0) for i in range(16)]
+        return case_uart.decode_diag_record(struct.pack("<16I", *words), check=False)
+
+    @staticmethod
+    def panel_frame(run) -> bytes:
+        path = run.dir / "panel-frame.bin"
+        run.r.cmd(f"panel SaveFrame @{path}")
+        return path.read_bytes()
+
+    @staticmethod
+    def boot_screen_errors(frame: bytes) -> list[str]:
+        """native-1's boot screen (src/display/boot_screen.c) in the panel's frame (320 bytes a row,
+        high nibble = left pixel): the 4-pixel frame at the edge, "Wisp" at y 180..259, the 16 grey
+        bands at y 380..439 (inside the frame's left and right edges)."""
+        def px(x, y):
+            b = frame[y * 320 + x // 2]
+            return b >> 4 if x % 2 == 0 else b & 0xF
+        errors = []
+        if len(frame) != 320 * 480:
+            return [f"frame of {len(frame)} bytes"]
+        edge = [(x, y) for y in (0, 3, 476, 479) for x in range(0, 640, 7)] + \
+               [(x, y) for x in (0, 3, 636, 639) for y in range(0, 480, 7)]
+        if any(px(x, y) != 15 for x, y in edge):
+            errors.append("the edge frame is not value 15")
+        bands = [px(20 + 40 * b, 410) for b in range(16)]
+        if bands[1:15] != list(range(1, 15)):
+            errors.append(f"grey bands read {bands}")
+        sys.path.insert(0, str(APP_DIR / "scripts"))
+        import gen_boot_font as font  # the generator of the font the firmware draws
+        want = sum(row.count("X") for ch in "Wisp" for row in font.GLYPHS[ch]) * font.SCALE ** 2
+        lit = sum(px(x, y) == 15 for y in range(180, 260) for x in range(4, 636))
+        if lit != want:
+            errors.append(f"text area: {lit} pixels of 15, the font draws {want}")
+        if any(px(x, y) for y in range(100, 170) for x in range(4, 636)):
+            errors.append("pixels set between the edge and the text")
+        return errors
+
+    def native_one(self):
+        """install-wisp of native-1 over a running stock app, its boots, the case UART under the
+        half-duplex model, the boot screen, a case-UART RESET with Wisp Boot's report."""
+        name = "native-1"
+        try:
+            data, facts = self.native_1_files()
+        except (OSError, native.NativeRefused) as error:
+            self.record(name, False, f"native-1 files or install-wisp's gate: {error}", "")
+            return
+        app = AppImage("native-1", data, facts["image_sha256"], int(facts["end"], 16), check=native_rule3)
+        run = Run(self.work, name, self.patched, self.app, nor=self.native_nor(), panel=True)
+        log, fails, q, t0 = [], [], {}, time.time()
+        hook = recovery_case_uart.WispStatus()
+        try:
+            self.native_probes(run, NATIVE_1_DIR / "wisp_boot.elf")
+            # W24e model: an MSPI1 access with the IO clock gated or the block unpowered stalls the CPU.
+            run.r.cmd("nor GatedStall true")
+            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+            pmic_realism(run)
+            # The nPM1300 keeps its registers across Apollo resets, starting with what stock left (W21).
+            run.r.cmd("pmicwdt KeepRegisters true")
+            for reg, v in json.loads(BASELINE.read_text())["registers"].items():
+                run.r.cmd(f"pmicwdt SetRegister {int(reg, 16):#x} {int(v['value'], 16):#x}")
+            run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
+            # The D-cache model: across a warm reset only what Wisp code cleaned survives (every
+            # wisp_dcache_clean in Wisp Boot's and the app's ELF).
+            run.r.cmd("rstgen CacheModel true")
+            for elf in (NATIVE_1_DIR / "wisp_boot.elf", NATIVE_1_DIR / "zephyr.elf"):
+                for addr in nm_all(elf, "wisp_dcache_clean"):
+                    run.r.cmd(f"rstgen CleanHook {addr:#x}")
+
+            def host(link):
+                with Session(link, log=log.append, temple_feed=True) as s:
+                    s.require_patched_bootloader(self.patched)
+                    return self.wisp_session(s, app)
+            thread, result = run.attach(host)
+            t = 0.0
+            while thread.is_alive() and t < 900:
+                run.step(1)
+                t += 1
+            writes = self.write_log(run)
+            # 1. The first boot after CONT: no console; the record's breadcrumbs say how far it got.
+            t += run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 60, step=0.25)
+            rec1 = self.diag_record(run)
+            ask = lambda r: self.inject(run, r)  # noqa: E731
+            q["version"] = case_uart.decode_version(ask(case_uart.STOCK_VERSION_QUERY))
+            code_, ident = case_uart.decode_reply(ask(case_uart.ident_request()), case_uart.OP_IDENT)
+            q["ident"] = case_uart.decode_ident(ident) if code_ == 0 else {"code": code_}
+            raw = case_uart.read_block(ask, case_uart.BLOCK_STATUS)
+            q["status"] = case_uart.decode_status(raw) if raw else {}
+            block = case_uart.read_block(ask, case_uart.BLOCK_BOOT) or b""
+            q["boot"] = case_uart.decode_boot_status(block) if len(block) in case_uart.BOOT_STATUS_SIZES.values() else {}
+            code_, rep = case_uart.decode_reply(ask(case_uart.bootrep_request()), case_uart.OP_BOOTREP)
+            q["boot_report_app"] = case_uart.decode_boot_report(rep) if code_ == 0 else {"code": code_}
+            raw = case_uart.read_block(ask, case_uart.BLOCK_DIAG)
+            q["record"] = case_uart.decode_diag_record(raw, check=False) if raw else {}
+            # boot-watch's own protocol (apps/wisp-recovery wisp_w18/case_uart.py) against the app.
+            answers = []
+            for i in range(200):
+                decoded = hook.decode(ask(hook.request(i)))
+                if decoded is not None:
+                    answers.append(decoded)
+                if hook.complete(answers):
+                    break
+            q["boot_watch"] = {"complete": hook.complete(answers), "queries": i + 1}
+            # 2. The boot screen: drawn at boot, the panel off again CONFIG_WISP_BOOT_SCREEN_S later.
+            # JBD4010: pixels and commits (the model's Frames counts the A6N-G's whole frames).
+            frames = int(run.r.cmd("panel Commits").split()[0], 0)
+            pixels = int(run.r.cmd("panel PixelBytes").split()[0], 0)
+            frame = self.panel_frame(run)
+            screen = self.boot_screen_errors(frame)
+            for _ in range(62):
+                run.step(1)
+            t += 62
+            raw = case_uart.read_block(ask, case_uart.BLOCK_STATUS)
+            q["status_later"] = case_uart.decode_status(raw) if raw else {}
+            # 3. RESET over the case UART: the reply, the loader's HELO (nobody holds it), Wisp Boot,
+            # the second boot to app-idle; then the boot report from the app, built from Wisp Boot's
+            # block: the previous boot's last breadcrumb, through the reset and the D-cache model.
+            # Short steps: a long RunFor through the patched loader's window can stall Renode.
+            n_frames = run.frame_count()
+            code, _ = recovery_case_uart.decode_reply(ask(recovery_case_uart.reset_request()),
+                                                      recovery_case_uart.OP_RESET)
+            t_reset = 0.0
+            while t_reset < 30 and self.diag_record(run).get("boots", 0) < rec1.get("boots", 0) + 1:
+                run.step(0.1)
+                t_reset += 0.1
+            while t_reset < 40 and self.diag_record(run).get("stage") != "app-idle":
+                run.step(0.1)
+                t_reset += 0.1
+            t += t_reset
+            helo_after = sum(run.frame(i).startswith(HELO_PREFIX) for i in range(n_frames, run.frame_count()))
+            code_, rep = case_uart.decode_reply(ask(case_uart.bootrep_request()), case_uart.OP_BOOTREP)
+            report_reset = case_uart.decode_boot_report(rep) if code_ == 0 else {"code": code_}
+            second = {"helo": helo_after, "seconds": round(t_reset, 1)}
+            rec2 = self.diag_record(run)
+            silicon = silicon_findings(run)
+            watched = run.r.cmd("nor WatchedLog").split("\n")
+            watched_writes = int(run.r.cmd("nor WatchedWrites").split()[0], 0)
+            live = liveness(run, fails)
+            strict_bad = strict_check(run, fails)
+            pc_log = run.r.cmd("pmicwdt PmicPcLog")
+            pm = self.pmic(run)
+            mram = run.mram()
+        except Exception as error:  # noqa: BLE001 - a case failure, not a harness crash
+            (run.dir / "case-uart.json").write_text(json.dumps({"query": q}, indent=2, default=str))
+            self.record(name, False, f"stopped: {error!r}; so far {list(q)}", f"{time.time() - t0:.0f} s wall")
+            return
+        finally:
+            run.close()
+        v = result.get("value") or {}
+        if mram[0x38000:0x38000 + len(data)] != data:
+            fails.append("native-1 not in MRAM")
+        proposed = json.loads((NATIVE_1_DIR / "proposed-pin.json").read_text())["image"]
+        if v.get("crc_after") != f"{int(proposed['crc32_aligned_over_stock'], 16):08x}":
+            fails.append(f"final CRC {v.get('crc_after')}, proposed pin {proposed['crc32_aligned_over_stock']}")
+        if mram[0x10000:0x10000 + len(self.patched)] != self.patched:
+            fails.append("bootloader region changed")
+        if not (len(writes) > 2 and writes[0] == (pins.APP_BASE, 4) and writes[-1] == (pins.APP_BASE, 4)
+                and all(pins.APP_BASE <= d and d + 4 * n <= app.end for d, n in writes)):
+            fails.append(f"install write order/bound: first {writes[:2]} last {writes[-1:]}")
+        if rec1.get("stage") != "app-idle" or rec2.get("stage") != "app-idle":
+            fails.append(f"breadcrumbs: first boot {rec1.get('stage')}, after RESET {rec2.get('stage')}")
+        ident_ = q.get("ident") or {}
+        st = q.get("status") or {}
+        if ident_.get("image_kind") != 1 or not q["version"].get("wisp"):
+            fails.append(f"IDENT {ident_} version {q['version']}")
+        if not {"pmic-wdt", "boot-services", "boot-status", "boot-observe"} <= set(st.get("flags", [])):
+            fails.append(f"status {st}")
+        boot = q.get("boot") or {}
+        if not boot or boot.get("nor_result") != 0 or boot.get("staging_id") != struct.unpack_from("<I", self.stock_payload, 4)[0] \
+                or len(boot.get("inventory", [])) != len(self.firmware) or boot.get("action") != "run-app":
+            fails.append(f"Wisp Boot's block (the NOR read path): {boot}")
+        if (q.get("boot_report_app") or {}).get("source") != "app":
+            fails.append(f"BOOTREP from the app: {q.get('boot_report_app')}")
+        if (q.get("record") or {}).get("stage") != "app-idle":
+            fails.append(f"READ block 4 (the record): {q.get('record')}")
+        if not q["boot_watch"]["complete"]:
+            fails.append(f"boot-watch's wisp protocol incomplete: {hook.summary(answers)}")
+        if st.get("display") != "on" or (q.get("status_later") or {}).get("display") != "off":
+            fails.append(f"display state {st.get('display')} ({st.get('display_err')}), later "
+                         f"{(q.get('status_later') or {}).get('display')}")
+        if frames < 1 or pixels < 320 * 480 or screen:
+            fails.append(f"boot screen: {frames} commit(s), {pixels} pixel bytes; {screen}")
+        if code != 0 or second["helo"] != 1 or report_reset.get("prev_stage") != "app-reset-request" \
+                or report_reset.get("boot") != (rec1.get("boots", 0) + 1) & 0xFF:
+            fails.append(f"RESET: reply {code}, {second['helo']} HELO, report {report_reset}")
+        fails += silicon_failures(silicon)
+        if not re.match(r"tx_lost=0 rx_corrupted=0 ", silicon["wire"]):
+            fails.append(f"half duplex: {silicon['wire']}")
+        if not silicon["cleans"]:
+            fails.append("no D-cache clean by Wisp code (the record would not survive a reset)")
+        half = silicon["wire"]
+        nor_ops = {l.split()[0] for l in watched if l.strip()}
+        if watched_writes or not nor_ops <= {"9f", "05", "13"} or "13" not in nor_ops:
+            fails.append(f"Wisp Boot NOR commands {sorted(nor_ops)}")
+        wb_kicks, wb_other = strict.wisp_boot_pmic(pc_log)
+        if wb_other:
+            fails.append(f"Wisp Boot wrote the PMIC other than the kick: {wb_other}")
+        wb_at = {(e["ms"], e["bytes"]) for e in strict.pmic_writes(pc_log) if e["wisp_boot"]}
+        app_writes = [l.split(" ms write ")[1].strip() for l in pm["log"].splitlines() if " ms write " in l
+                      and (int(l.split(" ms write ")[0]), l.split(" ms write ")[1].strip()) not in wb_at]
+        data_writes = [w for w in app_writes if len(w.split()) > 2]
+        if [w for w in data_writes if w in PMIC_ARM][:4] != PMIC_ARM:
+            fails.append("the app did not arm the PMIC watchdog with stock's writes")
+        bad = sorted({w for w in data_writes if w not in {"07 04 01", "05 00 01", *PMIC_ARM, *RAILS_ON, *RAILS_OFF}})
+        if bad:
+            fails.append(f"PMIC writes outside the allowlist: {bad}")
+        rails = [w for w in data_writes if w in RAILS_ON + RAILS_OFF]
+        if rails[:6] != RAILS_OFF + RAILS_ON + RAILS_OFF:
+            fails.append(f"panel rails switched {rails} (want off {RAILS_OFF} at boot, on {RAILS_ON}, off {RAILS_OFF})")
+        ops = pmic_ops(pm["log"])
+        first_on = next((i for i, w in enumerate(ops) if w == RAILS_ON[0]), None)
+        if first_on is None or not {"04 08", "04 0f", "08 09"} <= set(ops[:first_on]):
+            fails.append("the gate's reads (04 08, 04 0f, 08 09) did not come before the first rail write")
+        if pm["expiries"]:
+            fails.append(f"PMIC watchdog expired {pm['expiries']}x")
+        diffs = pmic_baseline.check([bytes.fromhex(w.replace(" ", "")) for w in data_writes])
+        if diffs:
+            fails.append(f"PMIC writes differ from W21's snapshot: {diffs[:4]}")
+        ok = bool(v) and not fails and "error" not in result
+        state = (f"native-1 ({len(data)} B, CRC {v.get('crc_after')}) written through the loader over stock, vectors "
+                 f"first and last; CONT -> observe-only Wisp Boot -> app, breadcrumbs to app-idle (no console); case "
+                 f"UART half duplex ({half}): IDENT kind {ident_.get('image_kind')} stage {ident_.get('stage')}, both "
+                 f"blocks, BOOTREP and the record from the app, boot-watch's protocol complete; Wisp Boot's NOR read "
+                 f"(staging {boot.get('staging_id', 0):08x}, {len(boot.get('inventory', []))} firmware files); boot "
+                 f"screen drawn ({pixels} pixel bytes, {frames} commits, checked pixel by pixel), rails off {RAILS_OFF} at boot, on {RAILS_ON}, both after the gate's reads, off again after 60 s; PMIC "
+                 f"armed with stock's writes, {pm['kicks']} kicks, Wisp Boot {wb_kicks}, no power cycle; RESET -> HELO "
+                 f"-> second boot; its report (from the {report_reset.get('source')}) prev {report_reset.get('prev_stage')} cause "
+                 f"{report_reset.get('reset_cause_names')}, boot {report_reset.get('boot')}, app-idle again; {live}; MSPI1 gated accesses {silicon['nor_gated']} (Wisp code {silicon['nor_gated_wisp']}), "
+                 f"{silicon['nor_stalls']} stalls; strict clean"
+                 if ok else f"{'; '.join(fails)} {result.get('error')!r}")
+        self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
+        (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
+        (run.dir / "case-uart.json").write_text(json.dumps(
+            {"query": q, "record_first": rec1, "record_after_reset": rec2, "reset_watch": second,
+             "boot_watch": hook.summary(answers), "strict_unallowed": strict_bad, "silicon": silicon},
+            indent=2, default=str))
+
+    def native_one_pmic(self, name: str, mode: str):
+        """native-1 in MRAM as install-wisp leaves it over stock, behind the stock 2.4.0.24 bootloader
+        (the loader plays no part here), with the nPM1300's watchdog armed at stock's real 30.72 s.
+
+        mode "dead" (review F1 of #87): I2C7 NAKs every transaction the app makes to the PMIC
+        (WispPmicWdt NakApp); Wisp Boot's polled kick still gets through. The app must stop
+        feeding the Apollo WDT (breadcrumb app-wdt-starved), the WDT must reset the temple, every
+        boot's Wisp Boot must kick, and the PMIC watchdog must never expire: the PMIC keeps stock's
+        configuration instead of W24's power cycle.
+
+        mode "poweron" (review F2): the PMIC holds its power-on values (W24's snapshot): the rail
+        gate must refuse (display "refused"), after reading BUCK1 VOUT_NORM and SW_CTRL, with no
+        rail task and no configuration register written."""
+        data = (NATIVE_1_DIR / "native-1.bin").read_bytes()
+        image_ = data + self.app[len(data):]
+        run = Run(self.work, name, self.bl24, image_, nor=self.native_nor())
+        fails, t0, q = [], time.time(), {}
+        try:
+            self.native_probes(run, NATIVE_1_DIR / "wisp_boot.elf")
+            run.r.cmd("nor GatedStall true")
+            run.r.cmd("pmicwdt ActOnWrites true")
+            run.r.cmd("pmicwdt KeepRegisters true")
+            regs = json.loads(BASELINE.read_text())["registers"]
+            for reg, v in regs.items():
+                run.r.cmd(f"pmicwdt SetRegister {int(reg, 16):#x} {int(v['value'], 16):#x}")
+            if mode == "poweron":
+                for reg, v in json.loads(POWER_ON.read_text())["registers"].items():
+                    run.r.cmd(f"pmicwdt SetRegister {int(reg, 16):#x} {int(v['value'], 16):#x}")
+            pmic_realism(run)
+            run.r.cmd("pmicwdt Arm 30.72")
+            run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
+            run.r.cmd("rstgen CacheModel true")
+            for elf in (NATIVE_1_DIR / "wisp_boot.elf", NATIVE_1_DIR / "zephyr.elf"):
+                for addr in nm_all(elf, "wisp_dcache_clean"):
+                    run.r.cmd(f"rstgen CleanHook {addr:#x}")
+            if mode == "dead":
+                run.r.cmd("pmicwdt NakApp true")
+                run.run_until(lambda: int(run.r.cmd("wdt Bites").split()[0], 0) >= 3, 75, step=0.25)
+                run.run_until(lambda: False, 3, step=0.25)  # the next boot's Wisp Boot and its kick
+                naks = int(run.r.cmd("pmicwdt AppNaks").split()[0], 0)
+                st_words = [int(run.r.cmd(f"sysbus ReadDoubleWord {pins.PEEK_REGIONS["wisp-boot-status"][0] + 4 * i:#x}").split()[0], 0)
+                            for i in range(692 // 4)]
+                try:
+                    q["boot_status"] = case_uart.decode_boot_status(struct.pack(f"<{692 // 4}I", *st_words))
+                except ValueError as error:
+                    q["boot_status"] = {"error": str(error)}
+            else:
+                run.run_until(lambda: self.diag_record(run).get("stage") == "app-idle", 40, step=0.25)
+                raw = case_uart.read_block(lambda r_: self.inject(run, r_), case_uart.BLOCK_STATUS)
+                q["status"] = case_uart.decode_status(raw) if raw else {}
+            bites = int(run.r.cmd("wdt Bites").split()[0], 0)
+            pc_log = run.r.cmd("pmicwdt PmicPcLog")
+            pm = self.pmic(run)
+            rec = self.diag_record(run)
+            strict_bad = strict.unallowed_writes(strict.parse(run.r.cmd("probe StrictDump")))
+        except Exception as error:  # noqa: BLE001 - a case failure, not a harness crash
+            self.record(name, False, f"stopped: {error!r}", f"{time.time() - t0:.0f} s wall")
+            return
+        finally:
+            run.close()
+        writes = [l.split(" ms write ")[1].strip() for l in pm["log"].splitlines() if " ms write " in l]
+        data_writes = [w for w in writes if len(w.split()) > 2]
+        wb_kicks, wb_other = strict.wisp_boot_pmic(pc_log)
+        if wb_other:
+            fails.append(f"Wisp Boot wrote the PMIC other than the kick: {wb_other}")
+        if pm["expiries"]:
+            fails.append(f"the PMIC watchdog expired {pm['expiries']}x (W24's power cycle)")
+        if strict_bad:
+            fails.append(f"strict: {strict.describe(strict_bad)}")
+        if mode == "dead":
+            app_writes = [e for e in strict.pmic_writes(pc_log) if not e["wisp_boot"]]
+            prev = (q["boot_status"].get("prev") or {}) if "error" not in q["boot_status"] else {}
+            if bites < 3:
+                fails.append(f"{bites} Apollo WDT resets in 75 s (want the app to stop feeding)")
+            if wb_kicks < bites + 1:
+                fails.append(f"Wisp Boot kicked {wb_kicks}x over {bites + 1} boots")
+            if app_writes or not naks:
+                fails.append(f"app PMIC writes got through ({len(app_writes)}) or none was NAKed ({naks})")
+            if prev.get("stage") != "app-wdt-starved":
+                fails.append(f"the previous boot's last breadcrumb is {prev.get('stage')}, not app-wdt-starved")
+            diffs = pmic_baseline.check([bytes.fromhex(w.replace(" ", "")) for w in data_writes])
+            if diffs:
+                fails.append(f"PMIC configuration changed: {diffs[:3]}")
+            state = (f"I2C7 NAKs the app ({naks} transactions): the app stopped feeding (prev breadcrumb "
+                     f"{prev.get('stage')}), {bites} Apollo WDT resets, Wisp Boot kicked the PMIC {wb_kicks}x, the PMIC "
+                     f"watchdog (30.72 s) never expired, its configuration unchanged")
+        else:
+            st = q.get("status") or {}
+            rails = [w for w in data_writes if w.split()[0] in ("04", "08")]
+            gate_reads = sorted({w for w in pmic_ops(pm["log"]) if w in ("04 08", "04 0f")})
+            if rails:
+                fails.append(f"rail writes with the PMIC at its power-on values: {rails}")
+            if not gate_reads:
+                fails.append("the gate never read BUCK1's configuration")
+            if st.get("display") != "refused":
+                fails.append(f"display {st.get('display')} ({st.get('display_err')})")
+            bad = sorted({w for w in data_writes if w not in {"07 04 01", "05 00 01", *PMIC_ARM}})
+            if bad:
+                fails.append(f"PMIC writes beyond the watchdog and the ADC task: {bad}")
+            if rec.get("stage") != "app-idle":
+                fails.append(f"breadcrumb {rec.get('stage')}")
+            state = (f"PMIC at W24's power-on values: the gate read BUCK1 ({', '.join(gate_reads)}), refused (display "
+                     f"{st.get('display')}), no rail or configuration write; PMIC armed with stock's writes, no expiry; "
+                     f"app-idle")
+        self.record(name, not fails, state if not fails else "; ".join(fails), f"{time.time() - t0:.0f} s wall")
+
+    def legacy_half_duplex(self, name: str, data: bytes, boot_elf: Path):
+        """The pinned native-0 in MRAM as install-wisp leaves it over stock, behind the stock 2.4.0.24
+        bootloader, under the W24d models (half-duplex wire, MSPICFG's resets): it must fail as it
+        did on silicon (W24): its Zephyr pinctrl keeps both case-link pads in UART function, so the
+        case's bytes arrive corrupted and nothing is answered, and its Wisp Boot holds MSPI1 in
+        reset. A pass here means: it fails, for those reasons. (stage-0's counterpart is
+        `stage-0-models`.)"""
+        image_ = data + self.app[len(data):]
+        # The half-duplex failure does not depend on the bootloader, and the patched loader's boot
+        # window runs about 30x slower in Renode.
+        run = Run(self.work, name, self.bl24, image_, nor=self.native_nor())
+        fails, t0 = [], time.time()
+        try:
+            self.native_probes(run, boot_elf)
+            run.run_until(lambda: False, 12, step=0.1)
+            answered = 0
+            for req in (case_uart.ident_request(), case_uart.bootrep_request(), case_uart.ident_request()):
+                try:
+                    self.inject(run, req)
+                    answered += 1
+                except RuntimeError:
+                    pass
+            silicon = silicon_findings(run)
+            boots = sum(l.startswith("wisp_boot_main ") for l in run.r.cmd("probe Report").splitlines())
+        finally:
+            run.close()
+        if answered:
+            fails.append(f"{answered} case-UART request(s) answered")
+        if "app" not in silicon["both_uart_wisp"]:
+            fails.append(f"the app never left both pads in UART function ({silicon['both_uart']})")
+        if not silicon["nor_in_reset_wisp"]:
+            fails.append("Wisp Boot never touched MSPI1 while held in reset")
+        if not boots:
+            fails.append("Wisp Boot never ran")
+        ok = not fails
+        self.record(name, ok, (f"fails as on silicon (W24): Wisp Boot ran {boots}x; 0 of 3 case-UART requests "
+                               f"answered ({silicon['wire']}); both pads in UART function by {silicon['both_uart_wisp']}; "
+                               f"MSPI1 accessed {silicon['nor_in_reset']}x while held in reset")
+                    if ok else "; ".join(fails), f"{time.time() - t0:.0f} s wall")
+
     def install_wisp_cut(self, fraction=0.5):
         """Power lost half way through install-wisp over a running stock app."""
         app = self.wisp_image()
@@ -1646,9 +2088,10 @@ def main() -> int:
     ap.add_argument("--cache", type=Path, default=REPO / ".wisp-cache")
     ap.add_argument("--only", nargs="*", default=["control", "boot-nohost", "hello", "info", "recover",
                                                    "recover-relay", "recover-cut", "recover-split", "temple-wdt",
-                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0", "native-0-recover",
-                                                   "stage-0c", "stage-0b-models", "stage-0-models",
-                                                   "install"])
+                                                   "recover-fed", "rung4-reads", "install-wisp", "native-0",
+                                                   "native-0-legacy", "native-0-recover", "stage-0c", "stage-0b-models",
+                                                   "stage-0-models", "native-1", "native-1-pmic-dead",
+                                                   "native-1-pmic-poweron", "install"])
     ap.add_argument("--install-chunks", default="0,1,2,9,10,11,19,29,30,31,35,36,37,38")
     ap.add_argument("--install-old", nargs="*", default=["2.4.0.24", "2.3.2.14"],
                     help="which old bootloader(s) the cut install states start from")
@@ -1684,6 +2127,9 @@ def main() -> int:
         h.install_wisp_cut()
     if "native-0" in only:
         h.native_zero()
+    if "native-0-legacy" in only:
+        h.legacy_half_duplex("native-0-legacy", native.NATIVE_0_FILES["image"].read_bytes(),
+                             native.NATIVE_0_DIR / "wisp_boot.elf")
     if "native-0-recover" in only:
         h.native_zero_recover()
     if "stage-0c" in only or "stage-0" in only:
@@ -1692,6 +2138,12 @@ def main() -> int:
         h.stage_0b_models()
     if "stage-0-models" in only or "stage-0" in only:
         h.stage_zero("stage-0")
+    if "native-1" in only:
+        h.native_one()
+    if "native-1-pmic-dead" in only:
+        h.native_one_pmic("native-1-pmic-dead", "dead")
+    if "native-1-pmic-poweron" in only:
+        h.native_one_pmic("native-1-pmic-poweron", "poweron")
     if "install" in only:
         ks = [int(k) for k in a.install_chunks.split(",")]
         if "2.4.0.24" in a.install_old:

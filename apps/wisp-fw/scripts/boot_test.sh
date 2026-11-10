@@ -6,11 +6,12 @@
 #   1. stock bundles in the git-ignored .wisp-cache/stock/: 2.4.0.24 (the version on Jan's temples,
 #      or $WISP_STOCK_VERSION) and 2.3.2.14 (the base of drdaeman's patched bootloader); wisp-ota
 #      fetch if missing, SHA-256 pinned. Even's firmware never leaves .wisp-cache.
-#   2. native-0 and stage-0c (scripts/build_native.sh): the real app, stage-0c and the observe-only Wisp Boot
+#   2. native-1, stage-0c and native-1's real app (scripts/build_native.sh; the app has the UART1 console
+#      back for rung3.py: tests/boot/app/rung3-console.*)
 #   3. both Wisp Boot builds with the fault apps and the real app behind them
 #      (scripts/build_boot.sh -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP=...): the fallback build in
 #      build/wisp-boot, the observe-only one in build/wisp-boot-observe, which must be byte-identical
-#      to native-0's (its first 64 KiB are what rung4.md R4-1 compares); and the observe build with
+#      to native-1's (its first 64 KiB are what rung4.md R4-1 compares); and the observe build with
 #      -DWISP_BOOT_NOR=OFF (rung4.md W24e: no NOR phase) in build/wisp-boot-observe-nor-off
 #   4. tests/boot/rung3.py for every suite on every bootloader (safety.md rule 12: the stock
 #      2.4.0.24 and the patched 87e2d4e0... bootloader); each table goes to
@@ -34,9 +35,21 @@ for v in "$stock" 2.3.2.14; do
 	fi
 done
 
-"$APP_DIR/scripts/build_native.sh" native-0 >/dev/null
-native="$CACHE_DIR/build/native-0"
-app="$native/app/zephyr/zephyr.bin"
+"$APP_DIR/scripts/build_native.sh" native-1 >/dev/null
+native="$CACHE_DIR/build/native-1"
+# The real app behind Wisp Boot: native-1's app with the UART1 console back (rung3.py follows its
+# banner and heartbeats; tests/boot/app/rung3-console.*). The hardware image itself has no console;
+# wisp-fw:w18-test native-1 runs that one.
+rung3_app="$CACHE_DIR/build/rung3-app"
+rm -rf "$rung3_app"
+WISP_PANEL=none WISP_BUILD_DIR="$rung3_app" "$APP_DIR/scripts/build.sh" \
+	"-DEXTRA_CONF_FILE=$APP_DIR/images/native-1/native-1.conf;$APP_DIR/tests/boot/app/rung3-console.conf" \
+	"-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/images/native-1/native-1.overlay;$APP_DIR/tests/boot/app/rung3-console.overlay" \
+	>"$CACHE_DIR/build/rung3-app.log" 2>&1 || {
+	tail -n 30 "$CACHE_DIR/build/rung3-app.log" >&2
+	exit 1
+}
+app="$rung3_app/zephyr/zephyr.bin"
 "$APP_DIR/scripts/build_boot.sh" -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app"
 WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe" "$APP_DIR/scripts/build_boot.sh" \
 	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app" -DWISP_STAGE0=ON
@@ -53,11 +66,7 @@ cmp "$CACHE_DIR/build/wisp-boot-observe/native_stage0.bin" "$CACHE_DIR/build/sta
 	exit 1
 }
 cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$native/boot/wisp_boot.bin" || {
-	echo "FAIL: the observe-only Wisp Boot under test differs from native-0's" >&2
-	exit 1
-}
-cmp "$CACHE_DIR/build/wisp-boot-observe/native_real.bin" "$native/native-0.bin" || {
-	echo "FAIL: native_real.bin differs from native-0.bin" >&2
+	echo "FAIL: the observe-only Wisp Boot under test differs from native-1's" >&2
 	exit 1
 }
 

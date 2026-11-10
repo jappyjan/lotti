@@ -1,0 +1,6 @@
+/* SPDX-License-Identifier: MIT
+ * TEST ONLY (scripts/test.sh): native-1 with UART1 enabled again; the hardware-image gate
+ * (cmake/hwimage.cmake, W25: no console on hardware images) must refuse it. */
+&uart1 {
+	status = "okay";
+};

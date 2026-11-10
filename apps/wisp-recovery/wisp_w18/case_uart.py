@@ -36,6 +36,7 @@ REQUEST_LENGTHS = (9, 25, 32)
 REPLY_LENGTHS = (13, 21, 29, 32)
 
 STAGES = {1: "kernel", 2: "hal", 3: "bt-start", 4: "bt-up", 5: "bt-failed", 6: "bare-metal"}
+DISPLAY_STATES = {0: "none", 1: "on", 2: "off", 3: "refused", 4: "failed"}
 FLAGS = {0x01: "battery", 0x02: "vbus", 0x04: "charging", 0x08: "pmic-wdt", 0x10: "boot-services",
          0x20: "boot-status", 0x40: "boot-observe", 0x80: "session"}
 # The left temple's staging file should still hold the pure stock 2.4.0.24 main from rung 1's
@@ -106,13 +107,13 @@ def decode_read(data: bytes) -> tuple[int, int, int, bytes]:
     return block, offset, total, data[5:]
 
 
-STATUS_FMT = "<BBhBBHBBBbIIIIIIHhHH12s"
+STATUS_FMT = "<BBhBBHBBBbIIIIIIHhHBb12s"
 STATUS_SIZE = struct.calcsize(STATUS_FMT)  # 56
 
 
 def decode_status(body: bytes) -> dict:
     (version, stage, bt, sensors, flags, mv, chg, vbus, kind, pmic_last, reset_cause, uptime, kicks, errors,
-     feeds, sessions, confirms, confirm_result, block, _res, rev) = struct.unpack(STATUS_FMT, body[:STATUS_SIZE])
+     feeds, sessions, confirms, confirm_result, block, display, display_err, rev) = struct.unpack(STATUS_FMT, body[:STATUS_SIZE])
     if version != 1:
         raise ValueError(f"status version {version}")
     return {
@@ -122,6 +123,7 @@ def decode_status(body: bytes) -> dict:
         "pmic_last": pmic_last, "reset_cause": reset_cause, "uptime_ms": uptime, "pmic_kicks": kicks,
         "pmic_errors": errors, "apollo_feeds": feeds, "sessions": sessions, "confirm_calls": confirms,
         "confirm_result": None if confirm_result == 0x7FFF else confirm_result, "boot_block_size": block,
+        "display": DISPLAY_STATES.get(display, display), "display_err": display_err,
         "rev": rev.rstrip(b"\0").decode(errors="replace"),
     }
 
@@ -139,7 +141,14 @@ DIAG_STAGES = {0x00: "none", 0x10: "boot-start", 0x11: "boot-pmic-kick", 0x12: "
                0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1A: "boot-nor-power",
                0x1B: "boot-nor-clock", 0x1C: "boot-nor-id", 0x1D: "boot-nor-skipped", 0x1F: "boot-fault",
                0x40: "s0-reset", 0x41: "s0-init", 0x42: "s0-uart", 0x43: "s0-feed", 0x44: "s0-kick",
-               0x45: "s0-loop", 0x46: "s0-measure", 0x47: "s0-reset-request", 0x4F: "s0-fault"}
+               0x45: "s0-loop", 0x46: "s0-measure", 0x47: "s0-reset-request", 0x4F: "s0-fault",
+               0x80: "app-soc", 0x81: "app-soc-done", 0x82: "app-pre1", 0x83: "app-pre1-end", 0x84: "app-pre2",
+               0x85: "app-stimer-ok", 0x86: "app-post", 0x87: "app-post-buses", 0x88: "app-post-end",
+               0x89: "app-pmic-thread", 0x8A: "app-pmic-armed", 0x8B: "app-main", 0x8C: "app-case",
+               0x8D: "app-hal", 0x8E: "app-display", 0x8F: "app-bt-start", 0x90: "app-bt-up",
+               0x91: "app-bt-failed", 0x92: "app-idle", 0x93: "app-session", 0x94: "app-soc-lp",
+               0x95: "app-soc-buck", 0x96: "app-soc-temp", 0x9E: "app-stimer-dead",
+               0x9F: "app-fault", 0xA0: "app-reset-request", 0xA1: "app-wdt-starved"}
 REPORT_SOURCES = {0: "wisp-boot", 1: "app"}
 REPORT_FLAGS = {0x01: "prev-valid", 0x02: "prev-fault", 0x04: "kick-ok", 0x08: "stimer-xt"}
 DIAG_MAGIC = 0x47414457  # "WDAG"

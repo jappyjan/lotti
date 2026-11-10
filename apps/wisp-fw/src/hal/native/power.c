@@ -12,12 +12,14 @@
  * that also clears the Apollo state a software reset keeps, and a hang that stops the kicks ends
  * in the patched loader's boot window after 30.72 s.
  *
- * Apollo watchdog (G7): Wisp Boot arms and locks it (8 s, reset); the app restarts it with a raw
- * RSTRT write, once at PRE_KERNEL_1 and then every second, from the same thread as the PMIC kick.
- * The thread is the highest-priority cooperative thread, started at POST_KERNEL init (before the
- * drivers and long before bt_enable(), whose EM9305 bring-up blocks main for up to 5 s). It feeds
- * unconditionally: native-0 catches scheduler- and interrupt-level hangs, not a stuck main or
- * link thread (a liveness check comes with R4-8). With no Wisp Boot in front (sim,
+ * Apollo watchdog (G7): Wisp Boot arms and locks it (about 9.1 s, reset); the app restarts it
+ * with a raw RSTRT write, once at PRE_KERNEL_1, then every second from a k_timer callback that
+ * cannot block or log, as long as the PMIC kicks succeed (native-1; native-0 fed from the PMIC
+ * thread itself, which also logged on errors: under W24's H1b a stuck console write starved it).
+ * The PMIC thread is the highest-priority cooperative thread, started at POST_KERNEL init (before
+ * the drivers and long before bt_enable(), whose EM9305 bring-up blocks main for up to 5 s), and
+ * never logs. It does not feed the Apollo WDT itself: only a kick that succeeded keeps the feed
+ * going (review F1 of PR #87). With no Wisp Boot in front (sim,
  * driver test) the WDT is off and the RSTRT write does nothing.
  *
  * Two PMIC modes, chosen by the devicetree:
@@ -40,6 +42,9 @@
 #include <zephyr/sys/reboot.h>
 #include <zephyr/sys/sys_io.h>
 
+#include <zephyr/sys/atomic.h>
+
+#include "wisp_app_diag.h"
 #include "wisp_hal.h"
 #include "wisp_native.h"
 
@@ -97,6 +102,12 @@ static __maybe_unused int pmic_read(uint8_t base, uint8_t off, uint8_t *data, si
 
 static struct wisp_watchdog_stats wdt_stats;
 
+/* The time (k_uptime_get_32) of the last PMIC arm or kick that succeeded, for the feed's liveness
+ * check; set to the start time when the watchdogs start, which gives I2C7 LIVENESS_MS to come up. */
+static atomic_t pmic_alive_ms;
+static atomic_t pmic_started;
+#define LIVENESS_MS 5000u
+
 static void apollo_wdt_feed(void)
 {
 	sys_write32(APOLLO_WDT_KEY, APOLLO_WDT_RSTRT);
@@ -104,8 +115,9 @@ static void apollo_wdt_feed(void)
 
 static int pmic_kick(void)
 {
-	int err = pmic_write(NPM_TIMER_BASE, NPM_TIMER_KICK, (const uint8_t[]){1}, 1);
+	int err;
 
+	err = pmic_write(NPM_TIMER_BASE, NPM_TIMER_KICK, (const uint8_t[]){1}, 1);
 	wdt_stats.pmic_last = (int8_t)err;
 	if (err) {
 		wdt_stats.pmic_errors++;
@@ -128,47 +140,77 @@ static int pmic_wdt_arm(void)
 	return err;
 }
 
-static void watchdog_thread(void *a, void *b, void *c)
+/* The Apollo WDT's only regular feed (rung4.md W24 fix plan 3): a k_timer callback, which runs in
+ * the system timer's interrupt and can neither block nor log. It feeds only while a PMIC kick (or
+ * the arming) has succeeded within LIVENESS_MS, counting from the watchdogs' start for the first
+ * one. So whatever keeps the nPM1300's watchdog from being kicked (a scheduler that stops running
+ * threads, a PMIC thread stuck on its bus, an I2C7 that never comes up or NAKs every transfer)
+ * ends in an Apollo WDT reset about LIVENESS_MS + 9 s later, and the next boot's Wisp Boot kicks
+ * the PMIC through its own polled IOM7 path. The PMIC's 30.72 s watchdog then never expires, and the
+ * PMIC keeps stock's configuration, charger included (W24's power cycle; review F1 of PR #87). */
+static void feed_timer_fn(struct k_timer *t)
+{
+	uint32_t now = k_uptime_get_32();
+	uint32_t since = (uint32_t)atomic_get(&pmic_alive_ms);
+
+	ARG_UNUSED(t);
+	if (now - since < LIVENESS_MS) {
+		apollo_wdt_feed();
+		wdt_stats.apollo_feeds++;
+	} else if (!wdt_stats.starved) {
+		wdt_stats.starved = 1;
+		wisp_app_diag_mark(WISP_DIAG_APP_WDT_STARVED);
+	}
+}
+static K_TIMER_DEFINE(feed_timer, feed_timer_fn, NULL);
+
+static void pmic_thread(void *a, void *b, void *c)
 {
 	ARG_UNUSED(a);
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
-	bool tried = false;
+	bool armed = false;
 
-	/* Started from POST_KERNEL init, possibly before I2C7's driver: arm (stock's sequence)
-	 * once the bus is ready, kick every second after that. */
+	wisp_app_diag_mark(WISP_DIAG_APP_PMIC_THREAD);
+	/* Started from POST_KERNEL init, possibly before I2C7's driver: arm (stock's sequence) once
+	 * the bus is ready, again on every pass until it succeeds, then kick every second. Only a
+	 * success counts as alive for the feed. Never logs. */
 	for (;;) {
-		apollo_wdt_feed();
-		wdt_stats.apollo_feeds++;
 		if (device_is_ready(pmic.bus)) {
-			if (!tried) {
-				tried = true;
-				if (pmic_wdt_arm()) {
-					LOG_ERR("PMIC watchdog arm failed (%d)", wdt_stats.pmic_last);
+			int err;
+
+			if (!armed) {
+				err = pmic_wdt_arm();
+				armed = err == 0;
+				if (armed) {
+					wisp_app_diag_mark(WISP_DIAG_APP_PMIC_ARMED);
 				}
 			} else {
-				(void)pmic_kick();
+				err = pmic_kick();
+			}
+			if (err == 0) {
+				atomic_set(&pmic_alive_ms, (atomic_val_t)k_uptime_get_32());
 			}
 		}
-		k_sleep(K_MSEC(tried ? 1000 : 10));
+		/* 10 ms while waiting for the bus to come up; once a second after that, armed or not. */
+		k_sleep(K_MSEC(device_is_ready(pmic.bus) ? 1000 : 10));
 	}
 }
 
-K_THREAD_STACK_DEFINE(watchdog_stack, 1024);
-static struct k_thread watchdog_tcb;
+K_THREAD_STACK_DEFINE(pmic_stack, 1024);
+static struct k_thread pmic_tcb;
 
 void wisp_native_watchdogs_start(void)
 {
-	static bool started;
-
-	if (started) {
+	if (atomic_set(&pmic_started, 1)) {
 		return;
 	}
-	started = true;
-	k_thread_create(&watchdog_tcb, watchdog_stack, K_THREAD_STACK_SIZEOF(watchdog_stack),
-			watchdog_thread, NULL, NULL, NULL, K_HIGHEST_THREAD_PRIO, 0, K_NO_WAIT);
-	k_thread_name_set(&watchdog_tcb, "wisp_wdt");
+	atomic_set(&pmic_alive_ms, (atomic_val_t)k_uptime_get_32());
+	k_timer_start(&feed_timer, K_MSEC(1000), K_MSEC(1000));
+	k_thread_create(&pmic_tcb, pmic_stack, K_THREAD_STACK_SIZEOF(pmic_stack), pmic_thread, NULL,
+			NULL, NULL, K_HIGHEST_THREAD_PRIO, 0, K_NO_WAIT);
+	k_thread_name_set(&pmic_tcb, "wisp_pmic");
 }
 
 const struct wisp_watchdog_stats *wisp_native_watchdog_stats(void)
@@ -176,9 +218,9 @@ const struct wisp_watchdog_stats *wisp_native_watchdog_stats(void)
 	return &wdt_stats;
 }
 
-/* Restart Wisp Boot's 8 s watchdog before the kernel and the drivers come up, and start the
- * watchdog thread as soon as threads exist (POST_KERNEL), not only in main(): a slow driver init
- * must not starve the feed. */
+/* Restart Wisp Boot's watchdog before the kernel and the drivers come up, and start the feed
+ * timer and the PMIC thread as soon as the kernel runs (POST_KERNEL), not only in main(): a slow
+ * driver init must not starve the feed. */
 static int early_feed(void)
 {
 	apollo_wdt_feed();

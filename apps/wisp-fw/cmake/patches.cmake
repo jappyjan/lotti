@@ -6,6 +6,8 @@
 #
 #   zephyr-0002-i2c-ambiq-offset-byte-order.patch   multi-byte I2C register headers (nPM1300)
 #                                                     go out in buffer order, not reversed
+#   zephyr-0003-apollo5x-soc-early-init-weak.patch  the app may replace soc_early_init_hook
+#                                                     (CONFIG_WISP_SOC_INIT, rung4.md W25)
 #
 # `git apply --reverse --check` succeeds only if the exact patch is in the tree.
 option(WISP_PATCHES_TEST_UNPATCHED

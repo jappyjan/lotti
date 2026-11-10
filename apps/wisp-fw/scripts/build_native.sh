@@ -3,11 +3,14 @@
 # wisp-fw:build-native — a whole native image: Wisp Boot padded to 64 KiB + the Wisp app at
 # 0x448000, exactly what install-wisp would write at 0x438000 (docs/wisp/rung4.md §2, §3).
 #
-#   scripts/build_native.sh native-0
+#   scripts/build_native.sh native-1
+#   scripts/build_native.sh native-1-right   (the right temple: lens 2, "Wisp R"; images/native-1/right.conf)
 #   scripts/build_native.sh stage-0c
 #
-# native-0: the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no UART1 log)
-# and the app with images/native-0/ (panel off, PMIC observed only: cmake/hwimage.cmake). Every gate
+# native-1 (rung4.md W25): the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no
+# UART1 log) and the app with images/native-1/ (no console, the panel through the gated rail
+# switches, PMIC configuration untouched: cmake/hwimage.cmake). native-0 (W22) was built the same
+# way with images/native-0/ and is pinned as built at 8374f9a; this tree no longer builds it. Every gate
 # runs on its part: Wisp Boot (check_image, rule 8, no MRAM write), the app (check_image --part app,
 # rule 8, no MRAM write, all in its build), the combined image (layout, both vector tables, Wisp
 # Boot's slot byte for byte) and wisp-ota's own rule-3 checks (pack-main). Nothing is pinned here:
@@ -25,20 +28,33 @@ source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 wisp_require_setup
 
-image="${1:?usage: build_native.sh native-0}"
+image="${1:?usage: build_native.sh native-1|stage-0c}"
 case "$image" in
-native-0)
+native-1 | native-1-right)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
+	;;
+native-0 | stage-0 | stage-0b)
+	echo "wisp-fw: $image is pinned as built (native-0 at 8374f9a, stage-0 at 9bfac4d, stage-0b at 91035fc; apps/wisp-recovery/wisp_w18/data/);" \
+		"build it from that commit: this tree builds native-1 and stage-0c" >&2
+	exit 1
 	;;
 stage-0c)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_STAGE0=ON)
 	;;
 *)
-	echo "wisp-fw: unknown native image '$image' (known: native-0, stage-0c; stage-0 is commit 9bfac4d's, stage-0b 91035fc's)" >&2
+	echo "wisp-fw: unknown native image '$image' (known: native-1, native-1-right, stage-0c)" >&2
 	exit 1
 	;;
 esac
 cfg="$APP_DIR/images/$image"
+confs="$cfg/$image.conf"
+overlay="$cfg/$image.overlay"
+if [[ "$image" == native-1-right ]]; then
+	# The right temple's build: native-1's files plus the lens and the name (images/native-1/right.conf).
+	cfg="$APP_DIR/images/native-1"
+	confs="$cfg/native-1.conf;$cfg/right.conf"
+	overlay="$cfg/native-1.overlay"
+fi
 out="$CACHE_DIR/build/$image"
 ota="$REPO_ROOT/packages/wisp-ota/dist/cli.js"
 [[ -f "$ota" ]] || {
@@ -78,7 +94,7 @@ fi
 echo "=== $image: app"
 rm -rf "$out/app" # from scratch: a cached configure would miss a changed overlay or .conf
 WISP_PANEL=none WISP_BUILD_DIR="$out/app" "$APP_DIR/scripts/build.sh" \
-	"-DEXTRA_CONF_FILE=$cfg/$image.conf" "-DEXTRA_DTC_OVERLAY_FILE=$cfg/$image.overlay" \
+	"-DEXTRA_CONF_FILE=$confs" "-DEXTRA_DTC_OVERLAY_FILE=$overlay" \
 	>"$out/app-build.log" 2>&1 || {
 	tail -n 40 "$out/app-build.log" >&2
 	echo "FAIL: $image app build (log: $out/app-build.log)" >&2

@@ -57,14 +57,17 @@ target_sources(app PRIVATE src/main.c src/display/wisp_flush.c)
 target_sources_ifdef(CONFIG_WISP_NATIVE_HAL app PRIVATE src/hal/native/power.c
   src/hal/native/display.c src/hal/native/input.c src/hal/native/sensors.c)
 target_include_directories(app PRIVATE src src/hal src/hal/native src/display src/drivers src/link
-  src/case)
+  src/case src/diag)
 if(CONFIG_BOARD_WISP_G2)
-  # Wisp Boot's services table and status block (src/boot/); the app links none of its code.
-  target_sources(app PRIVATE src/boot_link.c)
+  # Wisp Boot's services table and status block (src/boot/), and the app's diagnostics in its
+  # record (src/diag/). Of Wisp Boot's code the app links only its polled UART2 driver and its
+  # polled PMIC kick, for the diagnostics' fallback loop when the STIMER is dead.
+  target_sources(app PRIVATE src/boot_link.c src/diag/wisp_app_diag.c src/boot/stage/boot_uart.c
+    src/boot/stage/boot_pmic.c
+    src/case/wisp_case_proto.c)
   target_include_directories(app PRIVATE src/boot src/boot/stage)
 endif()
-target_sources_ifdef(CONFIG_WISP_CASE_UART app PRIVATE src/case/wisp_case.c
-  src/case/wisp_case_proto.c)
+target_sources_ifdef(CONFIG_WISP_CASE_UART app PRIVATE src/case/wisp_case.c)
 if(CONFIG_WISP_BLE)
   # The Wisp GATT service (Zephyr, transport only) and the transport adapter (portable C,
   # host-tested in tests/link/). Both need wisp-core.
@@ -78,6 +81,9 @@ target_sources_ifdef(CONFIG_WISP_G2_TOUCH app PRIVATE src/drivers/g2_touch.c)
 target_sources_ifdef(CONFIG_WISP_ICM45608 app PRIVATE src/drivers/icm45608.c)
 target_sources_ifdef(CONFIG_WISP_OPT3007 app PRIVATE src/drivers/opt3007.c)
 target_sources_ifdef(CONFIG_WISP_ULED app PRIVATE src/drivers/uled.c)
+target_sources_ifdef(CONFIG_WISP_NPM1300_SWITCH app PRIVATE src/drivers/npm1300_switch.c)
+target_sources_ifdef(CONFIG_WISP_BOOT_SCREEN app PRIVATE src/display/boot_screen.c)
+target_sources_ifdef(CONFIG_WISP_SOC_INIT app PRIVATE src/soc/wisp_soc_init.c)
 if(CONFIG_NEWLIB_LIBC AND CONFIG_MBEDTLS)
   target_sources(app PRIVATE src/compat/newlib_fini.c)
 endif()
