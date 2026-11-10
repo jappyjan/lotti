@@ -268,6 +268,22 @@ class Session:
         self.step = step
         return {address: value for (address, _name, _kind), value in zip(pins.PMIC_READ_REGISTERS, data)}
 
+    def charge_on(self) -> dict[int, int]:
+        """charge_on.bin: one kick, then the stock charger settings and charging on
+        (pins.CHARGE_ON_WRITES); then pmic_read.bin reads every register back. Returns its snapshot."""
+        if not self.bootloader_verified:
+            raise RefusedError("charge_on.bin calls into the bootloader; its CRC must be checked first")
+        step, self.step = self.step, "charge_on: stock charger settings, charging on"
+        self.client.upload(image.program("charge_on"))
+        self.last_kick = self.clock()
+        result, data = self.client.execute()
+        if result:
+            raise SessionError(f"charge_on.bin failed: {describe_charge_on(result)}; nothing more runs in this session")
+        if data:
+            raise SessionError(f"charge_on.bin sent {len(data)} bytes, expected none")
+        self.step = step
+        return self.pmic_read()
+
     # --- INFO / debug-lock dump (reads only; each read gated on what the previous ones said) ---
     def info_dump(self) -> dict:
         out: dict = {}
@@ -358,6 +374,23 @@ class Session:
         writer = AppWriter(stock, log=self.log)
         writer.run(self, progress=progress)
         return writer.result
+
+
+def describe_charge_on(result: int) -> str:
+    """charge_on.bin's result code in words (programs/charge_on.c): pmic_read's codes, with write
+    k >= 1 being pins.CHARGE_ON_WRITES[k - 1] (0 is the kick)."""
+    index = result >> 24
+    if index == 0:
+        where = "the watchdog kick"
+    elif index <= len(pins.CHARGE_ON_WRITES):
+        address, value, name = pins.CHARGE_ON_WRITES[index - 1]
+        where = f"the write {name} ({address:#06x}) = {value:#04x}"
+    else:
+        where = f"write {index}"
+    words = describe_pmic_read(result if result == 0x10 or result >> 8 in (1, 6) else result & 0xFFFFFF)
+    # charge_on.c only waits for IOM7 idle (no receive FIFO), and its power-down follows writes
+    return (words.replace("the watchdog kick", where).replace(" or receive FIFO not empty", "")
+            .replace("after the reads", "after the writes"))
 
 
 def describe_pmic_read(result: int) -> str:

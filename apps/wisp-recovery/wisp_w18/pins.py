@@ -60,6 +60,11 @@ PROGRAMS = {
     # image; tests/test_pmic_read.py checks its wire under Unicorn. Its first hardware run needs
     # Jan's own go (a new program on the PMIC bus).
     "pmic_read": "491f98f55dc65a81ff2a1ba88be7233e5c90d93508423b7c0306c5d26e27b989",
+    # Ours (recovery.md, "charge_on"): one kick, then CHARGE_ON_WRITES (the stock charger settings and
+    # charging on); the tool reads them back with pmic_read in the same session. For a temple whose
+    # PMIC was reset to its power-on values while its image never programs the charger. A PMIC
+    # configuration write: Jan's go (2026-11-10, the flat left temple).
+    "charge_on": "76eda6e8a22f97ff21344cd913d4b857bffee90b808bd7362d2e53e1145ae36e",
 }
 # What the feeding programs use of the patched 2.3.2.14 bootloader [S: disassembly, and the IOM7
 # state read through the loader in Renode], valid only while it is the one in MRAM (every session
@@ -110,6 +115,27 @@ PMIC_READ_REGISTERS = (
     (0x080C, "LDSW1.VOUTSEL", "config"), (0x080D, "LDSW2.VOUTSEL", "config"),
     (0x0B04, "SHIP.CONFIG", "config"), (0x0B06, "SHIP.LPCONFIG", "config"),
 )
+# charge_on.bin's writes, in order (programs/charge_on.c `writes`): (16-bit address, value, name). The
+# values are W21's stock snapshot of the left temple (apps/wisp-fw/images/pmic-baseline-w21.json),
+# the order Zephyr's npm13xx charger driver uses. 0x0200 and 0x0300 are tasks (update the VBUS
+# limit; release the charger from an error state: TASKRELEASEERR, offset 0x00, which Zephyr calls
+# ERR_CLR; TASKCLEARCHGERR, which would clear ERR_REASON, is offset 0x01 and not written); everything
+# else is a configuration register stock holds. ISET_DISCHG 9b 00 is code 310, stock's value; Nordic
+# documents only codes 84 (200 mA) and 415 (1 A).
+CHARGE_ON_WRITES = (
+    (0x050A, 0x03, "ADC.NTCR_SEL"),
+    (0x0310, 0xC9, "BCHARGER.NTC_COLD_MSB"), (0x0311, 0x01, "BCHARGER.NTC_COLD_LSB"),
+    (0x0312, 0xAE, "BCHARGER.NTC_COOL_MSB"), (0x0313, 0x01, "BCHARGER.NTC_COOL_LSB"),
+    (0x0314, 0x4A, "BCHARGER.NTC_WARM_MSB"), (0x0315, 0x01, "BCHARGER.NTC_WARM_LSB"),
+    (0x0316, 0x2E, "BCHARGER.NTC_HOT_MSB"), (0x0317, 0x03, "BCHARGER.NTC_HOT_LSB"),
+    (0x030C, 0x0D, "BCHARGER.VTERM"), (0x030D, 0x06, "BCHARGER.VTERM_R"),
+    (0x0308, 0x18, "BCHARGER.ISET_MSB"), (0x0309, 0x00, "BCHARGER.ISET_LSB"),
+    (0x030A, 0x9B, "BCHARGER.ISET_DISCHG_MSB"), (0x030B, 0x00, "BCHARGER.ISET_DISCHG_LSB"),
+    (0x0201, 0x05, "VBUSIN.ILIM"), (0x0200, 0x01, "VBUSIN.TASKUPDATEILIMSW"),
+    (0x0350, 0x01, "BCHARGER.VBATLOW_EN"), (0x0300, 0x01, "BCHARGER.TASKRELEASEERR"),
+    (0x0304, 0x01, "BCHARGER.ENABLE"),
+)
+
 # recover.bin calls the stock 2.3.2.14 MRAM wrapper at this Thumb address [D recover.c]; it is
 # only valid while the patched (2.3.2.14-based) bootloader is the one in MRAM, which every
 # loader session proves first (preflight hash of [BOOT_BASE, +PATCHED_BOOTLOADER_BYTES)).
