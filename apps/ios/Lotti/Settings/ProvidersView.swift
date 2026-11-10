@@ -72,6 +72,7 @@ struct ProviderDetailView: View {
     @State private var apiKey = ""
     @State private var token = ""
     @State private var modelName: String
+    @State private var thinking: String?
     @State private var suggestions: [String] = []
     @State private var login: DeviceLogin?
     @State private var loginMessage: String?
@@ -85,6 +86,7 @@ struct ProviderDetailView: View {
         self.provider = provider
         _configured = State(initialValue: provider.configured)
         _modelName = State(initialValue: provider.model)
+        _thinking = State(initialValue: provider.thinking)
         _savedModel = State(initialValue: provider.model)
     }
 
@@ -261,6 +263,26 @@ struct ProviderDetailView: View {
             Text("Model")
         } footer: {
             Text("Return saves a typed model id. Leave it as it is to keep the current model.")
+        }
+        if let level = thinking {
+            Section {
+                Picker("Thinking", selection: Binding(get: { level }, set: { setThinking($0) })) {
+                    ForEach(["off", "low", "high", "max"], id: \.self) { Text($0.capitalized).tag($0) }
+                }
+            } footer: {
+                Text("Off answers fastest. Thinking takes longer but helps with harder questions.")
+            }
+        }
+    }
+
+    private func setThinking(_ level: String) {
+        let previous = thinking
+        thinking = level
+        Task {
+            let ok = await attempt($error) {
+                _ = try await model.call("providers.set_thinking", ["provider": .string(provider.id), "level": .string(level)])
+            }
+            if !ok { thinking = previous }
         }
     }
 

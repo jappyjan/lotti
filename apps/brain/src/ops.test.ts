@@ -197,24 +197,50 @@ test('settings.set rejects out-of-range numbers and badly formatted strings', as
   const t = makeApp();
   const set = async (key: string, value: unknown) =>
     (await t.app.ops.invoke('settings.set', { key, value }, 'app')) as any;
-  assert.match((await set('agent.silence_timeout_sec', -5)).error, /must be a (whole )?number from/);
-  assert.match((await set('catchup.away_hours', 0)).error, /must be a (whole )?number from/);
-  assert.match((await set('conversation.keep_recent_turns', -3)).error, /must be a (whole )?number from/);
-  assert.match((await set('catchup.night_start', 'banana')).error, /wrong format/);
-  assert.match((await set('catchup.night_start', '25:00')).error, /wrong format/);
+  assert.match(
+    (await set('agent.silence_timeout_sec', -5)).error,
+    /must be a (whole )?number from/,
+  );
+  assert.match(
+    (await set('catchup.away_hours', 0)).error,
+    /must be a (whole )?number from/,
+  );
+  assert.match(
+    (await set('conversation.keep_recent_turns', -3)).error,
+    /must be a (whole )?number from/,
+  );
+  assert.match(
+    (await set('catchup.night_start', 'banana')).error,
+    /wrong format/,
+  );
+  assert.match(
+    (await set('catchup.night_start', '25:00')).error,
+    /wrong format/,
+  );
   assert.match((await set('user.name', '')).error, /wrong format/);
   assert.equal((await set('catchup.night_start', '21:30')).ok, true);
   assert.equal((await set('agent.silence_timeout_sec', 90)).ok, true);
   assert.match((await set('user.name', ' x')).error, /1 to 40 characters/);
   assert.match((await set('catchup.night_end', '24:00')).error, /HH:MM/);
-  assert.match((await set('conversation.keep_recent_turns', 2.5)).error, /whole number/);
+  assert.match(
+    (await set('conversation.keep_recent_turns', 2.5)).error,
+    /whole number/,
+  );
   // the edges themselves are allowed; fractions only where the setting is fractional
   assert.equal((await set('conversation.keep_recent_turns', 0)).ok, true);
   assert.equal((await set('inbox.default_expiry_hours', 0)).ok, true);
   assert.equal((await set('catchup.away_hours', 0.5)).ok, true);
-  const half = (await t.app.ops.invoke('settings.set_safety', { key: 'agent.max_rounds', value: 1.5 }, 'app')) as any;
+  const half = (await t.app.ops.invoke(
+    'settings.set_safety',
+    { key: 'agent.max_rounds', value: 1.5 },
+    'app',
+  )) as any;
   assert.match(half.error, /whole number/);
-  const safety = (await t.app.ops.invoke('settings.set_safety', { key: 'agent.max_rounds', value: 9999 }, 'app')) as any;
+  const safety = (await t.app.ops.invoke(
+    'settings.set_safety',
+    { key: 'agent.max_rounds', value: 9999 },
+    'app',
+  )) as any;
   assert.match(safety.error, /must be a (whole )?number from/);
 });
 
@@ -223,12 +249,20 @@ test('changing a provider endpoint drops that provider key; the confirm title sa
   t.app.secrets.set('provider.deepseek.api_key', 'sk-test');
   t.app.secrets.set('provider.openai.api_key', 'sk-other');
   const op = t.app.ops.get('settings.set_safety') as any;
-  const title = (value: string) => op.proposalTitle({ key: 'provider.deepseek.base_url', value }, t.app);
+  const title = (value: string) =>
+    op.proposalTitle({ key: 'provider.deepseek.base_url', value }, t.app);
   // the consequence comes first, so a clipped title still shows it
-  assert.match(title('https://evil.example'), /^Remove the saved deepseek API key/);
+  assert.match(
+    title('https://evil.example'),
+    /^Remove the saved deepseek API key/,
+  );
   assert.doesNotMatch(title(''), /Remove/);
   // same value again: nothing to protect, the key stays
-  await t.app.ops.invoke('settings.set_safety', { key: 'provider.deepseek.base_url', value: '' }, 'app');
+  await t.app.ops.invoke(
+    'settings.set_safety',
+    { key: 'provider.deepseek.base_url', value: '' },
+    'app',
+  );
   assert.equal(t.app.secrets.has('provider.deepseek.api_key'), true);
   const r = (await t.app.ops.invoke(
     'settings.set_safety',
@@ -255,9 +289,17 @@ test('catchup.set_settings saves nothing when one value is invalid', async () =>
 
 test('accounts.add only takes the account kinds the app offers', async () => {
   const t = makeApp();
-  const bad = (await t.app.ops.invoke('accounts.add', { kind: 'nope', label: 'x' }, 'app')) as any;
+  const bad = (await t.app.ops.invoke(
+    'accounts.add',
+    { kind: 'nope', label: 'x' },
+    'app',
+  )) as any;
   assert.equal(bad.ok, false);
-  const ok = (await t.app.ops.invoke('accounts.add', { kind: 'caldav', label: 'x' }, 'app')) as any;
+  const ok = (await t.app.ops.invoke(
+    'accounts.add',
+    { kind: 'caldav', label: 'x' },
+    'app',
+  )) as any;
   assert.equal(ok.ok, true);
 });
 
@@ -541,7 +583,7 @@ test('"switch to Claude" via the agent (default tool groups) only proposes; the 
     call('providers_set_active', { active: 'anthropic' }),
     call('providers_set_model', {
       provider: 'deepseek',
-      model: 'deepseek-reasoner',
+      model: 'deepseek-v4-pro',
     }),
     answer('Vorgeschlagen'),
   );
@@ -588,10 +630,7 @@ test('skill index uses the frontmatter description, not the first frontmatter li
     l.find((x) => x.name === 'zug')!.description,
     'Prüft Zugverbindungen',
   );
-  assert.equal(
-    l.find((x) => x.name === 'plain')!.description,
-    'Plain skill',
-  );
+  assert.equal(l.find((x) => x.name === 'plain')!.description, 'Plain skill');
   assert.match(t.app.skills.index(), /zug: Prüft Zugverbindungen/);
 });
 
@@ -607,7 +646,13 @@ test('settings.set / settings.reset refuse provider.* keys (agent cannot bypass 
     assert.equal(r.ok, false, caller);
     assert.match(r.error, /providers\.\*/);
     assert.equal(
-      ((await t.app.ops.invoke('settings.reset', { key: 'provider.fallback' }, caller)) as any).ok,
+      (
+        (await t.app.ops.invoke(
+          'settings.reset',
+          { key: 'provider.fallback' },
+          caller,
+        )) as any
+      ).ok,
       false,
     );
   }
@@ -619,9 +664,16 @@ test('settings.set / settings.reset refuse provider.* keys (agent cannot bypass 
     { app: t.app, run: (await import('./tools/registry.ts')).newRun() },
   );
   assert.match(tool.text, /managed by the providers/);
-  const list = ((await t.app.ops.invoke('settings.list', {}, 'app')) as any).result as any[];
-  assert.equal(list.find((s) => s.key === 'provider.active').managedBy, 'providers');
-  assert.equal(list.find((s) => s.key === 'provider.deepseek.base_url').managedBy, 'providers');
+  const list = ((await t.app.ops.invoke('settings.list', {}, 'app')) as any)
+    .result as any[];
+  assert.equal(
+    list.find((s) => s.key === 'provider.active').managedBy,
+    'providers',
+  );
+  assert.equal(
+    list.find((s) => s.key === 'provider.deepseek.base_url').managedBy,
+    'providers',
+  );
   assert.equal('managedBy' in list.find((s) => s.key === 'user.name'), false);
 });
 
@@ -635,7 +687,10 @@ test('pairing.devices marks the calling device (isSelf)', async () => {
     const r = (await (
       await fetch(`http://127.0.0.1:${srv.port}/api/v1/ops/pairing.devices`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${mine}`, 'content-type': 'application/json' },
+        headers: {
+          authorization: `Bearer ${mine}`,
+          'content-type': 'application/json',
+        },
         body: '{}',
       })
     ).json()) as any;
@@ -658,20 +713,30 @@ test('mcp: clear_credential (app only), hasCredential, tools/test are free; titl
     { name: 'gh', transport: 'http', url: 'https://mcp.example.com/mcp' },
     'agent',
   )) as any;
-  assert.equal(prop.proposed.title, 'Add MCP server "gh" (http: https://mcp.example.com/mcp)');
+  assert.equal(
+    prop.proposed.title,
+    'Add MCP server "gh" (http: https://mcp.example.com/mcp)',
+  );
   const stdio = (await t.app.ops.invoke(
     'mcp.add',
     { name: 'fs', transport: 'stdio', command: 'npx', args: ['-y', 'srv'] },
     'agent',
   )) as any;
   assert.equal(stdio.proposed.title, 'Add MCP server "fs" (stdio: npx -y srv)');
-  const id = ((await t.app.ops.invoke(
-    'mcp.add',
-    { name: 'gh', transport: 'http', url: 'https://mcp.example.com/mcp' },
+  const id = (
+    (await t.app.ops.invoke(
+      'mcp.add',
+      { name: 'gh', transport: 'http', url: 'https://mcp.example.com/mcp' },
+      'app',
+    )) as any
+  ).result.id;
+  await t.app.ops.invoke(
+    'mcp.set_credential',
+    { id, key: 'bearer', value: 'secret-token' },
     'app',
-  )) as any).result.id;
-  await t.app.ops.invoke('mcp.set_credential', { id, key: 'bearer', value: 'secret-token' }, 'app');
-  const listed = ((await t.app.ops.invoke('mcp.list', {}, 'app')) as any).result[0];
+  );
+  const listed = ((await t.app.ops.invoke('mcp.list', {}, 'app')) as any)
+    .result[0];
   assert.equal(listed.hasCredential, true);
 
   for (const op of ['mcp.tools', 'mcp.test']) {
@@ -689,27 +754,61 @@ test('mcp: clear_credential (app only), hasCredential, tools/test are free; titl
     'Change MCP server "gh": url https://evil.example/mcp (its saved credential is removed)',
   );
   // same url again: no change, credential kept
-  await t.app.ops.invoke('mcp.update', { id, url: 'https://mcp.example.com/mcp', name: 'gh' }, 'app');
+  await t.app.ops.invoke(
+    'mcp.update',
+    { id, url: 'https://mcp.example.com/mcp', name: 'gh' },
+    'app',
+  );
   assert.equal(t.app.secrets.get(`mcp.${id}.bearer`), 'secret-token');
   const done = await t.app.actions.perform(upd.proposed.id);
   assert.equal(done.ok, true);
-  assert.equal(t.app.secrets.get(`mcp.${id}.bearer`), undefined, 'bearer not sent to the new host');
+  assert.equal(
+    t.app.secrets.get(`mcp.${id}.bearer`),
+    undefined,
+    'bearer not sent to the new host',
+  );
 
-  await t.app.ops.invoke('mcp.set_credential', { id, key: 'bearer', value: 'again' }, 'app');
-  assert.equal(((await t.app.ops.invoke('mcp.clear_credential', { id }, 'agent')) as any).ok, false);
-  const cleared = (await t.app.ops.invoke('mcp.clear_credential', { id }, 'app')) as any;
+  await t.app.ops.invoke(
+    'mcp.set_credential',
+    { id, key: 'bearer', value: 'again' },
+    'app',
+  );
+  assert.equal(
+    ((await t.app.ops.invoke('mcp.clear_credential', { id }, 'agent')) as any)
+      .ok,
+    false,
+  );
+  const cleared = (await t.app.ops.invoke(
+    'mcp.clear_credential',
+    { id },
+    'app',
+  )) as any;
   assert.deepEqual(cleared.result, { id, removed: 1, hasCredential: false });
-  assert.equal(((await t.app.ops.invoke('mcp.list', {}, 'app')) as any).result[0].hasCredential, false);
+  assert.equal(
+    ((await t.app.ops.invoke('mcp.list', {}, 'app')) as any).result[0]
+      .hasCredential,
+    false,
+  );
 });
 
 test('accounts.update: title shows changed hosts; a host change drops the saved password', async () => {
   const t = makeApp();
-  const id = ((await t.app.ops.invoke(
-    'accounts.add',
-    { kind: 'imap', label: 'Work', config: { imapHost: 'imap.work.example', username: 'jan' } },
+  const id = (
+    (await t.app.ops.invoke(
+      'accounts.add',
+      {
+        kind: 'imap',
+        label: 'Work',
+        config: { imapHost: 'imap.work.example', username: 'jan' },
+      },
+      'app',
+    )) as any
+  ).result.id;
+  await t.app.ops.invoke(
+    'accounts.set_credential',
+    { id, key: 'password', value: 'pw' },
     'app',
-  )) as any).result.id;
-  await t.app.ops.invoke('accounts.set_credential', { id, key: 'password', value: 'pw' }, 'app');
+  );
   const p = (await t.app.ops.invoke(
     'accounts.update',
     { id, config: { imapHost: 'imap.evil.example', username: 'jan' } },
@@ -722,7 +821,11 @@ test('accounts.update: title shows changed hosts; a host change drops the saved 
   // unchanged host (the app always sends the whole config): password kept
   await t.app.ops.invoke(
     'accounts.update',
-    { id, label: 'Work', config: { imapHost: 'imap.work.example', username: 'jan', enabled: true } },
+    {
+      id,
+      label: 'Work',
+      config: { imapHost: 'imap.work.example', username: 'jan', enabled: true },
+    },
     'app',
   );
   assert.equal(t.app.secrets.get(`account.${id}.password`), 'pw');

@@ -25,12 +25,22 @@ export interface ProviderStatus {
   active: boolean;
   fallback: boolean;
   model: string;
+  /** DeepSeek only: `provider.deepseek.thinking` (off, low, high, max). */
+  thinking?: string;
   lastError: string | null;
   lastErrorAt: number | null;
   lastOkAt: number | null;
   /** Set on the active provider when something it cannot do has nowhere else to go. */
   warning?: string;
 }
+
+/** Retired DeepSeek ids (2026-07-24 and 2026-09-10); a saved one now means the current Flash. */
+const RETIRED_DEEPSEEK = new Set([
+  'deepseek-chat',
+  'deepseek-reasoner',
+  'deepseek-v4-flash',
+  'deepseek-v4-flash-vision-exp',
+]);
 
 /** Background LLM work (summaries, titles, memory, triage) gives up after this. */
 export const TEXT_TIMEOUT_MS = 45_000;
@@ -53,19 +63,15 @@ export class ProviderRegistry {
       new OpenAiCompatProvider(
         'deepseek',
         'DeepSeek',
-        'deepseek-v4-flash',
-        [
-          'deepseek-v4-flash',
-          'deepseek-v4-pro',
-          'deepseek-chat',
-          'deepseek-reasoner',
-        ],
+        'deepseek-flash',
+        ['deepseek-flash', 'deepseek-v4-pro'],
         {
           fetch: f,
           apiKey: secret('deepseek'),
           baseUrl: () =>
             this.app.settings.str('provider.deepseek.base_url') ||
             'https://api.deepseek.com',
+          extraBody: () => this.deepseekThinking(),
         },
       ),
     );
@@ -103,9 +109,21 @@ export class ProviderRegistry {
   }
   modelFor(id: string): string {
     const p = this.providers.get(id);
-    return (
-      this.app.settings.str(`provider.${id}.model`) || p?.defaultModel || ''
-    );
+    const model =
+      this.app.settings.str(`provider.${id}.model`) || p?.defaultModel || '';
+    return id === 'deepseek' && RETIRED_DEEPSEEK.has(model)
+      ? 'deepseek-flash'
+      : model;
+  }
+
+  /** DeepSeek thinks by default; `provider.deepseek.thinking` switches it off or sets the effort. Only sent to DeepSeek's own API. */
+  private deepseekThinking(): Record<string, unknown> {
+    const base = this.app.settings.str('provider.deepseek.base_url');
+    if (base && !/^https:\/\/api\.deepseek\.com(\/|$)/.test(base)) return {};
+    const level = this.app.settings.str('provider.deepseek.thinking');
+    return level === 'off'
+      ? { thinking: { type: 'disabled' } }
+      : { thinking: { type: 'enabled' }, reasoning_effort: level };
   }
   activeId(): string {
     return this.app.settings.str('provider.active');
@@ -152,6 +170,9 @@ export class ProviderRegistry {
         active: p.id === this.activeId(),
         fallback: p.id === this.fallbackId(),
         model: this.modelFor(p.id),
+        ...(p.id === 'deepseek'
+          ? { thinking: this.app.settings.str('provider.deepseek.thinking') }
+          : {}),
         lastError: e?.error ?? null,
         lastErrorAt: e?.at ?? null,
         lastOkAt: e?.ok ?? null,

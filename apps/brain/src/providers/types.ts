@@ -7,7 +7,13 @@ export interface ToolCall {
 export type ChatMessage =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string; toolCalls?: ToolCall[] }
+  | {
+      role: 'assistant';
+      content: string;
+      toolCalls?: ToolCall[];
+      /** DeepSeek thinking mode: its `reasoning_content`, sent back with the tool results. */
+      reasoning?: string;
+    }
   | { role: 'tool'; toolCallId: string; name: string; content: string };
 
 export interface ToolSpec {
@@ -29,6 +35,7 @@ export interface CompleteOptions {
 export interface CompleteResult {
   text: string;
   toolCalls: ToolCall[];
+  reasoning?: string;
 }
 
 /** Chat-completion style provider: one request -> text and/or tool calls. */
@@ -91,4 +98,6 @@ export interface HttpDeps {
   fetch: typeof fetch;
   apiKey: () => string | undefined;
   baseUrl: () => string;
+  /** Provider-specific request fields (DeepSeek's thinking switch). */
+  extraBody?: () => Record<string, unknown>;
 }

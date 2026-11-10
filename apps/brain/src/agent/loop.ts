@@ -135,6 +135,7 @@ export async function runLoop(app: App, input: LoopInput): Promise<Answer> {
       role: 'assistant',
       content: res.text,
       toolCalls: res.toolCalls,
+      ...(res.reasoning ? { reasoning: res.reasoning } : {}),
     });
     let final: { text: string; followUps: string[] } | undefined;
     for (const call of res.toolCalls) {
@@ -186,8 +187,9 @@ export async function ask(
     .turns(conv.id)
     .map<ChatMessage>((t) => ({ role: t.role, content: t.text }));
   app.conversations.addTurn(conv.id, 'user', input.text, input.channel);
-  const utcOffsetMin =
-    process.env.TZ ? null : (input.utcOffsetMin ?? app.settings.displayOffsetMin());
+  const utcOffsetMin = process.env.TZ
+    ? null
+    : (input.utcOffsetMin ?? app.settings.displayOffsetMin());
   const run = newRun({
     utcOffsetMin,
     channel: input.channel,
