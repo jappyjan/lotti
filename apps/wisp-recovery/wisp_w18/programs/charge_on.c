@@ -13,10 +13,11 @@
  * retain once each). The first is the kick itself; then the stock values of the left temple's
  * snapshot (W21, apps/wisp-fw/images/pmic-baseline-w21.json), in the order Zephyr's npm13xx
  * charger driver programs them: NTC resistor and thresholds, termination voltages, charge and
- * discharge currents, VBUS limit (and its update task), low-battery charging, clear the charger
- * errors, enable. On a PMIC that already holds stock's settings every write leaves the register as
- * it is. No rail, timer, ship or GPIO register is written. It sends nothing to the host: the tool
- * runs pmic_read.bin next, in the same session, to read every register back.
+ * discharge currents, VBUS limit (and its update task), low-battery charging, release the charger
+ * from an error state (BCHARGER offset 0x00, TASKRELEASEERR; Zephyr's ERR_CLR), enable. On a
+ * PMIC that already holds stock's settings every write leaves the register as it is. No rail,
+ * timer, ship or GPIO register is written. It sends nothing to the host: the tool runs
+ * pmic_read.bin next, in the same session, to read every register back.
  *
  * Result: 0 = done; 0x10 = the I2C table is not the pinned bootloader's (nothing called); 0x1nn =
  * the power-up failed (HAL status nn; nothing sent on the bus); 0x6nn = the power-down failed
@@ -36,11 +37,11 @@ static const uint8_t writes[] = {
     0x03, 0x0c, 0x0d, /* VTERM 4.45 V */
     0x03, 0x0d, 0x06, /* VTERM_R (warm) 4.10 V */
     0x03, 0x08, 0x18, 0x03, 0x09, 0x00, /* ISET 96 mA */
-    0x03, 0x0a, 0x9b, 0x03, 0x0b, 0x00, /* ISET_DISCHG 1000 mA */
+    0x03, 0x0a, 0x9b, 0x03, 0x0b, 0x00, /* ISET_DISCHG code 310 (stock's; Nordic documents 84, 415) */
     0x02, 0x01, 0x05, /* VBUSIN ILIM 500 mA */
     0x02, 0x00, 0x01, /* VBUSIN TASKUPDATEILIMSW */
     0x03, 0x50, 0x01, /* VBATLOW_EN: charge a low battery */
-    0x03, 0x00, 0x01, /* ERR_CLR */
+    0x03, 0x00, 0x01, /* TASKRELEASEERR: out of a charger error state */
     0x03, 0x04, 0x01, /* EN_SET: charging on */
     0x00, /* padding: an even image size; not a write (the loop takes whole triplets) */
 };

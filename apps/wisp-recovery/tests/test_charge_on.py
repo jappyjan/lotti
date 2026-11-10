@@ -12,6 +12,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -28,7 +29,7 @@ except ImportError:  # unicorn missing
 HANDLE = pins.IOM7_HAL_HANDLE
 ROOT = Path(__file__).resolve().parents[3]
 WRITES = [bytes((address >> 8, address & 0xFF, value)) for address, value, _name in pins.CHARGE_ON_WRITES]
-TASKS = {0x0200, 0x0300}  # VBUS limit update, clear charger errors
+TASKS = {0x0200, 0x0300}  # VBUS limit update, release the charger from an error state
 
 
 def cpu():
@@ -122,6 +123,8 @@ class Binary(unittest.TestCase):
         self.assertIn("BCHARGER.ENABLE (0x0304) = 0x01",
                       session.describe_charge_on((len(WRITES) << 24) | 0x50010))
         self.assertIn("watchdog kick", session.describe_charge_on(0x400))
+        self.assertIn("after the writes", session.describe_charge_on(0x603))
+        self.assertTrue(session.describe_charge_on((3 << 24) | 0x200).endswith("failed: IOM7 not idle"))
 
 
 class Tool(unittest.TestCase):
@@ -133,6 +136,20 @@ class Tool(unittest.TestCase):
         self.assertEqual(report["pmic"]["0x030c"]["value"], "0x0d")
         self.assertEqual(len(report["pmic"]), len(pins.PMIC_READ_REGISTERS))
         self.assertEqual(case.mram.writes, [])
+
+    def test_a_register_that_reads_back_different_stops_with_exit_3(self):
+        from fake_temple import FakeLoaderLink
+        original = FakeLoaderLink._prog_charge_on
+
+        def enable_ignored(self, a0, a1):
+            result = yield from original(self, a0, a1)
+            self.pmic_registers[0x0304] = 0x00  # the charger did not take EN_SET
+            return result
+
+        with mock.patch.object(FakeLoaderLink, "_prog_charge_on", enable_ignored):
+            code, report = run_cli(["charge-on", "--side", "left"], Case(temple()))
+        self.assertEqual(code, 3)
+        self.assertEqual(report["pmic"]["0x0304"]["value"], "0x00")
 
     def test_charge_on_needs_the_bootloader_checked_first(self):
         from fake_temple import FakeLoaderLink

@@ -380,14 +380,17 @@ def describe_charge_on(result: int) -> str:
     """charge_on.bin's result code in words (programs/charge_on.c): pmic_read's codes, with write
     k >= 1 being pins.CHARGE_ON_WRITES[k - 1] (0 is the kick)."""
     index = result >> 24
-    if result == 0x10 or result >> 8 in (1, 6) or index == 0:
-        return describe_pmic_read(result)
-    if index <= len(pins.CHARGE_ON_WRITES):
+    if index == 0:
+        where = "the watchdog kick"
+    elif index <= len(pins.CHARGE_ON_WRITES):
         address, value, name = pins.CHARGE_ON_WRITES[index - 1]
         where = f"the write {name} ({address:#06x}) = {value:#04x}"
     else:
         where = f"write {index}"
-    return describe_pmic_read(result & 0xFFFFFF).replace("the watchdog kick", where)
+    words = describe_pmic_read(result if result == 0x10 or result >> 8 in (1, 6) else result & 0xFFFFFF)
+    # charge_on.c only waits for IOM7 idle (no receive FIFO), and its power-down follows writes
+    return (words.replace("the watchdog kick", where).replace(" or receive FIFO not empty", "")
+            .replace("after the reads", "after the writes"))
 
 
 def describe_pmic_read(result: int) -> str:

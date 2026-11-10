@@ -118,7 +118,10 @@ PMIC_READ_REGISTERS = (
 # charge_on.bin's writes, in order (programs/charge_on.c `writes`): (16-bit address, value, name). The
 # values are W21's stock snapshot of the left temple (apps/wisp-fw/images/pmic-baseline-w21.json),
 # the order Zephyr's npm13xx charger driver uses. 0x0200 and 0x0300 are tasks (update the VBUS
-# limit, clear the charger errors); everything else is a configuration register stock holds.
+# limit; release the charger from an error state: TASKRELEASEERR, offset 0x00, which Zephyr calls
+# ERR_CLR; TASKCLEARCHGERR, which would clear ERR_REASON, is offset 0x01 and not written); everything
+# else is a configuration register stock holds. ISET_DISCHG 9b 00 is code 310, stock's value; Nordic
+# documents only codes 84 (200 mA) and 415 (1 A).
 CHARGE_ON_WRITES = (
     (0x050A, 0x03, "ADC.NTCR_SEL"),
     (0x0310, 0xC9, "BCHARGER.NTC_COLD_MSB"), (0x0311, 0x01, "BCHARGER.NTC_COLD_LSB"),
@@ -129,7 +132,7 @@ CHARGE_ON_WRITES = (
     (0x0308, 0x18, "BCHARGER.ISET_MSB"), (0x0309, 0x00, "BCHARGER.ISET_LSB"),
     (0x030A, 0x9B, "BCHARGER.ISET_DISCHG_MSB"), (0x030B, 0x00, "BCHARGER.ISET_DISCHG_LSB"),
     (0x0201, 0x05, "VBUSIN.ILIM"), (0x0200, 0x01, "VBUSIN.TASKUPDATEILIMSW"),
-    (0x0350, 0x01, "BCHARGER.VBATLOW_EN"), (0x0300, 0x01, "BCHARGER.TASKCLEARCHGERR"),
+    (0x0350, 0x01, "BCHARGER.VBATLOW_EN"), (0x0300, 0x01, "BCHARGER.TASKRELEASEERR"),
     (0x0304, 0x01, "BCHARGER.ENABLE"),
 )
 
