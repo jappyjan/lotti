@@ -1,4 +1,17 @@
 {
-  "what": "Writes Wisp code may make, during start-up, to power, clock or trim registers that no Renode model acts on (tests/boot/strict.py). Each entry names what stock does with the same register and why the write is safe; an entry needs review like code. Empty on purpose: Wisp Boot and stage-0 make no such write, and native-0's are the open question of W24 (docs/wisp/rung4.md, 'W24 result and analysis'), to be reviewed one by one for native-0b against stock's own start-up.",
-  "entries": []
+  "what": "Writes Wisp code may make, during start-up, to power, clock or trim registers that no Renode model acts on (tests/boot/strict.py). Each entry names what stock does with the same register and why the write is safe; an entry needs review like code. Stage-0 and stage-0b made no such write; native-0's are the open question of W24 (docs/wisp/rung4.md, 'W24 result and analysis'), to be reviewed one by one for native-0b against stock's own start-up. Since W24e (stage-0c) Wisp Boot writes CLKGEN.MSPIIOCLKCTRL, MSPI1's IO clock gate, exactly as the Even bootloader's HAL does around every NOR access.",
+  "entries": [
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x200",
+      "reason": "CLKGEN.MSPIIOCLKCTRL with MSPI1IOCLKSEL = 8 (HFRC 192 MHz) and MSPI1IOCLKEN = 0: the value the Even bootloader leaves at hand-off (seen in Renode, rung4.md W24e) and writes itself in mspi_clkgen_ctrl (0x424D34 before each enable, 0x424D66 after each NOR access). Wisp Boot's nor_init closes the gate before (re)setting the source as the HAL does, and nor_off closes it again before the hand-off. Every other field stays 0, as stock leaves it."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x220",
+      "reason": "The same register with MSPI1IOCLKEN = 1: stock's own enable (0x424D48, HAL mspi_clkgen_ctrl from am_hal_mspi_power_control WAKE), before any MSPI1 register access. Without it MSPI1 has no clock and stage-0b hung at its first MSPI1 access on silicon (W24d)."
+    }
+  ]
 }

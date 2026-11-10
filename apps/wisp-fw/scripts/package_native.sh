@@ -5,22 +5,22 @@
 # `objcopy --strip-debug` (symbols and every loaded section kept, no debug info, no paths), the app's
 # map as built, and the build's manifest. Pinning (wisp_w18/pins.py) is a separate, reviewed step.
 #
-#   scripts/build_native.sh stage-0b && scripts/package_native.sh stage-0b
+#   scripts/build_native.sh stage-0c && scripts/package_native.sh stage-0c
 #
 # Build from a clean, committed tree: the app embeds `git describe --dirty`.
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 
-image="${1:?usage: package_native.sh stage-0b}"
+image="${1:?usage: package_native.sh stage-0c}"
 src="$CACHE_DIR/build/$image"
 dst="$REPO_ROOT/apps/wisp-recovery/wisp_w18/data/$image"
 case "$image" in
-stage-0b)
+stage-0c)
 	app_elf="$src/boot/stage0.elf"
 	app_map="$src/boot/stage0.map"
 	;;
 *)
-	echo "wisp-fw: package_native.sh knows stage-0b only (native-0 and stage-0 are pinned as reviewed)" >&2
+	echo "wisp-fw: package_native.sh knows stage-0c only (native-0, stage-0 and stage-0b are pinned as reviewed)" >&2
 	exit 1
 	;;
 esac

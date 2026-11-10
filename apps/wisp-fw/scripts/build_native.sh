@@ -4,7 +4,7 @@
 # 0x448000, exactly what install-wisp would write at 0x438000 (docs/wisp/rung4.md §2, §3).
 #
 #   scripts/build_native.sh native-0
-#   scripts/build_native.sh stage-0b
+#   scripts/build_native.sh stage-0c
 #
 # native-0: the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no UART1 log)
 # and the app with images/native-0/ (panel off, PMIC observed only: cmake/hwimage.cmake). Every gate
@@ -13,10 +13,11 @@
 # Boot's slot byte for byte) and wisp-ota's own rule-3 checks (pack-main). Nothing is pinned here:
 # pinning is W23, after review.
 #
-# stage-0b (rung4.md W24d): the same observe-only Wisp Boot and the bare-metal app of src/stage0/
+# stage-0c (rung4.md W24e): the same observe-only Wisp Boot and the bare-metal app of src/stage0/
 # (no Zephyr), built with Wisp Boot's CMake project. Its gates: check_image --part app, rule 8 and
 # the no-MRAM-write gate over the app, then the same combine, check_native and pack-main. (stage-0,
-# pinned at W24b-0, is the build of commit 9bfac4d with `stage-0`; this tree builds stage-0b.)
+# pinned at W24b-0, is the build of commit 9bfac4d with `stage-0`; stage-0b, pinned at W24d-0, is
+# commit 91035fc's `stage-0b`; this tree builds stage-0c.)
 #
 # Output in .wisp-cache/build/<image>/: <image>.bin, <image>.evenota, manifest.json (SHA-256 of the
 # image, both ELFs and maps, Wisp Boot's binary and its 64 KiB slot), boot/ and app/ build dirs.
@@ -29,11 +30,11 @@ case "$image" in
 native-0)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
 	;;
-stage-0b)
+stage-0c)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_STAGE0=ON)
 	;;
 *)
-	echo "wisp-fw: unknown native image '$image' (known: native-0, stage-0b; stage-0 is commit 9bfac4d's)" >&2
+	echo "wisp-fw: unknown native image '$image' (known: native-0, stage-0c; stage-0 is commit 9bfac4d's, stage-0b 91035fc's)" >&2
 	exit 1
 	;;
 esac
@@ -50,7 +51,7 @@ echo "=== $image: Wisp Boot (${boot_args[*]})"
 rm -rf "$out/boot"
 WISP_BOOT_BUILD_DIR="$out/boot" "$APP_DIR/scripts/build_boot.sh" "${boot_args[@]}"
 
-if [[ "$image" == stage-0b ]]; then
+if [[ "$image" == stage-0c ]]; then
 	b="$out/boot"
 	echo "=== $image: app gates (bare metal, $b/stage0.elf)"
 	python3 -I "$APP_DIR/scripts/check_image.py" --elf "$b/stage0.elf" --bin "$b/stage0.bin" --part app

@@ -475,9 +475,14 @@ def describe_peek(name: str, data: bytes) -> dict:
     elif name.startswith("wisp-boot-status"):
         try:
             boot = case_uart.decode_boot_status(data)
-            out["status"] = {k: boot.get(k) for k in ("stage", "action", "rstgen_stat", "reset_cause_names",
-                                                      "pmic_kick", "window_answers", "window_ms", "uart_result",
-                                                      "prev_valid", "prev")}
+            out["status"] = {k: boot.get(k) for k in ("stage", "action", "would_action", "observe", "nor_off",
+                                                      "nor_id", "nor_result", "nor_bound_hit", "mount_result",
+                                                      "rstgen_stat", "reset_cause_names", "pmic_kick",
+                                                      "window_answers", "window_ms", "uart_result", "prev_valid",
+                                                      "prev")}
+            # W24d: the NOR fields were missing here. nor_result 1 = never attempted (stage-0c's Wisp Boot
+            # sets it at the start), -12 = MSPI1's power never came up, -11 = unknown RDID, -10 = no RDID.
+            out["status"]["nor_id"] = f"{boot['nor_id']:#08x}"
         except ValueError as error:
             out["error"] = f"not a sealed v2 status block ({error}): another Wisp Boot, or never written"
     return out
@@ -701,7 +706,8 @@ def print_summary(summary: dict) -> None:
         if key in summary:
             print(f"  {key}: {summary[key]}")
     if boot:
-        print(f"  Wisp Boot: observe {boot['observe']}, NOR id {boot['nor_id']:#08x} (result {boot['nor_result']}), "
+        print(f"  Wisp Boot: observe {boot['observe']}{', NOR phase switched off' if boot.get('nor_off') else ''}, "
+              f"NOR bound {'HIT' if boot.get('nor_bound_hit') else 'ok'}, NOR id {boot['nor_id']:#08x} (result {boot['nor_result']}), "
               f"mount {boot['mount_result']}, action {boot['action']} (would: {boot['would_action']}), staging "
               f"{'present' if boot['staging_present'] else 'absent'} {boot['staging_id']:08x} ({boot['staging_size']} B"
               f"{', = stock 2.4.0.24' if summary.get('staging_is_stock_2_4_0_24') else ''}), rescue.bin ok "

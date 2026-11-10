@@ -360,4 +360,4 @@ So a lost file makes stock skip that part (touch for certain). A present but wro
 - EM9305: firmware patch load at boot needed? Wire format of its DFU.
 - Inter-temple UART: baud rate, real throughput.
 - Whether SRAM survives a software POR / watchdog reset on the real chip (Wisp does not rely on it; rung 3 fills SRAM with `0xA5` on every reset).
-- MSPI1 pin mux and the power/clock state the bootloader leaves behind at hand-off (Wisp Boot re-applies the stock DEV0CFG/PADOUTEN values; unverified on glasses).
+- ~~The power/clock state the bootloader leaves MSPI1 in at hand-off.~~ Powered down (`DEVPWREN.PWRENMSPI1` = 0) with its IO clock gated (`CLKGEN.MSPIIOCLKCTRL` = `0x200`): the bootloader puts MSPI1 into HAL deep sleep after every NOR access [C, disassembly and Renode; rung4.md W24e]. stage-0b's Wisp Boot hung on it at W24d; stage-0c ungates the clock. Still open: the MSPI1 pad functions at hand-off (not re-checked), and whether stage-0c's 12 MHz read works on silicon.

@@ -91,6 +91,8 @@ The 22 data bytes:
 | 14 | u32 | ... LR |
 | 18 | u32 | ... CFSR |
 
+Wisp Boot's stages (`wisp_diag.h`): `10` boot-start, `11` boot-pmic-kick, `12`/`13` the report window open/closed, `14` boot-nor (NOR init started), `1A` boot-nor-power (MSPI1 powered, since W24e), `1B` boot-nor-clock (its IO clock on: the first MSPI1 register access is next), `1C` boot-nor-id (MSPI1 configured, RDID sent), `15` boot-mounted, `16` boot-inputs, `17` boot-decided, `18` boot-handoff, `19` boot-reset, `1D` boot-nor-skipped (the `WISP_BOOT_NOR=OFF` build), `1F` boot-fault. A loop that stops at `14` (stage-0b at W24d) or `1B` stalls at the first MSPI1 access; at `1A` in the clock enable; at `1C` in the RDID transfer.
+
 Reading it after a reboot loop: `prev-valid` with the previous stage `boot-handoff` and cause `40` = the app ran and the watchdog reset it without one breadcrumb from the app; a fault PC = a fault handler ran (stage-0 or Wisp Boot); cause `08` and stage `s0-reset-request` = a case-UART RESET; cause `01` = the case's reset line. No `prev-valid` at all after a warm reset = SRAM did not survive it, and only the cause is known.
 
 ### 2. Stock's version query (step 0's bridge only)
@@ -186,8 +188,8 @@ In Renode the LFRC is modelled at 900 Hz and the STIMER's crystal at 32,000 Hz (
 
 READ block 2: 612 bytes (version 1) or 692 (version 2) (the app copies it when a READ at offset 0 arrives and serves the rest of the dump from that copy, so a dump that spans a `confirm()` stays one CRC-correct block) in Wisp Boot's own RAM (`0x20370000–0x20380000`), pointed to by its services table at `0x438200` (version 2: `magic "WBS1"`, `version`, `confirm`, `status`). Layout and every offset: `apps/wisp-fw/src/boot/wisp_boot_status.h` (`_Static_assert`s pin them); decoder `case_uart.py decode_boot_status`. In short:
 
-- magic `"WBST"`, version, size; build flags (`1` observe-only, `2` UART1 log compiled in);
-- the NOR's RDID and `nor_init()` result (−11 = not the MX25U25643G Wisp Boot drives), the littlefs mount result (1 = not attempted);
+- magic `"WBST"`, version, size; build flags (`1` observe-only, `2` UART1 log compiled in, `4` the NOR phase switched off, `WISP_BOOT_NOR=OFF`, since W24e);
+- the NOR's RDID and `nor_init()` result (−10 = no RDID answer, −11 = not the MX25U25643G Wisp Boot drives, −12 = MSPI1's power never showed in `DEVPWRSTATUS`, so MSPI1 was not touched; 1 = not attempted, since stage-0c's Wisp Boot; earlier builds leave 0 until the NOR phase), the littlefs mount result (1 = not attempted);
 - `wisp/boot.rec` as read, and its read result;
 - the staging file `ota/s200_firmware_ota.bin`: present, preamble CRC word, size;
 - `wisp/rescue.bin`: its header + full CRC check (`rescue_ok`), CRC word, size;

@@ -29,6 +29,14 @@
  * no flag write, the record is read but never written, and the action is always run-app. The
  * decision is still computed and published as `would_action`, so the first native boot shows
  * what the fallback build would have done.
+ *
+ * NOR switch (WISP_BOOT_NOR=0, CMake -DWISP_BOOT_NOR=OFF; observe builds only, rung4.md W24e): no
+ * NOR phase at all. Right after the report window the boot marks `boot-nor-skipped` and runs the
+ * app; MSPI1 is never touched, so it stays as the bootloader left it (powered down, clock gated).
+ *
+ * MSPI1 (rung4.md W24e): the bootloader hands off with MSPI1 powered down and its IO clock gated;
+ * nor_init brings both up, and run_app puts both back before the jump (nor_off), so the app sees
+ * stock's hand-off state whatever Wisp Boot did. confirm() does the same if it found MSPI1 off.
  */
 #include <stddef.h>
 #include <string.h>
@@ -44,6 +52,13 @@
 #include "wisp_boot_status.h"
 #include "wisp_case_proto.h"
 #include "wisp_diag.h"
+
+#ifndef WISP_BOOT_NOR
+#define WISP_BOOT_NOR 1
+#endif
+#if !WISP_BOOT_NOR && !WISP_BOOT_OBSERVE
+#error "WISP_BOOT_NOR=0 needs the observe build: the fallback build cannot rescue without the NOR"
+#endif
 
 /* ---- status block ------------------------------------------------------------------------ */
 
@@ -70,6 +85,7 @@ static void status_seal(void)
 #define NOR_COPY_POLLS   1000000000u
 
 static int xt;           /* the STIMER counts the crystal (CLKSEL 3 and moving) */
+static int nor_touched;  /* nor_init ran this boot: MSPI1 is up and must go down before the jump */
 static uint32_t nor_t0, nor_ticks;
 
 static void nor_phase(uint32_t ticks, uint32_t polls)
@@ -77,6 +93,7 @@ static void nor_phase(uint32_t ticks, uint32_t polls)
 	nor_t0 = wisp_stimer_now();
 	nor_ticks = ticks;
 	nor_budget(polls);
+	nor_deadline(nor_t0, xt ? ticks : 0); /* also inside every transfer's waits */
 }
 
 /* 0 while the phase may go on; else ends it (every later NOR call fails) and notes it. */
@@ -182,6 +199,7 @@ static int fs_up(void)
 		return 0;
 	}
 	wisp_diag_mark(WISP_DIAG_BOOT_NOR);
+	nor_touched = 1;
 	st.nor_result = nor_init(&id);
 	st.nor_id = id;
 	if (st.nor_result != 0) {
@@ -408,6 +426,7 @@ static int svc_confirm(void)
 	return 0;
 #else
 	struct wisp_boot_record r;
+	int was_on = nor_powered();
 	int e;
 
 	/* The app may have reconfigured MSPI1 and written the filesystem since boot: bring the
@@ -419,6 +438,9 @@ static int svc_confirm(void)
 	} else {
 		wisp_boot_confirm(&r);
 		e = record_write(&r);
+	}
+	if (!was_on) {
+		nor_off(); /* as the app had it */
 	}
 	st.confirm_calls++;
 	st.confirm_result = e;
@@ -573,6 +595,9 @@ _Noreturn static void run_app(enum wisp_boot_action action)
 		wisp_diag_mark(WISP_DIAG_BOOT_RESET);
 		hw_reset();
 	}
+	if (nor_touched) {
+		nor_off(); /* stock's hand-off state: MSPI1 powered down, IO clock gated */
+	}
 	wisp_diag_mark(WISP_DIAG_BOOT_HANDOFF);
 	hw_jump(WISP_MAIN_BASE);
 }
@@ -595,13 +620,19 @@ _Noreturn void wisp_boot_main(void)
 	st.version = WISP_BOOT_STATUS_VERSION;
 	st.size = sizeof(st);
 	st.build = (WISP_BOOT_OBSERVE ? WISP_BOOT_BUILD_OBSERVE : 0) |
-		   (WISP_BOOT_LOG ? WISP_BOOT_BUILD_LOG : 0);
-	st.mount_result = 1; /* not attempted */
+		   (WISP_BOOT_LOG ? WISP_BOOT_BUILD_LOG : 0) | (WISP_BOOT_NOR ? 0 : WISP_BOOT_BUILD_NOR_OFF);
+	st.nor_result = 1; /* not attempted */
+	st.mount_result = 1;
 	st.record_result = 1;
 	st.inv_result = 1;
 	st.stage = WISP_BOOT_STAGE_START;
 	status_seal();
 	hw_log(WISP_BOOT_OBSERVE ? "\nwisp-boot: start (observe-only)\n" : "\nwisp-boot: start\n");
+	if (!WISP_BOOT_NOR) { /* the NOR switch: no MSPI1 access at all (the rest is dead code then) */
+		wisp_diag_mark(WISP_DIAG_BOOT_NOR_SKIPPED);
+		hw_log("wisp-boot: NOR phase switched off -> run-app\n");
+		run_app(WISP_BOOT_RUN_APP);
+	}
 
 	nor_phase(NOR_PHASE_TICKS, NOR_PHASE_POLLS);
 	if (fs_up() != 0) {

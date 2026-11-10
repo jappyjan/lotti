@@ -22,6 +22,7 @@
 /* build flags */
 #define WISP_BOOT_BUILD_OBSERVE  0x1u /* observe-only: no NOR or MRAM write code, always run-app */
 #define WISP_BOOT_BUILD_LOG      0x2u /* UART1 debug log compiled in */
+#define WISP_BOOT_BUILD_NOR_OFF  0x4u /* WISP_BOOT_NOR=0: no NOR phase, always run-app (stage-0c era) */
 
 /* nor_bound (stage-0b's Wisp Boot): the NOR phase hit its deadline or poll budget (boot_main.c), so
  * every NOR call after that point failed at once. Builds before it leave the byte 0. */
@@ -56,7 +57,8 @@ struct wisp_boot_status {
 	uint16_t size;           /* sizeof(struct wisp_boot_status) */
 	uint32_t build;          /* WISP_BOOT_BUILD_* */
 	uint32_t nor_id;         /* RDID bytes (byte 0 = manufacturer), 0 if never read */
-	int32_t nor_result;      /* nor_init(): 0 or its error (-11 = unknown RDID) */
+	int32_t nor_result;      /* nor_init(): 0 or its error (-11 = unknown RDID, -12 = MSPI1 power never
+				  * came up); 1 = not attempted (stage-0c's Wisp Boot; earlier builds 0) */
 	int32_t mount_result;    /* lfs_mount(): 0 or a littlefs error; 1 = not attempted */
 	int32_t record_result;   /* reading wisp/boot.rec: 0, or < 0 (missing, short) */
 	uint8_t record[16];      /* wisp/boot.rec as read (zeros if none) */

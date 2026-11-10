@@ -19,8 +19,16 @@
  * (-5 from a transfer). Set it before each phase (boot_main.c nor_phase). */
 void nor_budget(uint32_t polls);
 uint32_t nor_budget_left(void);
-/* Powers MSPI1, reads the RDID into *rdid (3 bytes, byte 0 = manufacturer) and checks it. */
+/* The phase's deadline: past `ticks` STIMER ticks after t0 the budget is spent (checked every 1024
+ * polls). ticks 0 = no deadline (the STIMER does not count the crystal). */
+void nor_deadline(uint32_t t0, uint32_t ticks);
+/* Powers MSPI1 (bounded wait on DEVPWRSTATUS; -12 and no MSPI1 access if it never shows), ungates
+ * its IO clock, reads the RDID into *rdid (3 bytes, byte 0 = manufacturer) and checks it. */
 int nor_init(uint32_t *rdid);
+/* DEVPWREN.PWRENMSPI1 is set. */
+int nor_powered(void);
+/* MSPI1 as the Even bootloader hands off: powered down, IO clock gated (source kept). */
+void nor_off(void);
 int nor_read(uint32_t addr, void *buf, uint32_t n);
 #if !WISP_BOOT_OBSERVE
 int nor_prog(uint32_t addr, const void *buf, uint32_t n); /* within one 256-byte page */
