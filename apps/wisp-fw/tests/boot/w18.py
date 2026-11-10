@@ -1662,6 +1662,8 @@ class Harness:
         hook = recovery_case_uart.WispStatus()
         try:
             self.native_probes(run, NATIVE_1_DIR / "wisp_boot.elf")
+            # W24e model: an MSPI1 access with the IO clock gated or the block unpowered stalls the CPU.
+            run.r.cmd("nor GatedStall true")
             run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
             pmic_realism(run)
             # The nPM1300 keeps its registers across Apollo resets, starting with what stock left (W21).
@@ -1834,7 +1836,8 @@ class Harness:
                  f"screen drawn ({pixels} pixel bytes, {frames} commits, checked pixel by pixel), rails off {RAILS_OFF} at boot, on {RAILS_ON}, both after the gate's reads, off again after 60 s; PMIC "
                  f"armed with stock's writes, {pm['kicks']} kicks, Wisp Boot {wb_kicks}, no power cycle; RESET -> HELO "
                  f"-> second boot; its report (from the {report_reset.get('source')}) prev {report_reset.get('prev_stage')} cause "
-                 f"{report_reset.get('reset_cause_names')}, boot {report_reset.get('boot')}, app-idle again; {live}; strict clean"
+                 f"{report_reset.get('reset_cause_names')}, boot {report_reset.get('boot')}, app-idle again; {live}; MSPI1 gated accesses {silicon['nor_gated']} (Wisp code {silicon['nor_gated_wisp']}), "
+                 f"{silicon['nor_stalls']} stalls; strict clean"
                  if ok else f"{'; '.join(fails)} {result.get('error')!r}")
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
@@ -1862,6 +1865,7 @@ class Harness:
         fails, t0, q = [], time.time(), {}
         try:
             self.native_probes(run, NATIVE_1_DIR / "wisp_boot.elf")
+            run.r.cmd("nor GatedStall true")
             run.r.cmd("pmicwdt ActOnWrites true")
             run.r.cmd("pmicwdt KeepRegisters true")
             regs = json.loads(BASELINE.read_text())["registers"]
@@ -1882,7 +1886,7 @@ class Harness:
                 run.run_until(lambda: int(run.r.cmd("wdt Bites").split()[0], 0) >= 3, 75, step=0.25)
                 run.run_until(lambda: False, 3, step=0.25)  # the next boot's Wisp Boot and its kick
                 naks = int(run.r.cmd("pmicwdt AppNaks").split()[0], 0)
-                st_words = [int(run.r.cmd(f"sysbus ReadDoubleWord {0x2037533C + 4 * i:#x}").split()[0], 0)
+                st_words = [int(run.r.cmd(f"sysbus ReadDoubleWord {pins.PEEK_REGIONS["wisp-boot-status"][0] + 4 * i:#x}").split()[0], 0)
                             for i in range(692 // 4)]
                 try:
                     q["boot_status"] = case_uart.decode_boot_status(struct.pack(f"<{692 // 4}I", *st_words))

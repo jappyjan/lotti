@@ -125,7 +125,7 @@ expect_fail() {
 		exit 1
 	fi
 	echo "ok: '$name' rejected:"
-	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing|check_no_mram_write: FAILED|^  MRAM|WISP HARDWARE IMAGE GATE|an enabled devicetree node" "$log" | sed 's/^/    /' | head -n 8
+	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing|check_no_mram_write: FAILED|^  MRAM|WISP HARDWARE IMAGE GATE|an enabled devicetree node" "$log" | sed 's/^/    /' | head -n 8 || true # head closing the pipe early is not a failure
 }
 west_build() { # <name> <cmake args...>
 	local name="$1"
