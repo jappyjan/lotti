@@ -185,6 +185,8 @@ class TempleCpu:
                     self.violations.append("unexpected offset bytes in a PMIC write")
                 self.wire.append((self._iom[0x2C4] & 0x7F, bytes(push[:tsize]), self.ticks))
                 self.transactions.append(("w", self._iom[0x2C4] & 0x7F, bytes(push[:tsize])))
+                if tsize == 3 and self._iom[0x2C4] & 0x7F == 0x6B and self.complete and not self.nak:
+                    self.pmic_registers[push[0] << 8 | push[1]] = push[2]  # a register write lands
                 if self.complete:
                     self._iom[0x204] |= 0x10 | 1 if self.nak else 1
             elif value & 0xF == 2:

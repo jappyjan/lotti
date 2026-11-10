@@ -219,6 +219,19 @@ class FakeLoaderLink:
             yield "out", data[i : i + 16]
         return 0
 
+    def _prog_charge_on(self, _a0, _a1):
+        """charge_on.c: one kick (its failures end the program), then the writes of
+        pins.CHARGE_ON_WRITES into `pmic_registers`; it sends nothing."""
+        if self.pmic is not None:
+            status = self.pmic.kick()
+            if status:
+                return status
+        registers = self.__dict__.setdefault("pmic_registers", {})
+        for address, value, _name in pins.CHARGE_ON_WRITES:
+            registers[address] = value
+        return 0
+        yield  # unreachable: makes this a generator
+
     def _prog_feed(self, _a0, _a1):
         return self.pmic.kick() if self.pmic is not None else 0
         yield  # unreachable: makes this a generator

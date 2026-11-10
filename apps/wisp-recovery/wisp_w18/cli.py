@@ -10,6 +10,7 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
                       held temple and get its HELO (rung4.md W21; stop the plan if it does not)
   peek                read-only: allowlisted bootloader RAM/MRAM (NOR part, board strap, UART2, flag)
   pmic-read           read-only: the nPM1300 register snapshot (pmic_read.bin; first run: Jan's go)
+  charge-on           WRITES the PMIC: stock charger settings and charging on (charge_on.bin)
   app-check           read-only: bootloader CRC, update flag, vectors, app region CRC vs known images
   boot-watch          CONT, then status queries to the booting app through the relay before G2EX
   ble-scan            read-only, no case: which Wisp and Even temples advertise near this machine
@@ -557,6 +558,31 @@ def cmd_pmic_read(args) -> int:
     return code
 
 
+def cmd_charge_on(args) -> int:
+    expected = {address: value for address, value, _name in pins.CHARGE_ON_WRITES}
+    mismatch: list[str] = []
+
+    def body(session, patched):
+        registers = session.charge_on()
+        table = pmic_table(registers)
+        for address, entry in table.items():
+            want = expected.get(int(address, 16))
+            note = "" if want is None else ("  written, ok" if registers[int(address, 16)] == want
+                                            else f"  WROTE {want:#04x}")
+            print(f"{address} {entry['name']:<28} {entry['value']}  ({entry['kind']}){note}")
+            if want is not None and registers[int(address, 16)] != want:
+                mismatch.append(entry["name"])
+        print(f"OK: charger settings written; BCHARGER.CHG_STAT {registers[0x0334]:#04x}, ERR_REASON "
+              f"{registers[0x0336]:#04x}, VBUSIN.STATUS {registers[0x0207]:#04x}", flush=True)
+        return {"pmic": table, "written": {f"{a:#06x}": f"{v:#04x}" for a, v in expected.items()}}
+
+    code = with_session(args, "charge-on", body)
+    if code == 0 and mismatch:
+        print(f"STOP: read back differs from what charge_on.bin wrote: {', '.join(mismatch)}", file=sys.stderr)
+        return 3
+    return code
+
+
 def known_images(extra: list[str]) -> list[dict]:
     """Images app-check compares the app region with: the pinned stock main, every pinned Wisp
     image with a CRC, and any --image files (a bundle or a raw image)."""
@@ -1027,6 +1053,8 @@ def main(argv=None) -> int:
     sp = sub.add_parser("pmic-read", help="read-only: nPM1300 register snapshot (pmic_read.bin)")
     common(sp)
     sp.add_argument("--compare", help="an earlier pmic-read report: list and stop on config registers that differ")
+    common(sub.add_parser("charge-on", help="WRITES the PMIC: stock charger settings and charging on "
+                                             "(charge_on.bin), then reads them back"))
     sp = sub.add_parser("app-check", help="read-only: bootloader CRC, flag, app region CRC against known images")
     common(sp)
     sp.add_argument("--image", nargs="+", help="more images to compare with (a bundle or a raw main image)")
@@ -1087,6 +1115,6 @@ def main(argv=None) -> int:
                     help="body bytes an earlier install-wisp run of the same image wrote and verified")
     a = p.parse_args(argv)
     return {"bootloader-plan": cmd_plan, "bootloader-install": cmd_install, "loader-hello": cmd_hello,
-            "held-reset-test": cmd_held_reset, "info-dump": cmd_info, "peek": cmd_peek, "pmic-read": cmd_pmic_read,
+            "held-reset-test": cmd_held_reset, "info-dump": cmd_info, "peek": cmd_peek, "pmic-read": cmd_pmic_read, "charge-on": cmd_charge_on,
             "app-check": cmd_app_check, "boot-watch": cmd_boot_watch, "ble-scan": cmd_ble_scan, "link-soak": cmd_soak,
             "recover": cmd_recover, "install-wisp": cmd_install_wisp}[a.command](a)
