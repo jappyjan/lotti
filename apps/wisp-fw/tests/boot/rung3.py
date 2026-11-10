@@ -32,7 +32,11 @@ if pad 42 drives at that moment; Wisp code may never leave both pads in UART fun
 PRSTN/IPRSTN hold MSPI1 in reset (WispMspiNor: any access in that state fails the case), and, with
 SRAM kept across warm resets, a D-cache (WispRstGen CacheModel: only lines cleaned through
 wisp_dcache_clean survive the reset). native-0's Zephyr app keeps both pads in UART function: its
-case-UART query is skipped and reported as a finding for native-0b.
+case-UART query is skipped and reported as a finding for native-0b. Since W24e (rung4.md, "W24e:
+stage-0c") MSPI1 also needs its power domain and its IO clock (WispMspiNor with WispPower: an access
+while DEVPWRSTATUS.PWRSTMSPI1 or CLKGEN MSPI1IOCLKEN is 0 does nothing and is counted; one made while
+Wisp code runs fails the case; powering MSPI1 down loses its registers). The Even bootloader hands
+off with both off, which is what stage-0b's Wisp Boot never undid.
 
 Every case also checks, since W24 (docs/wisp/rung4.md, "W24 result and analysis"): Wisp Boot's only
 PMIC write is the watchdog kick 07 04 01 (PC-attributed, WispPmicWdt PmicPcLog), it kicks once per
@@ -41,8 +45,9 @@ record, tests/boot/strict.py). The real app's such writes are listed in the tabl
 here (wisp-fw:w18-test fails native-0 on them); stage-0 must make none. The watchdog's LFRC runs at
 900 Hz (WispWdt), so Wisp Boot's watchdog is about 9.1 s here, as on silicon.
 
-Two suites (--suite): `fallback` (the Wisp Boot that rescues: the 26 rung-3 cases plus the real app
-behind it) and `observe` (native-0's Wisp Boot). Two bootloaders (--bootloader): `stock` (the
+Three suites (--suite): `fallback` (the Wisp Boot that rescues: the 26 rung-3 cases plus the real app
+behind it), `observe` (native-0's and stage-0c's Wisp Boot) and `nor-off` (the observe build with
+-DWISP_BOOT_NOR=OFF: no NOR phase at all, breadcrumb boot-nor-skipped, MSPI1 never touched). Two bootloaders (--bootloader): `stock` (the
 stock bundle's own) and `patched` (drdaeman's 87e2d4e0..., what Jan's temples run since W18:
 safety.md rule 12 asks for both). The platform always has the case link on UART2 (WispCaseLink,
 nobody attached unless a case injects a query) and the nPM1300 watchdog on IOM7 (WispPmicWdt).
@@ -270,8 +275,10 @@ def nm_all(elf: Path, name: str) -> list[int]:
 def silicon_models(r, elves: list[Path], retain: bool) -> None:
     """The W24d models (rung4.md, "W24d: stage-0b"): the half-duplex case wire (WispCaseLink), and,
     when SRAM is kept across warm resets, the D-cache (WispRstGen: only lines cleaned through
-    wisp_dcache_clean survive). MSPICFG's PRSTN/IPRSTN are always on (WispMspiNor)."""
+    wisp_dcache_clean survive). MSPICFG's PRSTN/IPRSTN are always on (WispMspiNor), and so is W24e's
+    MSPI1 power/IO-clock check, here with GatedStall (a Wisp access then halts the CPU until a reset)."""
     r.cmd("uart2 HalfDuplex true")
+    r.cmd("nor GatedStall true")  # W24e: a Wisp access to MSPI1 while powered down or gated never completes
     if retain:
         r.cmd("rstgen CacheModel true")
         for elf in elves:
@@ -285,7 +292,9 @@ def wire_findings(res: dict) -> dict:
     # Only writes made while Wisp code ran ("wisp", WispPads): stock after a rescue runs at the same PCs.
     owners = sorted({strict.owner(int(m[1], 16)) for m in re.finditer(r" pc 0x([0-9A-F]+) wisp", res["both_uart_log"])})
     return {"both_uart": owners, "report": res["wire"].strip(), "nor_in_reset": res["nor_in_reset"],
-            "nor_in_reset_log": res["nor_in_reset_log"]}
+            "nor_in_reset_log": res["nor_in_reset_log"], "nor_gated": res["nor_gated"],
+            "nor_gated_wisp": res["nor_gated_wisp"],
+            "nor_gated_wisp_log": [l for l in res["nor_gated_log"].splitlines() if l.endswith(" wisp")]}
 
 
 def nm_symbols(elf: Path) -> dict[str, int]:
@@ -386,9 +395,10 @@ def observe_cases() -> list[Case]:
              budget=60, retain=True,
              status={**common, "rescue_ok": False, "prev_valid": True, "prev_stage": "boot-handoff",
                      "reset_cause_names": ["watchdog"]}),
-        Case("obs-stage-0b", "stage-0b (rung4.md W24d; stage-0 of W24b with the silicon fixes) as install-wisp "
-             "leaves it, on the half-duplex wire with the D-cache model: IDENT, its clock measurement, the "
-             "boot report, a case-UART RESET, then the boot report from Wisp Boot's window (D1, D2)",
+        Case("obs-stage-0c", "stage-0c (rung4.md W24e; stage-0b of W24d with MSPI1 powered and clocked) as "
+             "install-wisp leaves it, on the half-duplex wire with the D-cache and MSPI1 power/clock models: "
+             "IDENT, its clock measurement, the boot report, a case-UART RESET, then the boot report from "
+             "Wisp Boot's window (D1, D2)",
              "stage0", "OBSERVE", flag_initially_set=False, staging="stock", rescue="missing", firmware=True,
              min_boots=1, query=True, budget=60, retain=True,
              status={**common, "rescue_ok": False, "would_action": "run-app", "reason": 1}),
@@ -397,6 +407,25 @@ def observe_cases() -> list[Case]:
              min_boots=1, budget=40,
              status={"observe": True, "nor_id": 0x1960C8, "nor_result": -11, "mount_result": 1,
                      "action": "run-app-degraded", "staging_present": False}),
+    ]
+
+
+def nor_off_cases() -> list[Case]:
+    """The observe build with -DWISP_BOOT_NOR=OFF (rung4.md W24e): the report window, then run-app at
+    once with the breadcrumb boot-nor-skipped. No NOR command, no MSPI1 access at all."""
+    common = {"observe": True, "log": False, "nor_off": True, "nor_id": 0, "nor_result": 1, "mount_result": 1,
+              "action": "run-app", "inventory": []}
+    return [
+        Case("nor-off-real", "NOR phase switched off, the real app behind it, 3 power cuts", "real", "OBSERVE",
+             flag_initially_set=False, staging="stock", rescue="missing", firmware=True, cuts_running=3,
+             min_boots=4, query=True, budget=120, status=common),
+        Case("nor-off-stage-0c", "NOR phase switched off, stage-0c's app (the half-duplex wire, the D-cache): "
+             "IDENT, clock, boot reports, RESET", "stage0", "OBSERVE", flag_initially_set=False, staging="stock",
+             rescue="missing", firmware=True, min_boots=1, query=True, budget=60, retain=True, status=common),
+        Case("nor-off-diag-wdt", "NOR phase switched off, the app never feeds the watchdog (SRAM kept): the "
+             "record shows the hand-off and the watchdog", "no_feed", "OBSERVE", flag_initially_set=False,
+             staging="stock", rescue="corrupt", min_boots=3, budget=60, retain=True,
+             status={**common, "prev_valid": True, "prev_stage": "boot-handoff", "reset_cause_names": ["watchdog"]}),
     ]
 
 
@@ -572,6 +601,11 @@ class Harness:
             (d / "pads.log").write_text(r.cmd("uart2 PadLog") + "\n")
             res["nor_in_reset"] = int(r.cmd("nor InResetAccesses").split()[0], 0)
             res["nor_in_reset_log"] = r.cmd("nor InResetLog")
+            res["nor_gated"] = int(r.cmd("nor GatedAccesses").split()[0], 0)
+            res["nor_gated_wisp"] = int(r.cmd("nor GatedWispAccesses").split()[0], 0)
+            res["nor_gated_log"] = r.cmd("nor GatedLog")
+            res["nor_power_losses"] = int(r.cmd("nor PowerLosses").split()[0], 0)
+            (d / "nor-gated.log").write_text(res["nor_gated_log"] + "\n")
             res["cleans"] = r.cmd("rstgen CleanLog")
             r.cmd(f"nor SaveImage @{d / 'nor-after.bin'}")
         finally:
@@ -856,7 +890,7 @@ class Harness:
             fails.append(f"version reply is not Wisp's: {q['version']}")
         if not q.get("relay_shape") or q.get("ident", {}).get("image_kind") != 0:
             fails.append(f"IDENT {q.get('ident')} (relay shape {q.get('relay_shape')})")
-        need = {"pmic-wdt", "boot-services", "boot-status"} | ({"boot-observe"} if self.suite == "observe" else set())
+        need = {"pmic-wdt", "boot-services", "boot-status"} | ({"boot-observe"} if self.suite != "fallback" else set())
         if q.get("status_code") != 0 or not need <= set(st.get("flags", [])) or st.get("image_kind") != 0:
             fails.append(f"case-UART status {q.get('status_code')} {st}")
         if st.get("stage") not in ("bt-failed", "bt-up"):
@@ -900,6 +934,11 @@ class Harness:
         if wire["nor_in_reset"]:
             fails.append(f"{wire['nor_in_reset']} MSPI1 accesses while held in reset (MSPICFG PRSTN/IPRSTN): "
                          f"{wire['nor_in_reset_log'].splitlines()[:2]}")
+        # MSPI1 unpowered or its IO clock gated (W24e): only accesses made while Wisp code runs fail
+        # (the bootloader's and, after a rescue, stock's run at the same PCs and never do it anyway).
+        if wire["nor_gated_wisp"]:
+            fails.append(f"{wire['nor_gated_wisp']} MSPI1 accesses by Wisp code while MSPI1 was powered down or its "
+                         f"IO clock gated: {wire['nor_gated_wisp_log'][:2]}")
         # Only Wisp code fails here. The patched loader's UART wake (its GPIO helper, 0x41D998) sets both
         # pads from its pin table for a few instructions before its first send's direction(1); that is
         # Even's and drdaeman's code, which works on silicon (rung4.md W24d).
@@ -910,7 +949,8 @@ class Harness:
         if wb_strict:
             fails.append(f"Wisp Boot wrote unmodelled power/clock/trim registers: {strict.describe(wb_strict)}")
         detail = (f"{len(res['resets'])} resets, {boots} Wisp Boot runs ({wb_kicks} PMIC kicks), {res['wdt_bites']} WDT bites, "
-                  f"{res['virtual_s']:.0f} s virtual")
+                  f"{res['virtual_s']:.0f} s virtual, MSPI1 gated accesses {wire['nor_gated_wisp']} Wisp / "
+                  f"{wire['nor_gated']} all, {res['nor_power_losses']} power-downs")
         extra = []
         if case.expect == "STOCK":
             stock_img = self.stock[32:]
@@ -965,6 +1005,10 @@ class Harness:
                     fails.append(f"Wisp Boot issued {res['nor_watched_writes']} NOR write/erase commands")
                 ops = sorted({l.split()[0] for l in res["nor_watched"] if l.strip()})
                 need = {"9f"} if case.rdid else {"9f", "05", "13"}   # RDID always; reads once mounted
+                if self.suite == "nor-off":
+                    need = set()
+                    if ops:
+                        fails.append(f"the NOR-off Wisp Boot issued NOR commands {ops}")
                 if not set(ops) <= {"9f", "05", "13"} or not need <= set(ops):
                     fails.append(f"Wisp Boot NOR commands {ops} (allowed 9f/05/13, required {sorted(need)})")
                 extra.append(f"Wisp Boot's NOR commands: {', '.join(ops) or 'none'}")
@@ -1048,8 +1092,9 @@ def main() -> int:
                     help="stock bundle in <cache>/stock/ whose main app (and bootloader, with --bootloader stock) is used")
     ap.add_argument("--bootloader", choices=("stock", "patched"), default="stock",
                     help="stock: the bundle's own; patched: drdaeman's 87e2d4e0... (needs g2-2.3.2.14 in the cache)")
-    ap.add_argument("--suite", choices=("fallback", "observe"), default="fallback",
-                    help="fallback: the rescuing Wisp Boot (26 cases + the real app); observe: native-0's")
+    ap.add_argument("--suite", choices=("fallback", "observe", "nor-off"), default="fallback",
+                    help="fallback: the rescuing Wisp Boot (26 cases + the real app); observe: native-0's and "
+                         "stage-0c's; nor-off: the observe build with -DWISP_BOOT_NOR=OFF")
     ap.add_argument("--only", nargs="*")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--keep", action="store_true")
@@ -1065,6 +1110,14 @@ def main() -> int:
             return 0
         cases = base_cases() + cut_cases(ref) + (native_cases() if "real" in h.payloads else [])
         rows.append(("reference", ref["case"].title, ref["case"].expect, ref["ok"], ref["state"], ref["detail"]))
+    elif h.suite == "nor-off":
+        cases = [c for c in nor_off_cases() if c.app in h.payloads]
+        # The switch must leave no MSPI1 code at all: no literal in MSPI1's register window, no CLKGEN.MSPIIOCLKCTRL.
+        boot = (h.build / "wisp_boot.bin").read_bytes()
+        words = {struct.unpack_from("<I", boot, i)[0] for i in range(0, len(boot) - 3, 4)}
+        found = sorted(w for w in words if 0x40061000 <= w < 0x40062000 or w == 0x40004110)
+        rows.append(("nor-off-no-mspi1", "the NOR-off wisp_boot.bin holds no MSPI1 or MSPIIOCLKCTRL address", "OBSERVE",
+                     not found, f"MSPI1 literals: {[hex(w) for w in found] or 'none'}", "static"))
     else:
         cases = [c for c in observe_cases() if c.app in h.payloads]
     if args.list:

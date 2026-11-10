@@ -229,6 +229,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 if(cpu is CortexM cm)
                 {
+                    cm.IsHalted = false; // a stalled bus access (WispMspiNor GatedStall) ends with the reset
                     cm.VectorTableOffset = (uint)bootVector;
                     cm.SP = bus.ReadDoubleWord(bootVector);
                     cm.PC = bus.ReadDoubleWord(bootVector + 4) & ~1u;

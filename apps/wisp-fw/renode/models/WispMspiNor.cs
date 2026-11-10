@@ -27,6 +27,21 @@
 // case on any (rung4.md, "W24d": the W24/W24b Wisp Boot wrote MSPICFG = 0). What silicon does on
 // such an access (a stall, a bus error, nothing) is not known; nothing working is the mild model.
 //
+// Power and IO clock (rung4.md, "W24e: stage-0c"): the Even bootloader puts MSPI1 into deep sleep
+// after every NOR access and hands off with DEVPWREN.PWRENMSPI1 = 0 and CLKGEN.MSPIIOCLKCTRL's
+// MSPI1IOCLKEN = 0. stage-0b's Wisp Boot powered MSPI1 but left the clock gated, and hung at its
+// first MSPI1 access on silicon (W24d). Here, while DEVPWRSTATUS.PWRSTMSPI1 or MSPI1IOCLKEN reads 0
+// (WispPower, from the PWRCTRL and CLKGEN models), every access is like one in reset (nothing
+// works, STATUS never sets) and is counted with its PC and the state (`GatedAccesses`,
+// `GatedWispAccesses` for those made while Wisp code runs, from Wisp Boot's entry to the next reset
+// as WispStrict tracks it, and `GatedLog`); the harnesses fail a case on any Wisp one. With
+// `GatedStall true` such a Wisp access also halts the CPU until the next reset (WispRstGen un-halts it):
+// the bus access that never completes, which is what W24d's silicon run fits (last stage boot-nor,
+// then the watchdog); `Stalls` counts them. When PWRENMSPI1
+// goes from 1 to 0 the controller's registers are lost (back to their reset values), as a powered-down
+// domain's are; the NOR device keeps its state. What silicon does on a gated access (a bus stall, as
+// W24d suggests, or nothing) is not modelled beyond that: the harnesses fail on the access itself.
+//
 // The NOR array is non-volatile: Reset() (any machine reset, incl. the Wisp power-cut model)
 // clears only the controller registers and the device's volatile state (WEL, 4-byte mode, QE is
 // non-volatile and kept). Monitor: `<name> SaveImage @file`, `<name> LoadImage @file`.
@@ -64,6 +79,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             sr = 0;
             Reset();
+            WispPower.Mspi1PowerLost += ResetController;
         }
 
         public GPIO IRQ { get; }
@@ -98,6 +114,58 @@ namespace Antmicro.Renode.Peripherals.Wisp
         }
 
         public ulong InResetAccesses { get; private set; }
+        public ulong GatedAccesses { get; private set; }
+        public ulong GatedWispAccesses { get; private set; }
+        public ulong PowerLosses { get; private set; }
+        public ulong Stalls { get; private set; }
+        public bool GatedStall { get; set; }
+
+        public string GatedLog()
+        {
+            return string.Join("\n", gatedLog);
+        }
+
+        // MSPI1 unpowered or its IO clock gated (WispPower). Notes the access and says so.
+        private bool Gated(long o, bool write, uint v)
+        {
+            var powered = WispPower.Mspi1Powered;
+            var clocked = WispPower.Mspi1Clocked;
+            if(powered && clocked)
+            {
+                return false;
+            }
+            GatedAccesses++;
+            var wisp = WispStrict.Armed && WispStrict.InWisp;
+            if(wisp)
+            {
+                GatedWispAccesses++;
+            }
+            if(gatedLog.Count < 32 || (wisp && gatedWispLogged < 8))
+            {
+                gatedWispLogged += wisp ? 1 : 0;
+                var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((Antmicro.Renode.Peripherals.CPU.ICPUWithRegisters)cpu).PC : 0;
+                gatedLog.Add($"{(write ? "W" : "R")} +0x{o:X3}{(write ? $" <- 0x{v:X8}" : "")} {(powered ? "" : "power-off ")}{(clocked ? "" : "ioclk-gated ")}pc 0x{pc:X} {(wisp ? "wisp" : "other")}");
+            }
+            if(GatedStall && wisp && machine.SystemBus.TryGetCurrentCPU(out var stalled))
+            {
+                Stalls++;
+                stalled.IsHalted = true; // until the next reset: the access never completes
+            }
+            return true;
+        }
+
+        // DEVPWREN.PWRENMSPI1 1 -> 0: the domain's registers are lost; the NOR device is not.
+        private void ResetController()
+        {
+            PowerLosses++;
+            regs = new Dictionary<long, uint>();
+            regs[MSPICFG] = RESETS_N;
+            rx = new Queue<uint>();
+            tx = new List<byte>();
+            pioActive = false;
+            intstat = 0;
+            UpdateIrq();
+        }
 
         public string InResetLog()
         {
@@ -144,7 +212,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 this.Log(LogLevel.Warning, "R +0x{0:X3}", o);
             }
-            if(HeldInReset(o, false, 0))
+            var gatedR = Gated(o, false, 0);
+            if(HeldInReset(o, false, 0) | gatedR)
             {
                 return o == CTRL ? Get(CTRL) & ~(START | BUSY | STATUS) : (o == RXENTRIES || o == RXFIFO ? 0 : Get(o));
             }
@@ -175,7 +244,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
             {
                 this.Log(LogLevel.Warning, "W +0x{0:X3} <- 0x{1:X8}", o, v);
             }
-            if(HeldInReset(o, true, v))
+            var gatedW = Gated(o, true, v);
+            if(HeldInReset(o, true, v) | gatedW)
             {
                 if(o != TXFIFO && o != INTCLR && o != INTSET)
                 {
@@ -542,6 +612,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private const long MSPICFG = 0x030;
         private const uint RESETS_N = 0xC0000000u; // PRSTN | IPRSTN
         private readonly List<string> inResetLog = new List<string>();
+        private readonly List<string> gatedLog = new List<string>();
+        private int gatedWispLogged;
         private const long CTRL = 0x000, ADDR = 0x008, INSTR = 0x00C, TXFIFO = 0x010, RXFIFO = 0x014;
         private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094;
         private const long DMACFG = 0x100, DMASTAT = 0x104, DMATARGADDR = 0x108, DMADEVADDR = 0x10C, DMATOTCOUNT = 0x110;

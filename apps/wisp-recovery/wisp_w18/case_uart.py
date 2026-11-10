@@ -235,7 +235,7 @@ def decode_boot_status(b: bytes) -> dict:
         inv.append({"name": name, "size": size_, "crc": crc_, "result": res})
     confirm_calls, confirm_result = struct.unpack_from("<Ii", b, 600)
     out = {
-        "version": version, "observe": bool(build & 1), "log": bool(build & 2), "nor_id": nor_id,
+        "version": version, "observe": bool(build & 1), "log": bool(build & 2), "nor_off": bool(build & 4), "nor_id": nor_id,
         "nor_result": nor_res, "mount_result": mount, "record_result": rec_res, "record": record.hex(), "stage": stage,
         "staging_present": bool(staging_present), "staging_id": staging_id, "staging_size": staging_size,
         "rescue_ok": bool(rescue_ok), "rescue_id": rescue_id, "rescue_size": rescue_size,

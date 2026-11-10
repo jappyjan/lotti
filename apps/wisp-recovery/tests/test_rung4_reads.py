@@ -119,6 +119,17 @@ class Peek(unittest.TestCase):
         self.assertEqual(out["status"]["reset_cause_names"], ["watchdog"])
         self.assertEqual(out["status"]["window_ms"], 300)
         self.assertEqual((out["status"]["prev"]["boots"], out["status"]["prev"]["stage"]), (6, "boot-mounted"))
+        # The NOR fields (missing from peek's output at W24d).
+        boot = case_uart.decode_boot_status(bytes(st))
+        self.assertEqual(out["status"]["nor_id"], f"{boot['nor_id']:#08x}")
+        for k in ("nor_result", "mount_result", "nor_bound_hit", "nor_off", "would_action"):
+            self.assertEqual(out["status"][k], boot[k], k)
+        struct.pack_into("<Ii", st, 12, 0, -12)  # stage-0c's Wisp Boot: MSPI1 power never came up
+        st[623] = 1                               # nor_bound hit
+        struct.pack_into("<I", st, 688, zlib.crc32(bytes(st[:688])))
+        out = cli.describe_peek("wisp-boot-status", bytes(st))
+        self.assertEqual((out["status"]["nor_id"], out["status"]["nor_result"], out["status"]["nor_bound_hit"]),
+                         ("0x000000", -12, True))
 
     def test_the_wisp_regions_are_the_pinned_stage0_boots(self):
         """wisp-record is wisp_diag_slot in both committed Wisp Boot ELFs; wisp-boot-status is `st`
