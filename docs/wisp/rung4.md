@@ -1002,7 +1002,7 @@ Then a hardware-log row "rung 4 W24e (stage-0c)" with the reports of 1–10, the
 
 ### W25: native-1 (MVP)
 
-Written on t3-worker on 2026-11-09, **emulation and static analysis only; no hardware was touched**. Jan's direction the same day: stop micro-stepping, build one image that does the job (the left temple is ours during development, case recovery is proven, no return to stock after each test). native-1 is that image. **It is not pinned**: an independent review and the pin are the next step, and `install-wisp` refuses it until then (`tests/test_native1.py` checks both).
+Written on t3-worker on 2026-11-09, **emulation and static analysis only; no hardware was touched**. Jan's direction the same day: stop micro-stepping, build one image that does the job (the left temple is ours during development, case recovery is proven, no return to stock after each test). native-1 is that image. **Update 2026-11-10: the image was rebuilt on the W24e Wisp Boot (`69ca31bf…`, final CRC `ef6d2541`; see [the rebuild](#w25-rebuild-on-the-w24e-wisp-boot-t3-worker-2026-11-10-emulation)); the values in this section's first evidence table (`6a24ae47…`, `2b2019cd`) are the superseded first image's.** **It is not pinned**: an independent review and the pin are the next step, and `install-wisp` refuses it until then (`tests/test_native1.py` checks both).
 
 **In one paragraph.** native-1 is the full app behind the observe-only Wisp Boot, with every silicon bug W24c found fixed in both, the W24 fix plan carried out, and the diagnostics built in so that a failure names its step. On silicon it should (1) boot steadily through the Even bootloader and Wisp Boot into Zephyr, (2) answer IDENT, READ and the boot report on the case UART, (3) advertise and take a session from the Mac (`HELLO`, `PING`, `TIME_SYNC`, with the new Mac session tool), and (4) draw a test pattern and "Wisp" on the JBD4010 for 60 s after each boot. (5), installing its successor over BLE, is not in it: see [Follow-up: native-2's update path](#follow-up-native-2s-update-path).
 
@@ -1085,6 +1085,33 @@ Image under test: native-1 `6a24ae475a4ba907…` (245,148 B), built from `7eafd2
 | Reproducible build | a separate checkout of `7eafd24` built `native-1.bin` and both stripped ELFs byte-identical to the committed files; the map differs only by the checkout's absolute paths (the review reproduced the map too, at the same 43-character path) |
 | `wisp-recovery:test` | 266 tests pass, among them `test_native1.py` (not pinned, so refused as committed; the whole gate accepts it once pinned; installs over native-0 and over stage-0, keeping the tail of the last 16-byte unit; native-1's `st` is stage-0b's `0x2037533C`) |
 | Mac session tool against the native_sim firmware through Bumble (`session.mts`) | `connect` (MTU 247), `hello` (`wisp-native`, protocol 0.2), `time-sync` ×3, 12 s on keepalive PINGs past the 10 s session timeout, `bye` |
+
+#### W25 rebuild on the W24e Wisp Boot (t3-worker, 2026-11-10, emulation)
+
+W24d's hardware run showed that the Even bootloader hands off with MSPI1 powered down and its IO clock gated, so the Wisp Boot inside the first W25 image (stage-0b's) would have hung in `boot-nor` as stage-0b did. PR #89 fixed Wisp Boot ([W24e](#w24e-stage-0c)); native-1 is rebuilt on that Wisp Boot after merging `t3/custom-g2-firmware` (`ad4cbb9`) into the branch (merge `28afba8`). The NOR phase is **on** (full NOR, not `WISP_BOOT_NOR=OFF`): native-1 keeps the staging-file and `/firmware` read as before. **Still not pinned**: the independent review pins it.
+
+| | Value |
+| --- | --- |
+| Image | `native-1.bin` **`69ca31bfd61e1580ae3ca3bb036423c4dad0b56d7cad42be424751c22637701a`**, 245,148 B, zlib CRC-32 **`51d1d00b`**, ends at `0x473d9c` (write bound `0x473da0`) |
+| Final CRC over stock, stage-0, stage-0b, stage-0c and native-0 | **`ef6d2541`** in every case (`proposed-pin.json` `crc32_aligned_over`: the 4 bytes after the image are stock's in all of them) |
+| Wisp Boot | `wisp_boot.bin` `2387b1b95103734a…` (12,048 B), slot `f24e887078eebf174276d6d187d4b637b32f0fc2c778c842ba1b115cc44b40ba`; the app `7d75e34e11ab9f9d…` (179,612 B) |
+| Stripped ELFs, map | `zephyr.elf` `e846793464ad49f2…`, `zephyr.map` `dbb9be7a73dc333a…`; `st` at `0x20375340`, the same as stage-0c's (`PEEK_REGIONS["wisp-boot-status"]` covers native-1) |
+| Built from | merge commit `28afba8` (clean tree; the app reports that revision), with `build_native.sh native-1` and `package_native.sh native-1` at the checkout path `/home/jappy/.t3/worktrees/lotti/t3-c843265c` (the map records it: 43 characters, as in W24d/W24e), `propose_pin.py native-1 --commit 28afba8`. The review reproduces it at that path with the `unshare` bind mount of `data/stage-0b/README.md` |
+
+All runs through nx on this build (Wisp Boot `2387b1b9…`):
+
+| Check | Result |
+| --- | --- |
+| `wisp-fw:boot-test`, observe suite, rule 12 | stock 2.4.0.24: **8/8**; patched `87e2d4e0…`: **8/8** (obs-native-0 with native-1's app, obs-would-rescue, obs-crash-reset, obs-no-feed, obs-erased, obs-diag-wdt, obs-stage-0c, obs-nor-gd). Wisp Boot's NOR commands: 05, 13, 9f; no MRAM write; the app's strict record clean |
+| `w18-test native-1` | **pass**, final CRC `ef6d2541`; with `nor GatedStall true` (W24e model): **0 gated MSPI1 accesses (none by Wisp code), 0 stalls**; Wisp Boot's NOR read (staging `971f4516`, 4 firmware files); all the W25 checks as before |
+| `w18-test native-1-pmic-dead` | **pass** (46 app transactions NAKed, 3 Apollo WDT resets, Wisp Boot kicked 4x, no PMIC expiry) |
+| `w18-test native-1-pmic-poweron` | **pass** (gate refused, no rail or configuration write) |
+| `w18-test native-0-legacy` | **pass** (the pinned native-0 still fails as on silicon: 0 of 3 case-UART requests answered, MSPI1 accessed 2,000,006x while held in reset) |
+| `w18-test stage-0c` | **pass** |
+| `wisp-fw:test` | **pass** |
+| `wisp-recovery:test` | **280 tests pass** |
+
+Harness changes: `native-1`, `native-1-pmic-dead` and `-poweron` now run under `nor GatedStall true`, the native-1 state line reports the gated-access count, and the pmic-dead case reads Wisp Boot's status block at `pins.PEEK_REGIONS["wisp-boot-status"]` instead of the hard-coded stage-0b address `0x2037533C` (the first run failed on that: native-1's `st` moved to `0x20375340`). `scripts/test.sh` no longer dies when `head` closes the pipe early on a passing negative build (a race that failed one `wisp-fw:test` run). `test_native1.py` expects `st` at stage-0c's `0x20375340`. The earlier evidence rows above (`6a24ae47…`, `2b2019cd`, Wisp Boot `ef1a967f…`) belong to the superseded first image and are kept as history.
 
 #### What stays unproven until silicon
 
