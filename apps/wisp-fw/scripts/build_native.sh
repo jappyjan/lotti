@@ -5,7 +5,7 @@
 #
 #   scripts/build_native.sh native-1
 #   scripts/build_native.sh native-1-right   (the right temple: lens 2, "Wisp R"; images/native-1/right.conf)
-#   scripts/build_native.sh stage-0b
+#   scripts/build_native.sh stage-0c
 #
 # native-1 (rung4.md W25): the observe-only Wisp Boot (no NOR or MRAM write code, always run-app, no
 # UART1 log) and the app with images/native-1/ (no console, the panel through the gated rail
@@ -16,10 +16,11 @@
 # Boot's slot byte for byte) and wisp-ota's own rule-3 checks (pack-main). Nothing is pinned here:
 # pinning is W23, after review.
 #
-# stage-0b (rung4.md W24d): the same observe-only Wisp Boot and the bare-metal app of src/stage0/
+# stage-0c (rung4.md W24e): the same observe-only Wisp Boot and the bare-metal app of src/stage0/
 # (no Zephyr), built with Wisp Boot's CMake project. Its gates: check_image --part app, rule 8 and
 # the no-MRAM-write gate over the app, then the same combine, check_native and pack-main. (stage-0,
-# pinned at W24b-0, is the build of commit 9bfac4d with `stage-0`; this tree builds stage-0b.)
+# pinned at W24b-0, is the build of commit 9bfac4d with `stage-0`; stage-0b, pinned at W24d-0, is
+# commit 91035fc's `stage-0b`; this tree builds stage-0c.)
 #
 # Output in .wisp-cache/build/<image>/: <image>.bin, <image>.evenota, manifest.json (SHA-256 of the
 # image, both ELFs and maps, Wisp Boot's binary and its 64 KiB slot), boot/ and app/ build dirs.
@@ -27,21 +28,21 @@ source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
 wisp_require_setup
 
-image="${1:?usage: build_native.sh native-1|stage-0b}"
+image="${1:?usage: build_native.sh native-1|stage-0c}"
 case "$image" in
 native-1 | native-1-right)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF)
 	;;
-native-0 | stage-0)
-	echo "wisp-fw: $image is pinned as built (native-0 at 8374f9a, stage-0 at 9bfac4d; apps/wisp-recovery/wisp_w18/data/);" \
-		"build it from that commit: this tree builds native-1 and stage-0b" >&2
+native-0 | stage-0 | stage-0b)
+	echo "wisp-fw: $image is pinned as built (native-0 at 8374f9a, stage-0 at 9bfac4d, stage-0b at 91035fc; apps/wisp-recovery/wisp_w18/data/);" \
+		"build it from that commit: this tree builds native-1 and stage-0c" >&2
 	exit 1
 	;;
-stage-0b)
+stage-0c)
 	boot_args=(-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_STAGE0=ON)
 	;;
 *)
-	echo "wisp-fw: unknown native image '$image' (known: native-1, native-1-right, stage-0b)" >&2
+	echo "wisp-fw: unknown native image '$image' (known: native-1, native-1-right, stage-0c)" >&2
 	exit 1
 	;;
 esac
@@ -66,7 +67,7 @@ echo "=== $image: Wisp Boot (${boot_args[*]})"
 rm -rf "$out/boot"
 WISP_BOOT_BUILD_DIR="$out/boot" "$APP_DIR/scripts/build_boot.sh" "${boot_args[@]}"
 
-if [[ "$image" == stage-0b ]]; then
+if [[ "$image" == stage-0c ]]; then
 	b="$out/boot"
 	echo "=== $image: app gates (bare metal, $b/stage0.elf)"
 	python3 -I "$APP_DIR/scripts/check_image.py" --elf "$b/stage0.elf" --bin "$b/stage0.bin" --part app

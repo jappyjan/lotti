@@ -26,6 +26,7 @@ Tags as elsewhere: **[C]** confirmed (code, log, static analysis), **[I]** infer
   - *Update, W25 prepared (2026-11-09, emulation only):* Jan's direction: one MVP image instead of more micro-steps. **native-1** (observe-only Wisp Boot with every W24c fix, the full app with no console, timer-fed watchdog, D3–D5 diagnostics, half-duplex case UART, BLE, and a boot screen on the panel through gated rail switches) is built and committed but **not pinned**; Renode now models the one-wire case link, MSPICFG's resets and the buck's status, and native-0 and stage-0 fail there as on silicon. A Mac session tool (G14) exists. See [W25: native-1 (MVP)](#w25-native-1-mvp), with its runbook. BLE install of the next image (5) is a follow-up.
   - *Update, W24b (2026-11-09, hardware, then analysis on t3-worker):* stage-0 installed (`19b3e002`) and recovered (`d9864941`); it looped every ≈10.68 s and boot-watch got nothing. The silence is the tool's: the relay holds an unanswered request until the temple's next frame, and the one report request per boot landed in the loader's window. Fixed host-side (the report is aimed at Wisp Boot's window); a second read path added (`peek` of the record in a held loader); the loop analysed (most likely Wisp Boot hangs after its window, in its NOR phase). See [W24b results and the fix](#w24b-results-and-the-fix), with a rerun runbook for the same stage-0.
   - *Update, W24d prepared (2026-11-09, emulation only):* the three silicon bugs of [W24c](#w24c-static-findings-after-w24b) are fixed in Wisp Boot and stage-0 (half-duplex case UART, `MSPICFG` read-modify-written and the NOR phase bounded, the record and status block cleaned out of the D-cache), Renode models all three, and the pinned stage-0 now fails there while **stage-0b** passes. stage-0b (`e5c70fb4…`) is built, reproduced, committed and, after an independent review, **pinned (W24d-0)**: [W24d](#w24d-stage-0b) has the evidence, the files and the runbook.
+  - *Update, W24d (2026-11-09, hardware) and W24e prepared (2026-11-10, emulation only):* stage-0b ran on the left temple (`1ad236d1`). The half-duplex wire, the D-cache clean and the PMIC kick work on silicon: Wisp Boot's boot report came on every boot. But every boot hung in `boot-nor` until the watchdog fired. Root cause: the Even bootloader hands off with MSPI1 powered down and its IO clock gated (`CLKGEN.MSPIIOCLKCTRL`), and stage-0b's Wisp Boot never ungated it. **stage-0c** fixes that, Renode now reproduces the W24d hang with the pinned stage-0b and passes stage-0c, and a `WISP_BOOT_NOR=OFF` build skips the NOR phase. stage-0c is built and committed but **not pinned**: [W24d results](#w24d-results), [W24e](#w24e-stage-0c).
 
 ## The short answer
 
@@ -839,6 +840,166 @@ Then a hardware-log row "rung 4 W24d (stage-0b)" with the reports of 1–10 (and
 - The 5 s and 40,000,000-poll bound of the NOR phase is a guess at silicon speed. A bound hit only costs diagnostics in the observe build (the app runs). The rescue copy's 120 s in the fallback build is not proven to be enough on silicon either, and it outlasts the PMIC watchdog (G16).
 - Everything W24b's runbook lists as silicon-only (IOM7, UART2 baud and pad electrics, the clocks) still is.
 
+### W24d results
+
+Run by the Mac thread on 2026-11-09, 20:20–20:30 UTC, left temple, following the [W24d runbook](#w24d-runbook-draft-stage-0b-left); hardware-log row "rung 4 W24d (stage-0b)" in [safety.md](safety.md#hardware-log). Facts as reported:
+
+- stage-0b (`e5c70fb4…`) was installed and verified: final CRC **`1ad236d1`** over stock, as pinned.
+- **Wisp Boot answered the aimed boot report on every boot**, with no UART errors (`relay_exit_uart_errors` 0). Flags `prev-valid`, `kick-ok`, `stimer-xt`. Between case resets the reset cause is `watchdog` (`0x40`).
+- **Every boot's last stage is `boot-nor`**, at 259–300 ms after Wisp Boot's start. About 9 s later the Apollo watchdog resets the temple, so the loop repeats every ≈10.7 s. No IDENT: the app never runs.
+- `peek`: the record is **valid** across the resets. `wisp-boot-status` is sealed with action `run-app` (the default before the decision), `window_ms` 299 and `uart_result` 0. peek did not print the NOR id or result then; it does now (below).
+- `pmic-read --compare` W21: **0 config diffs**. The `07 04 01` kick at every boot holds the PMIC through the loop.
+- No `recover` (Jan: no restore to stock during development). **The left temple was left with stage-0b installed**, reboot-looping, with the PMIC kicked every boot.
+
+**Proven on silicon** (the three W24c fixes, two of them in full): the half-duplex case wire (boot reports on every boot, no UART errors); the D-cache clean (the record and the status block are valid across watchdog and case resets); and Wisp Boot's PMIC kick. **Not working:** the NOR phase. The phase is bounded by a 40,000,000-poll budget and a 5 s STIMER deadline, and `bd_read` feeds the watchdog only inside that bound. A watchdog reset about 9 s after `boot-nor`, with no later breadcrumb, therefore means the CPU stopped making progress inside `nor_init`. A merely dead controller would not do that: `pio()` would have timed out after 2,000,000 polls, `nor_init` would have returned −10, and the app would have run degraded. This was a **hard stall on an MSPI1 access**. The cause is below.
+
+### W24e: stage-0c
+
+Prepared on t3-worker on 2026-11-09/10, **emulation and static analysis only; no hardware was touched**. Tags as above.
+
+#### Root cause: the bootloader hands off with MSPI1 asleep
+
+[C, disassembly of stock 2.4.0.24's bootloader `ecb91896…` and the patched `87e2d4e0…`, identical in this code apart from the relocation; confirmed in Renode by logging every PWRCTRL and CLKGEN access of the real bootloader with its PC]
+
+- The bootloader's NOR layer takes a mutex around every NOR access, and the lock and unlock wake and sleep MSPI1. The lock (`0x41FF50`) takes the mutex and calls `am_hal_mspi_power_control(h, WAKE, retain)` (`0x41FE8E`). The unlock (`0x41FF66`) calls `power_control(h, DEEPSLEEP, retain)` (`0x41FE6E`) and gives the mutex back. Init ends with a sleep too (`0x4205DA`).
+- In the HAL (`am_hal_mspi.c`, the same code at `0x426B60` in the bootloader), DEEPSLEEP saves the registers, turns MSPI1's power domain off (`DEVPWREN.PWRENMSPI1` = 0) and gates MSPI1's IO clock (`mspi_clkgen_ctrl(…, false)`: `CLKGEN.MSPIIOCLKCTRL.MSPI1IOCLKEN` = 0). WAKE does the reverse in this order: power on and wait for `DEVPWRSTATUS`, then the clock (source, enable, 10 µs), then it restores the registers.
+- In Renode, the bootloader's last writes before Wisp Boot's entry are `MSPIIOCLKCTRL = 0x200` (PC `0x424D66`: `MSPI1IOCLKSEL` = 8, HFRC 192 MHz; `MSPI1IOCLKEN` = 0) and `DEVPWREN = 0` (PC `0x41C222`). Its hand-off de-init (`0x42E14A`) touches UART1 and the MCU performance mode, never MSPI1. While it uses the NOR, the clock register runs `0x200` → `0x220` → `0x200` around each access.
+- stage-0b's Wisp Boot (`nor_init`) set `DEVPWREN` bit 15 and waited for the status bit, but **never touched `CLKGEN.MSPIIOCLKCTRL`**. Its first MSPI1 register access (`INTEN = 0`) therefore went to a powered block with no clock. [I, strong] On silicon that access never completed. That fits every W24d fact: the last breadcrumb is `boot-nor` (set just before `nor_init`), nothing after it, and the watchdog fires 8 s after the last feed at the modelled LFRC (about 9.1 s at 900 Hz). The HAL never touches MSPI registers with the gate closed: DEEPSLEEP saves them before gating, WAKE ungates before restoring.
+- The power and clock register offsets, MSPI1's offsets and the `PWRENMSPI1`/`PWRSTMSPI1` masks (`0x8000`) in `boot_nor.c` and `boot_hw.h` all match `apollo510.h`, checked again here. No NOR power pin is involved: the wake and sleep wrappers (`0x41FE8E`, `0x41FE6E`) only call `power_control`, which touches PWRCTRL, the clock manager, CLKGEN and MSPI1's own registers, so no GPIO is driven around a NOR access [C]. The MSPI1 pad functions were not re-checked here; they live in the always-on GPIO block, so the bootloader's settings should still be in place at hand-off [I].
+
+Every other way Wisp Boot's NOR code could stall or overrun, checked:
+
+| Path | Before (stage-0b) | Now (stage-0c) |
+| --- | --- | --- |
+| an MSPI1 access with the IO clock gated | always: the W24d hang | the clock is ungated before the first access |
+| an MSPI1 access with the domain off | if `DEVPWRSTATUS` never showed MSPI1, `nor_init` went on anyway | `-12` and **no MSPI1 access at all** |
+| the XIP aperture or DMA | not used (PIO only; `XIPEN`, `DMAEN`, `CQEN` cleared) | same |
+| one transfer's waits | 2,000,000 polls *per word* without a feed: a 4 KiB read could spend the phase's whole 40,000,000-poll budget unfed | at most 2,000,000 polls per *transfer*, plus the STIMER deadline checked every 1,024 polls inside every wait |
+| the 5 s deadline | checked only at `bd_read`'s entry | also inside every transfer (`nor_deadline`) |
+| `SCK` | stock's `DEV0CFG` (`CLKDIV` 1: 96 MHz with the 192 MHz IO clock) with the plain `READ4B` and no timing scan, which is outside the MX25U25643G's normal-read range | `CLKDIV` 8: **12 MHz**; `DEV0CFG1.SDR250EN` cleared (the HAL sets it only for 192 or 250 MHz) |
+| what the app inherits | MSPI1 powered with the clock gated | MSPI1 as stock hands off: powered down, clock gated (`nor_off`, also after `confirm()` if it found MSPI1 off) |
+
+#### The fix (`src/boot/stage/boot_nor.c`, `boot_main.c`)
+
+- `nor_init` runs the HAL's WAKE order, every register read-modify-written. First `DEVPWREN |= PWRENMSPI1` with a bounded wait (100,000 reads) on `DEVPWRSTATUS.PWRSTMSPI1`; if the bit never shows, it returns −12 without any MSPI1 access, and the app runs degraded. Then breadcrumb `boot-nor-power`. Then the clock as `mspi_clkgen_ctrl(enable, config)` does it: gate closed, `MSPI1IOCLKSEL` = 8 (stock's HFRC 192 MHz), gate open, then 2,000 CLKGEN reads (≥ 10 µs at any core clock), and breadcrumb `boot-nor-clock`. Then the MSPI1 registers (as stage-0b, plus `SDR250EN` cleared, with `DEV0CFG` = `0x01080860`), breadcrumb `boot-nor-id`, then RDID.
+- `nor_off` (before every hand-off to the app; in `confirm()` only if MSPI1 was off when it was called) does DEEPSLEEP's order: power off (bounded wait), then close the gate, keeping the source as stock does.
+- The poll bound per transfer and the in-transfer deadline, as in the table.
+- New breadcrumbs `1A` `boot-nor-power`, `1B` `boot-nor-clock`, `1C` `boot-nor-id` ([case-uart.md](case-uart.md#wisp-boots-status-block-versions-1-and-2)). A loop that stops at one of them names the step. `nor_result` now starts at 1 (not attempted).
+- The only new register Wisp Boot writes is `CLKGEN.MSPIIOCLKCTRL`, with exactly stock's two values `0x200` and `0x220`; both are in the strict allowlist with stock's PCs as the reason. No PMIC write beyond the kick, no MRAM or NOR write (the observe build), nothing outside the app region.
+
+**The NOR switch.** `-DWISP_BOOT_NOR=OFF` (observe builds only; CMake refuses it for the fallback build) skips the NOR phase entirely. After the report window Wisp Boot marks `1D` `boot-nor-skipped` and runs the app. The status block has build flag `4`, `nor_result` 1, mount 1 and action `run-app`. Its `wisp_boot.bin` holds no MSPI1 or `MSPIIOCLKCTRL` address at all (4,264 B of text against 12,000; the rung-3 `nor-off` suite checks this statically). native-1 can take either Wisp Boot. NOR on is the one stage-0c proves on silicon; NOR off is the fallback if it still stalls. Both pass rule 12 (below).
+
+#### Renode now catches it
+
+- `WispPower` (in `WispTrace.cs`) reads `DEVPWRSTATUS.PWRSTMSPI1` and `MSPIIOCLKCTRL.MSPI1IOCLKEN` from the PWRCTRL and CLKGEN models' storage. `WispMspiNor` treats every access while either is 0 like one in reset: nothing works and `STATUS` never sets. It counts and logs each one with its PC (`GatedAccesses`, `GatedWispAccesses`, `GatedLog`). With `GatedStall`, which rung 3 and the W24e w18 rows use, a Wisp access also **halts the CPU until the next reset**: the bus access that never completes. When `PWRENMSPI1` goes from 1 to 0, MSPI1's registers are lost (`PowerLosses`), as a powered-down domain's are.
+- rung 3 and w18 fail a case on any such access by Wisp code (Wisp Boot's entry to the next reset, as the strict record tracks it). The real bootloader and the stock app never trip it: **0 gated accesses by anyone** in every run, with hundreds of MSPI1 power-downs per run by the bootloader (766 in `obs-native-0`).
+- Limit: whether silicon stalls or just ignores a gated access is still inferred from W24d. The model takes the stall, which is what W24d fits.
+
+#### Evidence
+
+All on t3-worker, 2026-11-10, through nx (`wisp-fw:boot-test` with `WISP_RUNG3_SUITES="observe nor-off"`, both bootloaders; `wisp-fw:w18-test --only stage-0c stage-0b-models stage-0-models hello rung4-reads`), on a loaded shared host. Wisp Boot under test: the observe build `wisp_boot.bin` **`9097fc71…`** (12,000 B), byte-identical to stage-0c's (boot-test compares them); the NOR-off build `b1c07b4a…` (4,264 B). rung 3 builds stage-0c's app from the tree under test, which differs from the committed app only in its revision string. w18 installs the committed files.
+
+| Suite | Stock 2.4.0.24 bootloader | Patched `87e2d4e0…` bootloader |
+| --- | --- | --- |
+| rung 3 observe (rule 12) | **8/8 pass**: `obs-native-0`, `obs-would-rescue`, `obs-crash-reset`, `obs-no-feed`, `obs-erased`, `obs-diag-wdt`, **`obs-stage-0c`** (the case formerly `obs-stage-0b`: IDENT, clock, boot reports, RESET; NOR `3925c2`, staging `971f4516`, four `/firmware` files), `obs-nor-gd`. In every case **0 gated MSPI1 accesses by anyone**, with the bootloader powering MSPI1 down 670–1,174 times per run | **8/8 pass** (the same cases, the same counts) |
+| rung 3 `nor-off` (rule 12, the `WISP_BOOT_NOR=OFF` build) | **4/4 pass**: `nor-off-no-mspi1` (static: no MSPI1 or `MSPIIOCLKCTRL` address in the binary), `nor-off-real` (the real app, 3 power cuts), `nor-off-stage-0c` (stage-0c's app on the half-duplex wire: IDENT, clock, boot reports, RESET), `nor-off-diag-wdt` (the record shows `boot-handoff` and `watchdog`). No NOR command, status `nor_result` 1, mount 1, build flag `nor_off` | **4/4 pass** |
+| `w18-test stage-0c`: the committed stage-0c through install-wisp's gate (proposed pin, in memory), `GatedStall` on | — | **pass**: written through the loader, vectors first and last, final CRC **`d976c4e8`**; IDENT kind 16; LFRC 922 Hz; RESET → `HELO` → Wisp Boot's report: prev `s0-reset-request`, cause `sw-por`; case reset → prev `s0-loop`, cause `external`, boot 3, asked 0.15 s after the release; peek after a held case reset: record boot 3 `s0-loop`, status `prev` `s0-loop`; **Wisp Boot's NOR id `0x3925c2`, result 0**; handed off with `DEVPWREN` `0x800` (MSPI1 off) and `MSPIIOCLKCTRL` `0x200` (gated), as stock does; 0 gated accesses by anyone, 765 power-downs; 3 Wisp Boot kicks plus the app's, no other PMIC write, no watchdog bite; strict clean (the two allowlisted CLKGEN values); half duplex clean; 68 cleans |
+| `w18-test stage-0b-models`: the **pinned stage-0b** under the W24e model, PMIC at stock's 30.72 s | — | **pass, i.e. stage-0b fails exactly as on silicon at W24d**: its Wisp Boot's first MSPI1 access (`INTEN` write, PC `0x43907A`) with the IO clock gated stalls; 1 Apollo watchdog bite; the next boot's report from Wisp Boot's window: **prev `boot-nor` at 250 ms, cause `watchdog`** (silicon: `boot-nor` at 259–300 ms, `watchdog`); no IDENT; no PMIC expiry |
+| `w18-test stage-0-models` (the pinned stage-0, W24d's three checks) | — | **pass** (it still fails all three W24d checks, as it must) |
+| `w18-test hello`, `rung4-reads` | — | **pass** (`rung4-reads` peeks every region, the new `wisp-boot-status-stage-0c` included) |
+| `wisp-recovery:test` | **275 tests pass**, `test_stage0c.py` among them: the committed files equal the proposal; rule 3 in both implementations; install-wisp **refuses stage-0c** with the repository's pins; with the proposal in memory its whole gate accepts the files and refuses a one-byte change; the final CRC over stock and over the committed stage-0b is `d976c4e8`; `peek` decodes the NOR fields | |
+| `wisp-fw:test` | pass (both Wisp Boot builds and their gates, the host unit tests, the sim) | |
+
+Two harness fixes were needed on the way, neither of them in Wisp. (a) Halting the CPU from inside its own bus access deadlocks Renode; the halt now runs at the next synced state. Un-halting at reset has to come after PC is set, or Renode halts the CPU for good. (b) w18 arms the PMIC watchdog scaled to 2.5 s for its long loader sessions. Under a stall that power-cycled the temple before the Apollo watchdog could fire, so `stage-0b-models` arms stock's 30.72 s, as on silicon.
+
+**Not run:** the fallback suite (`WISP_RUNG3_SUITES=fallback`). The fallback build changed too (`nor_off` in `run_app` and `confirm()`, the NOR fix), but it is in no image. Its full runs on both bootloaders come before any fallback Wisp Boot is flashed (rule 12), as at W24d.
+
+#### The stage-0c files (for install-wisp; pinned at W24e-0)
+
+Built on t3-worker from commit `58a5cf8` (clean tree; the app reports rev `58a5cf87f4`) at the checkout path `/home/jappy/.t3/worktrees/lotti/t3-4445548f` (the map records it), with `apps/wisp-fw/scripts/build_native.sh stage-0c`, packaged by `scripts/package_native.sh stage-0c`; `scripts/propose_pin.py stage-0c --commit 58a5cf8` wrote `proposed-pin.json`. **Reproduced:** a second checkout of `58a5cf8` with its own `.wisp-cache`, bind-mounted at that path in a private mount namespace (the command in `data/stage-0b/README.md`), gives a byte-identical image, map, manifest, `wisp_boot.bin` and stripped ELFs. Gates: `check_image` on both parts, `check_rule8` and `check_no_mram_write` on both, `check_native.py --observe --bare-app-elf`, wisp-ota `pack-main`: `SENDABLE`.
+
+| What | Value |
+| --- | --- |
+| image `stage-0c.bin` | SHA-256 `b41bfd5d353640edb7671f560a88d3238f2ee6a97d782a8a58040c2223e03d2a`, **70,936 B**, zlib CRC-32 **`ad4bc401`** (`app-check`'s value) |
+| end, write bound | ends at `0x449518`; install-wisp writes `[0x438000, 0x449520)` |
+| final CRC install-wisp reports | **`d976c4e8` over stock 2.4.0.24 and over stage-0b**: stage-0b ended at the same `0x449518`, so the 8 bytes after the image are still stock's. Over stage-0 also `d976c4e8`, over native-0 `db51218a` (`proposed-pin.json` `crc32_aligned_over`) |
+| `--expect` | `b41bfd5d3536` |
+| stripped `stage0.elf` | `d70495a80d705a06dc8c8cb24ad06e62656400bbcf356e9f002249fc90172ae0` |
+| `stage0.map` (as built) | `c257fe00b42e31c1d11eeff94106f5154c4218a4f4147e041edaa6727c4c1ae8` |
+| stripped `wisp_boot.elf` | `09b853425832c6cfc6179f0d8857602ac0f204fe2255e004232b22c1d96b94e2` |
+| Wisp Boot | `wisp_boot.bin` `9097fc71c6c5cf66ea32f0cf0ef6ea2e920b76c858f59393d2c65dbfc87eb535` (12,000 B); slot (padded to 64 KiB) `f13335bd9c7aa64b3697386540cf0ab1377a0594f425536c664c235afc70caaa` |
+| app part (`stage0.bin`) | 5,400 B at `0x448000`, SHA-256 `255bb864d85ba930a6e355959f1e86085563279ad55ff5a659e7bb43c269df61`, version 0.3.0 |
+| gates | `check_rule8`, `no-mram-write` (both parts) |
+| status block `st` | **`0x20375340`** (stage-0b's `0x2037533C`): `pins.PEEK_REGIONS["wisp-boot-status"]` moved with the pin (W24e-0); stage-0b's is now `wisp-boot-status-stage-0b` |
+
+#### W24e-0: review and pin
+
+**Done 2026-11-10.** An independent review on t3-worker (PR #89, emulation and static analysis only; no hardware) gave **APPROVE for pinning**. It:
+
+- rebuilt stage-0c from `58a5cf8` with `build_native.sh stage-0c`, bind-mounted at the canonical path `/home/jappy/.t3/worktrees/lotti/t3-4445548f` (the `unshare` command of the stage-0b data README). The result: **`b41bfd5d…`**, byte-identical image, manifest, map, `wisp_boot.bin` (`9097fc71…`) and stripped ELFs. Every gate passed, wisp-ota `pack-main` `SENDABLE`. The commits after `58a5cf8` change no source;
+- recomputed, with its own script over the stock 2.4.0.24 bundle, CRC-32 `ad4bc401`, the slot `f13335bd…` and install-wisp's final CRC **`d976c4e8` over stock and over the committed stage-0b** (the 8 bytes after the image are `88f880070ed5dff8`, stock's, in both);
+- checked against hal_ambiq's `apollo510.h` (offsets from `offsetof` over the header itself): `CLKGEN.MSPIIOCLKCTRL` `0x40004110`, `MSPI1IOCLKEN` bit 5, `MSPI1IOCLKSEL` bits 6–9 (`AM_HAL_MSPI_IO_CLK_HFRC_192MHZ` = 8), `DEVPWREN`/`DEVPWRSTATUS` `+0x4`/`+0x8` bit 15, MSPI1's `DEV0CFG` `+0x84`, `DEV0CFG1` `+0x8C` (`SDR250EN` bit 30), `DEV0XIP`, `DMACFG`, `INTEN`, `CQCFG`. `DEV0CFG` `0x01080860` decodes as `CLKDIV` 8 (the HAL's 12 MHz from HFRC 192 MHz), `TXNEG`, `TURNAROUND` 8 (unused: no `ENTURN`), 1-byte instruction, 4-byte address, serial CE0, mode 0. `nor_init` follows `am_hal_mspi_power_control(WAKE)` and `mspi_clkgen_ctrl`; `nor_off` follows DEEPSLEEP. 12 MHz with the plain `READ4B` is far below the MX25U25643G's normal-read limit and needs no timing scan;
+- found every new loop bounded. The longest stretch without a watchdog feed is `mspi1_up` (100,000 + 2,000 reads) plus one transfer (≤ 2,000,000 polls, deadline-checked), far below the ~9.1 s watchdog. The PMIC kick code is unchanged; the observe build has no NOR write path and no new PMIC write. In the Renode trace, Wisp Boot's only CLKGEN writes are `MSPIIOCLKCTRL` `0x200` and `0x220`, the two allowlisted values (exact-value match in `strict.py`). The hand-off leaves `DEVPWREN` without MSPI1 and `MSPIIOCLKCTRL` `0x200`, stock's state;
+- checked the model: it gates on `DEVPWRSTATUS`/`MSPI1IOCLKEN` as stored by the PWRCTRL and CLKGEN models, counts every gated access, and with `GatedStall` halts on a Wisp one. The bootloader and the stock app trip it 0 times in every run, with 670–1,234 power-downs per run, so the model is wired, and the pinned stage-0b fails under it as on silicon.
+
+**Rule 12**, rerun by the review through nx:
+
+| Suite | Stock 2.4.0.24 | Patched `87e2d4e0…` |
+| --- | --- | --- |
+| rung 3 observe | **8/8 pass**, 0 gated MSPI1 accesses | **8/8 pass**, 0 gated MSPI1 accesses |
+| rung 3 `nor-off` | **4/4 pass** | **4/4 pass** |
+| `w18-test stage-0c stage-0b-models stage-0-models hello rung4-reads` (against the pin) | — | **5/5 pass**: stage-0c final CRC `d976c4e8`; stage-0b stalls at its `INTEN` write (PC `0x43907A`), then prev `boot-nor` 250 ms, `watchdog` |
+| `wisp-recovery:test`, `wisp-fw:test` | pass | |
+
+**The pinning commit** copies `proposed-pin.json`'s `image` unchanged into `pins.WISP_IMAGES["stage-0c"]`, plus `crc32_aligned_over_stage_0b` (`d976c4e8`, the proposal's `crc32_aligned_over["stage-0b"]`: the runbook installs over stage-0b). It adds the slot `f13335bd…` to `pins.WISP_BOOT_PASSED`. It moves `PEEK_REGIONS["wisp-boot-status"]` to `0x20375340` (stage-0c's `st`), and stage-0b's block stays readable as `wisp-boot-status-stage-0b` (`0x2037533C`). `tests/test_stage0c.py` and `w18-test stage-0c` now run on the pin. The fallback build's suite is still owed, as at W24d-0; it is not in this image.
+
+Review findings, none blocking:
+- **(1) Open, silicon only:** the HAL's WAKE also calls `am_hal_clkmgr_clock_request(HFRC)`, which sets `CLKGEN.MISC.FRCHFRC` for the first user. Wisp Boot does not. In Renode, stock hands off with `MISC` `0xFBBFC0` (FRCHFRC 0), the same state the stock app finds. If MSPI1's 192 MHz IO clock needs HFRC forced on while the core runs from another source, step 5 shows a stall with prev stage `boot-nor-clock`. That is the W24d loop again, recoverable through the loader; the reading table already names it. NOR-off is then the fallback.
+- **(2) Note:** the model does not cover HFRC or the pads. A pass under it says nothing about those (see "What stays unproven").
+
+#### W24e runbook draft: stage-0c over stage-0b, left
+
+Mirrors the [W24d runbook](#w24d-runbook-draft-stage-0b-left): the same setup and rules. The temple starts with **stage-0b installed** (W24d left it so) and ends with **stage-0c installed**. Then the read-only health check (10); `recover` to stock (10c) runs only on its conditions, with its own go. The one MRAM write is step 4, and it runs only once W24e-0 has pinned stage-0c, under Jan's standing go for reviewed, pinned images. Every case command ends with relay exit status 6 (or the `relay_exit_uart_errors` note), the route restored and the case on 1.2.57. `S0C=apps/wisp-recovery/wisp_w18/data/stage-0c`. While stage-0b is installed it loops every ≈10.7 s (W24d), so every session's relay start lands in a reboot loop. That is harmless: each boot goes through the loader first.
+
+**The final CRC over stage-0b.** install-wisp's gate does not care what the app region holds: it checks the bootloader CRC (read twice) and a clear flag. Only the expected final CRC depends on the predecessor. install-wisp writes whole 16-byte units up to `0x449520`, keeping what follows the image (`0x449518`) in its last unit. stage-0b had the same end and bound and left stock's 8 bytes there, so the final CRC over stage-0b is the one over stock: **`d976c4e8`** (`proposed-pin.json` `crc32_aligned_over`; `tests/test_stage0c.py` recomputes it from the committed stage-0b). Any other value, after stage-0b, is a stop.
+
+| # | Command | Expect | Stop if |
+| --- | --- | --- | --- |
+| 1 | `w18 loader-hello --side left` | CRC `63cd8dda` twice, flag `0xffffffff`, feed status 0; then the stage-0b loop resumes | anything else (§8) |
+| 2 | `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json` | exit 0 | exit 3 |
+| 3 | `w18 app-check --side left` | flag clear; `Wisp stage-0b: region CRC-32 d10cc7b6 over 70936 B … MATCH` | the flag not clear; another image: write down what is there before step 4 |
+| 4 | `w18 install-wisp --side left --image $S0C/stage-0c.bin --elf $S0C/stage0.elf --map $S0C/stage0.map --expect b41bfd5d3536 --battery <N>` (N from the last stock reading or the case console; ≥ 80) | `install-wisp: stage-0c b41bfd5d353640ed..., 70,936 B into …`; the loader-hello gate; `vectors zeroed`; body written and read back; `OK … written and verified (d976c4e8)` | any `REFUSED`; any stop during the write (vectors zero: resume or `recover` only with a new go); any final CRC other than `d976c4e8` |
+| 5 | `w18 boot-watch --side left --protocol wisp --watch-s 70 --interval-s 0.1` (at once after 4) | `boot report (from wisp-boot) …`, then `IDENT: Wisp 0.3.0 kind 16, stage bare-metal`, the app status with PMIC kicks rising and errors 0, and Wisp Boot's block v2: `PMIC kick 0x0`, **`NOR bound ok, NOR id 0x3925c2 (result 0), mount 0`**, staging `971f4516`, the four `/firmware` files with their sizes, action `run-app`. Then the clock block (write the LFRC and the core clock down). No `HELO` after `CONT` within 70 s (apart from the case app's 180 s reset, which is later) | none (findings are not stops) |
+| 6 | `w18 boot-watch --side left --protocol wisp --watch-s 30 --interval-s 0.1` (its relay start resets the temple) | the first boot's report: cause `external`, `prev-valid`, previous stage `s0-loop` (or `s0-measure`), boot counter +1 | — |
+| 7 | `w18 loader-hello --side left` | `HELO`, CRC `63cd8dda` twice, flag `0xffffffff` | as W24 step 8 |
+| 7b | `w18 peek --side left --what ssram-power rstgen-stat wisp-record wisp-boot-status` (`wisp-boot-status` is stage-0c's `st`, `0x20375340`, since W24e-0) | `wisp_ram_powered: true`; `rstgen-stat` `external`; `wisp-record` valid, stage `s0-loop`; `wisp-boot-status` sealed with **`nor_id 0x3925c2`, `nor_result 0`, `mount_result 0`, `nor_bound_hit false`**, `prev` valid | the usual |
+| 8 | `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json` | exit 0 | exit 3: STOP before `recover`, send the report |
+| 9 | `w18 app-check --side left` | `Wisp stage-0c: region CRC-32 ad4bc401 over 70,936 B, image ad4bc401: MATCH`, flag clear | no match, or the flag not clear |
+| 10 | **Health check, read-only; stage-0c stays installed:** `w18 loader-hello --side left`; `w18 pmic-read --side left --compare apps/wisp-recovery/runs/w18-pmic-read-left-20261108T131013Z.json`; `w18 boot-watch --side left --protocol wisp --watch-s 20 --interval-s 0.1` | CRC `63cd8dda` twice, flag clear; PMIC exit 0, `BCHARGER.CHG_STAT` charging or full and `ERR_REASON` 0 while in the case; stage-0c's status answers again (PMIC kicks rising, errors 0) and its Wisp Boot block still reads NOR result 0 | any 10c condition |
+| 10c | **Conditional, needs Jan's go:** as W24d 10c (`recover` to stock 2.4.0.24, `d9864941`) | as W24d 10c | as W24d 10c |
+
+Then a hardware-log row "rung 4 W24e (stage-0c)" with the reports of 1–10, the boot reports of 5 and 6 as printed, Wisp Boot's NOR fields, the clock block, the peek, the final CRCs and the state the temple was left in.
+
+**Reading step 5 with stage-0c:**
+
+| What boot-watch shows | Means | Next |
+| --- | --- | --- |
+| IDENT and the blocks; NOR `0x3925c2`, result 0, mount 0; no `HELO` in 70 s | the root cause is confirmed: MSPI1 needs its IO clock, and Wisp Boot's whole NOR read path works on silicon | native-1 takes the NOR-on Wisp Boot |
+| reports, IDENT, NOR result −10 or −11, or `nor_bound` hit | MSPI1 is clocked and no longer stalls, but the transfer itself fails (`SCK`, the pads, `DEV0CFG` bits): the hang is fixed, the read is not | the NOR id as read; compare the pad functions with the bootloader's (static); native-1 takes the NOR-off Wisp Boot meanwhile |
+| NOR result −12 | `DEVPWRSTATUS` never showed MSPI1; MSPI1 was not touched | read `DEVPWRSTATUS`'s domain bits (static, `am_hal_pwrctrl.c` table) |
+| HELO loop, report with prev stage `boot-nor-power` | the stall is in the clock enable (CLKGEN) | NOR-off for native-1; analyse the clock manager (HFRC request) |
+| prev stage `boot-nor-clock` | still a stall at the first MSPI1 register access, with power and clock on: another gate (the HFRC request, `MSPICFG`, an AXI path) | NOR-off for native-1 |
+| prev stage `boot-nor-id` | a stall inside the RDID transfer (FIFO or CTRL access) | as above |
+| prev stage `boot-handoff` or `s0-…`, cause `watchdog` | the NOR phase works; the hand-off or stage-0c's start does not (`nor_off` is the only new step there) | the W24b rerun table |
+
+
+#### What stays unproven until silicon
+
+- That the gated clock was the stall. Static analysis and the HAL's own order say so, and the W24d facts fit, but only step 5 shows it.
+- 12 MHz `SCK` with stock's other `DEV0CFG` bits and no timing scan (normal read; well inside the part's range), and the 2,000-read clock settle.
+- The `nor_off` hand-off: stock's own hand-off state, so the app sees nothing new; native-1's Zephyr MSPI driver must wake MSPI1 through the HAL (power, clock) before it uses it.
+- Everything W24d's list still holds for the clocks and pads.
+
 ### W25: native-1 (MVP)
 
 Written on t3-worker on 2026-11-09, **emulation and static analysis only; no hardware was touched**. Jan's direction the same day: stop micro-stepping, build one image that does the job (the left temple is ours during development, case recovery is proven, no return to stock after each test). native-1 is that image. **It is not pinned**: an independent review and the pin are the next step, and `install-wisp` refuses it until then (`tests/test_native1.py` checks both).
@@ -1007,6 +1168,7 @@ The right's hardware-log row: "rung 4 W25 right (native-1-right)".
 #### Follow-up: native-2's update path
 
 (5) is not in native-1. What it needs, none of which exists yet: the storage HAL (littlefs on MSPI1 in Zephyr, writes only under `wisp/`, G19), the update service with its rule-3 checks and allowlist (G20) and authentication (G22, R4-6), the flag through Wisp Boot's single function in the fallback build (with its full rung-3 run on the patched bootloader, still due), Wisp Boot's flag clear and image-keyed record (G17, G24), `flag-clear` proven on the temple (G26), and the flag trap closed before the first BLE install (§3). Each of these writes the NOR or the flag on a temple whose NOR path has not yet run once on silicon with the MSPICFG fix. The order that keeps every write recoverable: native-1 on silicon first (the NOR read path's known answer), then native-2 with the storage HAL and the update service in emulation (a native_sim end-to-end test and a Renode case with the real bootloader's install), then W27. Until then every image goes on through `install-wisp` (about 5 min for native-1's 245 KB).
+
 
 ### Gaps
 

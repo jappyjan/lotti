@@ -6,7 +6,8 @@
 # -DWISP_REAL_APP=<zephyr.bin linked at 0x448000> adds native_real.bin (the real Wisp app behind
 # this Wisp Boot). -DWISP_BOOT_OBSERVE=ON builds the observe-only Wisp Boot (rung4.md native-0:
 # no NOR or MRAM write code, always run-app); -DWISP_BOOT_LOG=OFF drops the UART1 debug log
-# (hardware images).
+# (hardware images); -DWISP_BOOT_NOR=OFF (observe builds only) skips the NOR phase entirely
+# (rung4.md W24e: run-app with the breadcrumb boot-nor-skipped, MSPI1 never touched).
 cmake_minimum_required(VERSION 3.20)
 set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
@@ -19,6 +20,7 @@ set(LITTLEFS_DIR "" CACHE PATH "littlefs source (west module modules/fs/littlefs
 option(WISP_BOOT_TEST_APPS "build the rung-3 fault-injection apps" OFF)
 option(WISP_BOOT_OBSERVE "observe-only build: every write compiled out, always run-app" OFF)
 option(WISP_BOOT_LOG "UART1 debug log" ON)
+option(WISP_BOOT_NOR "the NOR phase (OFF: observe builds only; run-app without touching MSPI1)" ON)
 option(WISP_STAGE0 "also build stage-0, the bare-metal app (src/stage0/)" OFF)
 set(WISP_REAL_APP "" CACHE FILEPATH "the real Wisp app (zephyr.bin at 0x448000) for native_real.bin")
 if(NOT EXISTS ${LITTLEFS_DIR}/lfs.c)
@@ -42,6 +44,12 @@ target_compile_options(wisp_boot.elf PRIVATE ${COMMON_FLAGS})
 if(WISP_BOOT_OBSERVE)
   # LFS_READONLY: littlefs without any write path (no prog/erase callbacks are set either).
   target_compile_definitions(wisp_boot.elf PRIVATE WISP_BOOT_OBSERVE=1 LFS_READONLY)
+endif()
+if(NOT WISP_BOOT_NOR)
+  if(NOT WISP_BOOT_OBSERVE)
+    message(FATAL_ERROR "WISP_BOOT_NOR=OFF needs WISP_BOOT_OBSERVE=ON (the fallback build rescues from the NOR)")
+  endif()
+  target_compile_definitions(wisp_boot.elf PRIVATE WISP_BOOT_NOR=0)
 endif()
 if(NOT WISP_BOOT_LOG)
   target_compile_definitions(wisp_boot.elf PRIVATE WISP_BOOT_LOG=0)

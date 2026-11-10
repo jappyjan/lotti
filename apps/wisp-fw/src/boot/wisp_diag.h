@@ -58,6 +58,10 @@ enum wisp_diag_stage {
 	WISP_DIAG_BOOT_DECIDED = 0x17,
 	WISP_DIAG_BOOT_HANDOFF = 0x18,  /* about to jump to the app */
 	WISP_DIAG_BOOT_RESET = 0x19,    /* Wisp Boot resets on purpose (rescue, no app) */
+	WISP_DIAG_BOOT_NOR_POWER = 0x1A, /* stage-0c: MSPI1 powered (DEVPWRSTATUS seen), IO clock still gated */
+	WISP_DIAG_BOOT_NOR_CLOCK = 0x1B, /* MSPI1's IO clock on: the first MSPI1 register access comes next */
+	WISP_DIAG_BOOT_NOR_ID = 0x1C,    /* MSPI1 configured; RDID sent */
+	WISP_DIAG_BOOT_NOR_SKIPPED = 0x1D, /* WISP_BOOT_NOR=OFF build: no NOR phase at all, run-app */
 	WISP_DIAG_BOOT_FAULT = 0x1F,    /* a fault handler in Wisp Boot ran */
 	WISP_DIAG_S0_RESET = 0x40,      /* stage-0: reset handler entered */
 	WISP_DIAG_S0_INIT = 0x41,       /* .data/.bss ready */

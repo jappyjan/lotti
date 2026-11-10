@@ -145,6 +145,31 @@ namespace Antmicro.Renode.Peripherals.Wisp
         }
     }
 
+    // MSPI1's power and IO clock as PWRCTRL and CLKGEN hold them (rung4.md, "W24e: stage-0c"), for
+    // WispMspiNor: DEVPWRSTATUS.PWRSTMSPI1 (bit 15) and CLKGEN.MSPIIOCLKCTRL.MSPI1IOCLKEN (bit 5).
+    // Read from the models' storage directly (no strict-record entry, no bus access). Mspi1PowerLost
+    // fires when DEVPWREN.PWRENMSPI1 goes from 1 to 0: on silicon the domain's registers are lost.
+    // Known is false until both models exist (a platform without them: MSPI1 counts as up).
+    public static class WispPower
+    {
+        public const uint Mspi1Power = 0x8000, Mspi1IoClkEn = 0x20;
+        public static WispPwrctrl Pwrctrl;
+        public static WispClkgen Clkgen;
+        public static event Action Mspi1PowerLost;
+
+        public static bool Known => Pwrctrl != null && Clkgen != null;
+        public static bool Mspi1Powered => !Known || (Pwrctrl.Peek(0x008) & Mspi1Power) != 0;
+        public static bool Mspi1Clocked => !Known || (Clkgen.Peek(0x110) & Mspi1IoClkEn) != 0;
+
+        public static void NotePwrctrlWrite(uint before, uint after)
+        {
+            if((before & Mspi1Power) != 0 && (after & Mspi1Power) == 0)
+            {
+                Mspi1PowerLost?.Invoke();
+            }
+        }
+    }
+
     public class WispTrace : IBytePeripheral, IWordPeripheral, IDoubleWordPeripheral, IKnownSize
     {
         public WispTrace(IMachine machine, long size = 0x1000, int trace = 1, ulong baseAddress = 0)
@@ -239,10 +264,14 @@ namespace Antmicro.Renode.Peripherals.Wisp
             this.machine = machine;
             this.baseAddress = baseAddress;
             inner = new G2Pwrctrl(machine, size, domainStatus);
+            WispPower.Pwrctrl = this;
         }
 
         public long Size => inner.Size;
         public void Reset() { inner.Reset(); }
+
+        // The register as the guest would read it, without a strict-record entry (WispPower).
+        public uint Peek(long o) { return inner.ReadDoubleWord(o); }
 
         public byte ReadByte(long o) { return (byte)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 3))); }
         public ushort ReadWord(long o) { return (ushort)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 2))); }
@@ -265,9 +294,19 @@ namespace Antmicro.Renode.Peripherals.Wisp
             return v;
         }
         private const long VRCTRL = 0x100, VRSTATUS = 0x108;
-        public void WriteByte(long o, byte v) { Spy(o, v); inner.WriteByte(o, v); }
-        public void WriteWord(long o, ushort v) { Spy(o, v); inner.WriteWord(o, v); }
-        public void WriteDoubleWord(long o, uint v) { Spy(o, v); inner.WriteDoubleWord(o, v); }
+        public void WriteByte(long o, byte v) { var b = Dev(o); Spy(o, v); inner.WriteByte(o, v); Lost(o, b); }
+        public void WriteWord(long o, ushort v) { var b = Dev(o); Spy(o, v); inner.WriteWord(o, v); Lost(o, b); }
+        public void WriteDoubleWord(long o, uint v) { var b = Dev(o); Spy(o, v); inner.WriteDoubleWord(o, v); Lost(o, b); }
+
+        private uint Dev(long o) { return (o & ~3L) == 0x004 ? inner.ReadDoubleWord(0x004) : 0; }
+
+        private void Lost(long o, uint before)
+        {
+            if((o & ~3L) == 0x004)
+            {
+                WispPower.NotePwrctrlWrite(before, inner.ReadDoubleWord(0x004));
+            }
+        }
 
         private void Spy(long o, uint v)
         {
@@ -303,10 +342,14 @@ namespace Antmicro.Renode.Peripherals.Wisp
             this.machine = machine;
             this.baseAddress = baseAddress;
             inner = new G2ClkgenRtc(machine, size);
+            WispPower.Clkgen = this;
         }
 
         public long Size => inner.Size;
         public void Reset() { inner.Reset(); }
+
+        // The register as the guest would read it, without a strict-record entry (WispPower).
+        public uint Peek(long o) { return inner.ReadDoubleWord(o); }
 
         public byte ReadByte(long o) { return (byte)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 3))); }
         public ushort ReadWord(long o) { return (ushort)(ReadDoubleWord(o & ~3L) >> (int)(8 * (o & 2))); }

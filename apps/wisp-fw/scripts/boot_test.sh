@@ -6,17 +6,18 @@
 #   1. stock bundles in the git-ignored .wisp-cache/stock/: 2.4.0.24 (the version on Jan's temples,
 #      or $WISP_STOCK_VERSION) and 2.3.2.14 (the base of drdaeman's patched bootloader); wisp-ota
 #      fetch if missing, SHA-256 pinned. Even's firmware never leaves .wisp-cache.
-#   2. native-1 and stage-0b (scripts/build_native.sh): the observe-only Wisp Boot, stage-0b, and the
-#      real app (native-1's, with the UART1 console back for rung3.py: tests/boot/app/rung3-console.*)
+#   2. native-1, stage-0c and native-1's real app (scripts/build_native.sh; the app has the UART1 console
+#      back for rung3.py: tests/boot/app/rung3-console.*)
 #   3. both Wisp Boot builds with the fault apps and the real app behind them
 #      (scripts/build_boot.sh -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP=...): the fallback build in
 #      build/wisp-boot, the observe-only one in build/wisp-boot-observe, which must be byte-identical
-#      to native-1's (its first 64 KiB are what rung4.md R4-1 compares)
+#      to native-1's (its first 64 KiB are what rung4.md R4-1 compares); and the observe build with
+#      -DWISP_BOOT_NOR=OFF (rung4.md W24e: no NOR phase) in build/wisp-boot-observe-nor-off
 #   4. tests/boot/rung3.py for every suite on every bootloader (safety.md rule 12: the stock
 #      2.4.0.24 and the patched 87e2d4e0... bootloader); each table goes to
 #      .wisp-cache/rung3/<bootloader>-<sha8>-<suite>/report.md
 #
-# WISP_RUNG3_SUITES (default "fallback observe") and WISP_RUNG3_BOOTLOADERS (default "stock
+# WISP_RUNG3_SUITES (default "fallback observe nor-off") and WISP_RUNG3_BOOTLOADERS (default "stock
 # patched") narrow it; extra args go to rung3.py (e.g. --only app-hangs cut-after-flag, --list).
 source "$(dirname "$0")/lib.sh"
 wisp_devshell "$@"
@@ -52,13 +53,16 @@ app="$rung3_app/zephyr/zephyr.bin"
 "$APP_DIR/scripts/build_boot.sh" -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app"
 WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe" "$APP_DIR/scripts/build_boot.sh" \
 	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_BOOT_TEST_APPS=ON -DWISP_REAL_APP="$app" -DWISP_STAGE0=ON
-"$APP_DIR/scripts/build_native.sh" stage-0b >/dev/null
-cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$CACHE_DIR/build/stage-0b/boot/wisp_boot.bin" || {
-	echo "FAIL: the observe-only Wisp Boot under test differs from stage-0b's" >&2
+WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe-nor-off" "$APP_DIR/scripts/build_boot.sh" \
+	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF -DWISP_BOOT_NOR=OFF -DWISP_BOOT_TEST_APPS=ON \
+	-DWISP_REAL_APP="$app" -DWISP_STAGE0=ON
+"$APP_DIR/scripts/build_native.sh" stage-0c >/dev/null
+cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$CACHE_DIR/build/stage-0c/boot/wisp_boot.bin" || {
+	echo "FAIL: the observe-only Wisp Boot under test differs from stage-0c's" >&2
 	exit 1
 }
-cmp "$CACHE_DIR/build/wisp-boot-observe/native_stage0.bin" "$CACHE_DIR/build/stage-0b/stage-0b.bin" || {
-	echo "FAIL: native_stage0.bin differs from stage-0b.bin" >&2
+cmp "$CACHE_DIR/build/wisp-boot-observe/native_stage0.bin" "$CACHE_DIR/build/stage-0c/stage-0c.bin" || {
+	echo "FAIL: native_stage0.bin differs from stage-0c.bin" >&2
 	exit 1
 }
 cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$native/boot/wisp_boot.bin" || {
@@ -68,9 +72,10 @@ cmp "$CACHE_DIR/build/wisp-boot-observe/wisp_boot.bin" "$native/boot/wisp_boot.b
 
 status=0
 for bl in ${WISP_RUNG3_BOOTLOADERS:-stock patched}; do
-	for suite in ${WISP_RUNG3_SUITES:-fallback observe}; do
+	for suite in ${WISP_RUNG3_SUITES:-fallback observe nor-off}; do
 		build="$CACHE_DIR/build/wisp-boot"
 		[[ "$suite" == observe ]] && build="$CACHE_DIR/build/wisp-boot-observe"
+		[[ "$suite" == nor-off ]] && build="$CACHE_DIR/build/wisp-boot-observe-nor-off"
 		printf '\n=== rung 3: %s suite, %s bootloader\n' "$suite" "$bl"
 		python3 -I "$APP_DIR/tests/boot/rung3.py" --cache "$CACHE_DIR" --boot-build "$build" \
 			--stock-version "$stock" --bootloader "$bl" --suite "$suite" "$@" || status=1

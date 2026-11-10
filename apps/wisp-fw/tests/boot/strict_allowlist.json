@@ -1,5 +1,5 @@
 {
-  "what": "Writes Wisp code may make to power, clock or trim registers that no Renode model acts on (tests/boot/strict.py). Each entry is one register and one value (\"*\" only where the value is a read-modify-write of reset-dependent state), names what stock 2.4.0.24 does with the same register at the same point, and needs review like code. Since W25 (docs/wisp/rung4.md, 'The start-up writes, stock against native-0/native-1'): native-1's HAL start-up, which makes stock's calls with stock's values. The SIMO buck block (MCUCTRL.VRCTRL, SIMOBUCK0/15, PWRCTRL.VRCTRL) is not listed: WispPwrctrl now answers VRSTATUS.SIMOBUCKST as silicon does after the bootloader, so the HAL skips it as stock does; a write there still fails a case. Wisp Boot and stage-0 make none of these writes.",
+  "what": "Writes Wisp code may make to power, clock or trim registers that no Renode model acts on (tests/boot/strict.py). Each entry is one register and one value (\"*\" only where the value is a read-modify-write of reset-dependent state), names what stock 2.4.0.24 does with the same register at the same point, and needs review like code. Since W25 (docs/wisp/rung4.md, 'The start-up writes, stock against native-0/native-1'): native-1's HAL start-up, which makes stock's calls with stock's values. The SIMO buck block (MCUCTRL.VRCTRL, SIMOBUCK0/15, PWRCTRL.VRCTRL) is not listed: WispPwrctrl now answers VRSTATUS.SIMOBUCKST as silicon does after the bootloader, so the HAL skips it as stock does; a write there still fails a case. Wisp Boot and stage-0 make none of these writes. Since W24e (stage-0c) Wisp Boot also writes CLKGEN.MSPIIOCLKCTRL (0x200, 0x220), MSPI1's IO clock gate, exactly as the Even bootloader's HAL does around every NOR access; native-1's Wisp Boot is that build.",
   "entries": [
     {
       "block": "rstgen",
@@ -126,6 +126,20 @@
       "value": "0x215",
       "register": "CLKGEN.MSPIIOCLKCTRL",
       "reason": "not start-up: MSPI0's IO clock select and enable for the panel's transfers (Zephyr's mspi_ambiq driver through am_hal_mspi), set when the panel is powered and driven. Stock drives MSPI0 for the same panel through its own MSPI HAL [I]."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x200",
+      "register": "CLKGEN.MSPIIOCLKCTRL",
+      "reason": "CLKGEN.MSPIIOCLKCTRL with MSPI1IOCLKSEL = 8 (HFRC 192 MHz) and MSPI1IOCLKEN = 0: the value the Even bootloader leaves at hand-off (seen in Renode, rung4.md W24e) and writes itself in mspi_clkgen_ctrl (0x424D34 before each enable, 0x424D66 after each NOR access). Wisp Boot's nor_init closes the gate before (re)setting the source as the HAL does, and nor_off closes it again before the hand-off. Every other field stays 0, as stock leaves it."
+    },
+    {
+      "block": "clkgen",
+      "address": "0x40004110",
+      "value": "0x220",
+      "register": "CLKGEN.MSPIIOCLKCTRL",
+      "reason": "The same register with MSPI1IOCLKEN = 1: stock's own enable (0x424D48, HAL mspi_clkgen_ctrl from am_hal_mspi_power_control WAKE), before any MSPI1 register access. Without it MSPI1 has no clock and stage-0b hung at its first MSPI1 access on silicon (W24d)."
     }
   ]
 }

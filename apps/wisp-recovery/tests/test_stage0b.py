@@ -46,7 +46,7 @@ class Stage0b(unittest.TestCase):
         passed = pins.WISP_BOOT_PASSED[PROPOSED["image"]["wisp_boot_slot_sha256"]]
         self.assertEqual(set(passed["suites"]), set(pins.WISP_BOOT_SUITES))
         self.assertEqual(passed["wisp_boot_bin_sha256"], PROPOSED["wisp_boot"]["wisp_boot_bin_sha256"])
-        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status"][0], int(PROPOSED["peek_wisp_boot_status"], 16))
+        self.assertEqual(pins.PEEK_REGIONS["wisp-boot-status-stage-0b"][0], int(PROPOSED["peek_wisp_boot_status"], 16))
 
     def test_files_match_the_manifest_and_the_proposal(self):
         p, m = PROPOSED["image"], self.manifest

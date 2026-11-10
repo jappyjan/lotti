@@ -35,3 +35,5 @@ unshare -rm bash -c "mkdir -p $C && mount --bind $R $C && exec unshare --map-use
 `install-wisp` writes whole 16-byte units, so over the stock 2.4.0.24 main its final CRC over `[0x438000, 0x449520)` (the image and the 8 stock bytes after it) is **`1ad236d1`** (the proposed `crc32_aligned_over_stock`); `app-check` compares the image's own 70,936 bytes with `d10cc7b6`.
 
 Wisp Boot's rung-3 results with this build (rule 12) and the Renode evidence: docs/wisp/rung4.md, "W24d: stage-0b".
+
+This tree builds stage-0c (W24e, `data/stage-0c/`); stage-0b is the build of `91035fc` above.

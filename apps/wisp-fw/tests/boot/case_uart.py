@@ -136,7 +136,8 @@ RSTGEN_STAT_BITS = {0x1: "external", 0x2: "power-on", 0x4: "brown-out", 0x8: "sw
                     0x200: "bo-vddf", 0x400: "bo-vdds", 0x1000: "sysresetreq"}
 DIAG_STAGES = {0x00: "none", 0x10: "boot-start", 0x11: "boot-pmic-kick", 0x12: "boot-window",
                0x13: "boot-window-end", 0x14: "boot-nor", 0x15: "boot-mounted", 0x16: "boot-inputs",
-               0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1F: "boot-fault",
+               0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1A: "boot-nor-power",
+               0x1B: "boot-nor-clock", 0x1C: "boot-nor-id", 0x1D: "boot-nor-skipped", 0x1F: "boot-fault",
                0x40: "s0-reset", 0x41: "s0-init", 0x42: "s0-uart", 0x43: "s0-feed", 0x44: "s0-kick",
                0x45: "s0-loop", 0x46: "s0-measure", 0x47: "s0-reset-request", 0x4F: "s0-fault",
                0x80: "app-soc", 0x81: "app-soc-done", 0x82: "app-pre1", 0x83: "app-pre1-end", 0x84: "app-pre2",
@@ -241,7 +242,7 @@ def decode_boot_status(b: bytes) -> dict:
         inv.append({"name": name, "size": size_, "crc": crc_, "result": res})
     confirm_calls, confirm_result = struct.unpack_from("<Ii", b, 600)
     out = {
-        "version": version, "observe": bool(build & 1), "log": bool(build & 2), "nor_id": nor_id,
+        "version": version, "observe": bool(build & 1), "log": bool(build & 2), "nor_off": bool(build & 4), "nor_id": nor_id,
         "nor_result": nor_res, "mount_result": mount, "record_result": rec_res, "record": record.hex(), "stage": stage,
         "staging_present": bool(staging_present), "staging_id": staging_id, "staging_size": staging_size,
         "rescue_ok": bool(rescue_ok), "rescue_id": rescue_id, "rescue_size": rescue_size,

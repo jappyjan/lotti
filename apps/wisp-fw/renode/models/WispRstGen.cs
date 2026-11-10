@@ -232,6 +232,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
                     cm.VectorTableOffset = (uint)bootVector;
                     cm.SP = bus.ReadDoubleWord(bootVector);
                     cm.PC = bus.ReadDoubleWord(bootVector + 4) & ~1u;
+                    if(cm.IsHalted)
+                    {
+                        cm.IsHalted = false; // a stalled bus access (WispMspiNor GatedStall) ends with the reset; after PC is set
+                    }
                 }
             }
         }
