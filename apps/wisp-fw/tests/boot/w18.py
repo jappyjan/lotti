@@ -1061,7 +1061,9 @@ class Harness:
         try:
             self.native_probes(run, STAGE_0B_DIR / "wisp_boot.elf")
             run.r.cmd("nor GatedStall true")
-            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+            # Stock's own period, not the scaled one: the stall feeds nothing, and on silicon the Apollo
+            # watchdog (about 9 s) fires long before the PMIC's 30.72 s (W24d: 0 PMIC config diffs).
+            run.r.cmd("pmicwdt Arm 30.72")
             pmic_realism(run)
             run.r.cmd("rstgen RetainRange 0x20370000 0x10000")
             run.r.cmd("rstgen CacheModel true")
@@ -1078,19 +1080,22 @@ class Harness:
             while thread.is_alive() and t < 900:
                 run.step(1)
                 t += 1
-            # The first boot after CONT stalls at its first MSPI1 access; listen through the watchdog
-            # reset (the loader's HELO) for the next boot's report from Wisp Boot's window.
+            # The first boot after CONT answers its own report (its window comes before the NOR phase),
+            # then stalls at its first MSPI1 access; listen through the watchdog reset (the loader's
+            # HELO) for the next boot's report, which names the stalled boot's last stage.
             hook.report_at = recovery_case_uart.WispStatus.REPORT_AT_S
-            w = self.watch(run, hook, 20, until=lambda o: len(hook.reports) >= 1, await_helo=True)
+            w = self.watch(run, hook, 40, until=lambda o: any(r.get("prev_stage") for r in hook.reports),
+                           await_helo=True)
             t += w["seconds"]
             silicon = silicon_findings(run)
             bites = int(run.r.cmd("wdt Bites") or "0", 0)
             pm = self.pmic(run)
         finally:
             run.close()
-        report = hook.reports[0] if hook.reports else {}
+        report = next((r for r in hook.reports if r.get("prev_stage")), {})
+        first_report = hook.reports[0] if hook.reports else {}
         caught = {"stall_at_mspi1": silicon["nor_stalls"] > 0 and silicon["nor_gated_wisp"] > 0,
-                  "watchdog_reset": bites >= 1,
+                  "watchdog_reset": bites >= 1, "no_pmic_power_cycle": pm["expiries"] == 0,
                   "report_boot_nor": report.get("source") == "wisp-boot" and report.get("prev_stage") == "boot-nor"
                   and report.get("reset_cause_names") == ["watchdog"],
                   "no_ident": not hook.ident}
@@ -1098,7 +1103,8 @@ class Harness:
         state = (f"the pinned stage-0b FAILS under the W24e model, as on silicon at W24d: its Wisp Boot's first MSPI1 "
                  f"access with the clock gated stalled ({silicon['nor_gated_first']}), {bites} watchdog bite(s), then "
                  f"the next boot's report: prev {report.get('prev_stage')} at {report.get('prev_stage_ms')} ms, cause "
-                 f"{report.get('reset_cause_names')}, {w['helo']} HELO; no IDENT; PMIC expiries {pm['expiries']}" if ok else
+                 f"{report.get('reset_cause_names')}, {w['helo']} HELO (the stalled boot's own report came first: "
+                 f"cause {first_report.get('reset_cause_names')}); no IDENT; PMIC expiries {pm['expiries']}" if ok else
                  f"the model did NOT reproduce W24d's hang: {caught}; report {report}; {silicon}; {result.get('error')!r}")
         self.record(name, ok, state, f"{t:.0f} s virtual, {time.time() - t0:.0f} s wall")
         (run.dir / "host.log").write_text("\n".join(map(str, log)) + "\n")
@@ -1190,7 +1196,9 @@ class Harness:
             self.native_probes(run, d / "wisp_boot.elf")
             if not old:
                 run.r.cmd("nor GatedStall true")
-            run.r.cmd(f"pmicwdt Arm {PMIC_PERIOD_S}")
+            # Stock's own period, not the scaled one: the stall feeds nothing, and on silicon the Apollo
+            # watchdog (about 9 s) fires long before the PMIC's 30.72 s (W24d: 0 PMIC config diffs).
+            run.r.cmd("pmicwdt Arm 30.72")
             pmic_realism(run)
             # Wisp Boot's whole RAM survives warm resets (the record and its status block `st`, which
             # the peek in part 4 reads); the silicon question is the same for both. With the D-cache
