@@ -43,7 +43,7 @@ def bootloader_ram(nor=0x0043_36A0, millivolts=180, flag=0xFFFF_FFFF, ssram=0x7)
     return {"nor": struct.pack("<I", nor), "board": struct.pack("<BBHhH", 0, 0, 3, millivolts, 0),
             "uart2": uart2, "power-callbacks": bytes(8), "ssram-power": struct.pack("<I", ssram),
             "rstgen-stat": struct.pack("<I", 1), "wisp-record": wisp_record(), "wisp-boot-status": bytes(692),
-            "wisp-boot-status-stage-0": bytes(692)}
+            "wisp-boot-status-stage-0": bytes(692), "wisp-boot-status-stage-0c": bytes(692)}
 
 
 def ram_temple(app=b"", **ram):

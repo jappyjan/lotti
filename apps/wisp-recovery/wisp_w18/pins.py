@@ -151,9 +151,13 @@ PEEK_REGIONS = {
                                            "the boot before the last one"),
     "wisp-boot-status-stage-0": (0x2037_5330, 692, "the same block of the stage-0 Wisp Boot (slot 7a5c399b..., "
                                                    "b54ee856...), for a temple that still runs stage-0"),
+    # stage-0c (rung4.md W24e) is NOT pinned; this read-only region lets a temple running it be peeked. Its
+    # pinning commit moves "wisp-boot-status" here, as W24d-0 did for stage-0b.
+    "wisp-boot-status-stage-0c": (0x2037_5340, 692, "the same block of the stage-0c Wisp Boot (W24e, not pinned; "
+                                                    "`st` of data/stage-0c/wisp_boot.elf)"),
 }
 # Regions in SSRAM group 2: read only after "ssram-power" shows that group powered.
-PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-stage-0")
+PEEK_SSRAM_GATED = ("wisp-record", "wisp-boot-status", "wisp-boot-status-stage-0", "wisp-boot-status-stage-0c")
 PEEK_SSRAM_GROUP2 = 0x4
 PEEK_NOR = {0x0043_36A0: "MX25U25643G (or an unknown ID: the classifier's default)", 0x0043_36B0: "GD25LE256H"}
 

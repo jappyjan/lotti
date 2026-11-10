@@ -70,7 +70,8 @@
 /* DEV0CFG: stock's 0x01010860 (serial CE0, 4-byte address, 1-byte instruction, TXNEG, turnaround 8)
  * with CLKDIV 8 instead of 1. With the HFRC 192 MHz IO clock that is SCK 12 MHz (HAL: 96 MHz =
  * CLKDIV 1, 12 MHz = CLKDIV 8). Stock runs 96 MHz after its 36-setting timing scan; Wisp Boot does
- * no scan and uses the plain READ4B (0x13), which the MX25U25643G specifies only well below that. */
+ * no scan and uses the plain READ4B (0x13, no dummy cycles), which SPI NOR parts specify at a lower
+ * clock than their fast reads. 12 MHz is far inside that, and fast enough: about 1.5 MB/s. */
 #define DEV0CFG_WISP      0x01080860u
 #define TIMEOUT 2000000u     /* polls of one wait */
 #define XFER_POLLS 2000000u  /* polls of one whole transfer */

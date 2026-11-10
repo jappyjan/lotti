@@ -146,10 +146,17 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((Antmicro.Renode.Peripherals.CPU.ICPUWithRegisters)cpu).PC : 0;
                 gatedLog.Add($"{(write ? "W" : "R")} +0x{o:X3}{(write ? $" <- 0x{v:X8}" : "")} {(powered ? "" : "power-off ")}{(clocked ? "" : "ioclk-gated ")}pc 0x{pc:X} {(wisp ? "wisp" : "other")}");
             }
-            if(GatedStall && wisp && machine.SystemBus.TryGetCurrentCPU(out var stalled))
+            if(GatedStall && wisp && !stallPending && machine.SystemBus.TryGetCurrentCPU(out var stalled))
             {
+                // Halted at the next synced state (not from inside the CPU's own bus access, which
+                // deadlocks): the CPU runs on for at most a quantum, still getting nothing from MSPI1.
                 Stalls++;
-                stalled.IsHalted = true; // until the next reset: the access never completes
+                stallPending = true;
+                machine.LocalTimeSource.ExecuteInNearestSyncedState(_ =>
+                {
+                    stalled.IsHalted = true; // until the next reset: the access never completes
+                    stallPending = false;
+                });
             }
             return true;
         }
@@ -614,6 +621,7 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly List<string> inResetLog = new List<string>();
         private readonly List<string> gatedLog = new List<string>();
         private int gatedWispLogged;
+        private bool stallPending;
         private const long CTRL = 0x000, ADDR = 0x008, INSTR = 0x00C, TXFIFO = 0x010, RXFIFO = 0x014;
         private const long TXENTRIES = 0x018, RXENTRIES = 0x01C, DEV0INSTR = 0x094;
         private const long DMACFG = 0x100, DMASTAT = 0x104, DMATARGADDR = 0x108, DMADEVADDR = 0x10C, DMATOTCOUNT = 0x110;
