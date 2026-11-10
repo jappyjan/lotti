@@ -1,27 +1,34 @@
 {
-  "note": "PROPOSED, NOT PINNED: copy into wisp_w18/pins.py only in the reviewed pinning commit (rung4.md W25). The suites below are the builder's rule-12 runs; the review reruns them.",
+  "note": "PROPOSED, NOT PINNED: copy `image` into wisp_w18/pins.py only in the reviewed pinning commit (rung4.md W24d, W24e, W25). The suites below are the builder's rule-12 runs; the review reruns them.",
   "image": {
-    "commit": "7eafd24",
-    "image_sha256": "6a24ae475a4ba907bddcfcc34dd57fd5a779f7540255c42382da67b3b6b1b5ca",
+    "commit": "28afba8",
+    "image_sha256": "69ca31bfd61e1580ae3ca3bb036423c4dad0b56d7cad42be424751c22637701a",
     "image_bytes": 245148,
-    "elf_sha256": "571fcec3f35f252888f75e2973d48578e7dc0158f6766d7cb5d73eb0e072dcab",
-    "map_sha256": "5e00da8631c5999449bc8b022ee72919793dc41d0690d7a810e4c1312efc0397",
+    "elf_sha256": "e846793464ad49f21d06b8ca9606c59ad2cdfbd5fb7b02d5e003271d9b27a6e9",
+    "map_sha256": "dbb9be7a73dc333a64ab9128fd364faaaac8b24c6f490534f5c801360cd3d2af",
     "gates": [
       "check_rule8",
       "no-mram-write"
     ],
-    "crc32": "0x32c101eb",
-    "crc32_aligned_over_stock": "0x2b2019cd",
-    "wisp_boot_slot_sha256": "34e401fbf2c90950bdfca96ad2bb7f507db47ef2560a3254f2954f732463a776"
+    "crc32": "0x51d1d00b",
+    "crc32_aligned_over_stock": "0xef6d2541",
+    "wisp_boot_slot_sha256": "f24e887078eebf174276d6d187d4b637b32f0fc2c778c842ba1b115cc44b40ba"
   },
   "wisp_boot": {
-    "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 7eafd24",
-    "wisp_boot_bin_sha256": "ef1a967feb9380617ec4c2bbfa9fc23c8a6d2df6d41245066ed8f865492c7e10",
+    "build": "observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit 28afba8",
+    "wisp_boot_bin_sha256": "2387b1b95103734a62c2e73575750b72ed487d528c8c9344ee7ddea65a99cde4",
     "suites": {
-      "stock-2.4.0.24": "observe suite 8/8 pass (builder's run, rung4.md W25)",
-      "patched-87e2d4e0": "observe suite 8/8 pass (builder's run, rung4.md W25)"
+      "stock-2.4.0.24": "observe suite: see rung4.md W25",
+      "patched-87e2d4e0": "observe suite: see rung4.md W25"
     }
   },
-  "end": "0x473da0",
-  "peek_wisp_boot_status": "0x2037533c"
+  "crc32_aligned_over": {
+    "stock": "0xef6d2541",
+    "native-0": "0xef6d2541",
+    "stage-0": "0xef6d2541",
+    "stage-0b": "0xef6d2541",
+    "stage-0c": "0xef6d2541"
+  },
+  "write_bound": "0x473da0",
+  "peek_wisp_boot_status": "0x20375340"
 }

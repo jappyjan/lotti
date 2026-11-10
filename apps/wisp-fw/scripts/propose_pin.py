@@ -28,6 +28,7 @@ REPO = HERE.parents[2]
 sys.path.insert(0, str(REPO / "apps/wisp-recovery"))
 from wisp_w18 import image, pins  # noqa: E402
 
+W = {"stage-0b": "W24d", "stage-0c": "W24e", "native-1": "W25"}  # rung4.md section by image
 APPS = {"stage-0b": ("stage-0b.bin", "stage0.elf", "stage0.map"), "stage-0c": ("stage-0c.bin", "stage0.elf", "stage0.map"),
         "native-1": ("native-1.bin", "zephyr.elf", "zephyr.map")}
 
@@ -75,7 +76,7 @@ def main() -> int:
         over[name] = f"{zlib.crc32(data + bytes(region[len(data): end - pins.APP_BASE])):#010x}"
     out = {
         "note": "PROPOSED, NOT PINNED: copy `image` into wisp_w18/pins.py only in the reviewed pinning commit "
-                "(rung4.md W24d, W24e). The suites below are the builder's rule-12 runs; the review reruns them.",
+                "(rung4.md W24d, W24e, W25). The suites below are the builder's rule-12 runs; the review reruns them.",
         "image": {
             "commit": a.commit,
             "image_sha256": sha(data),
@@ -91,8 +92,8 @@ def main() -> int:
             "build": f"observe-only (-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF), commit {a.commit}",
             "wisp_boot_bin_sha256": manifest["wisp_boot_bin_sha256"],
             "suites": {
-                "stock-2.4.0.24": f"observe suite: see rung4.md {'W24e' if a.image == 'stage-0c' else 'W24d'}",
-                "patched-87e2d4e0": f"observe suite: see rung4.md {'W24e' if a.image == 'stage-0c' else 'W24d'}",
+                "stock-2.4.0.24": f"observe suite: see rung4.md {W[a.image]}",
+                "patched-87e2d4e0": f"observe suite: see rung4.md {W[a.image]}",
             },
         },
         "crc32_aligned_over": over,  # install-wisp's final CRC by what the region held before (stock or a pin)
