@@ -136,7 +136,8 @@ RSTGEN_STAT_BITS = {0x1: "external", 0x2: "power-on", 0x4: "brown-out", 0x8: "sw
                     0x200: "bo-vddf", 0x400: "bo-vdds", 0x1000: "sysresetreq"}
 DIAG_STAGES = {0x00: "none", 0x10: "boot-start", 0x11: "boot-pmic-kick", 0x12: "boot-window",
                0x13: "boot-window-end", 0x14: "boot-nor", 0x15: "boot-mounted", 0x16: "boot-inputs",
-               0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1F: "boot-fault",
+               0x17: "boot-decided", 0x18: "boot-handoff", 0x19: "boot-reset", 0x1A: "boot-nor-power",
+               0x1B: "boot-nor-clock", 0x1C: "boot-nor-id", 0x1D: "boot-nor-skipped", 0x1F: "boot-fault",
                0x40: "s0-reset", 0x41: "s0-init", 0x42: "s0-uart", 0x43: "s0-feed", 0x44: "s0-kick",
                0x45: "s0-loop", 0x46: "s0-measure", 0x47: "s0-reset-request", 0x4F: "s0-fault"}
 REPORT_SOURCES = {0: "wisp-boot", 1: "app"}

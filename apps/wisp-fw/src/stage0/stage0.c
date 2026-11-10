@@ -1,12 +1,14 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * stage-0b — the smallest app behind Wisp Boot (docs/wisp/rung4.md, "W24 result and analysis", fix
- * plan 1, the W24b runbook, and "W24d: stage-0b"). stage-0b is stage-0 (pinned at W24b-0, built from
- * commit 9bfac4d) with the three silicon fixes of W24d, which live in the shared code: the case UART
- * is half duplex (boot_uart.c), the record is cleaned out of the D-cache after each breadcrumb
- * (wisp_diag.h), and its Wisp Boot no longer holds MSPI1 in reset and bounds its NOR phase. Here
- * only the start-up's SysTick probe gained a bound, and the version is 0.2.0. Bare metal: no Zephyr, no Ambiq HAL start-up, no interrupts. It
+ * stage-0c — the smallest app behind Wisp Boot (docs/wisp/rung4.md, "W24 result and analysis", fix
+ * plan 1, the W24b runbook, "W24d: stage-0b" and "W24e: stage-0c"). stage-0b is stage-0 (pinned at
+ * W24b-0, built from commit 9bfac4d) with the three silicon fixes of W24d, which live in the shared
+ * code: the case UART is half duplex (boot_uart.c), the record is cleaned out of the D-cache after
+ * each breadcrumb (wisp_diag.h), and its Wisp Boot no longer holds MSPI1 in reset and bounds its NOR
+ * phase; here only the start-up's SysTick probe gained a bound (0.2.0). stage-0c (0.3.0) is
+ * stage-0b with W24e's Wisp Boot, which powers MSPI1 and ungates its IO clock before the NOR phase
+ * and puts both back before the hand-off; this file only changes its version. Bare metal: no Zephyr, no Ambiq HAL start-up, no interrupts. It
  * exists to show on silicon what native-0 could not: that the hand-off from Wisp Boot reaches code
  * at 0x448000, that UART2 and IOM7 work with our own register sequences, and how fast the clocks
  * really run. Everything it does:
@@ -46,7 +48,7 @@
 #define STAGE0_KIND 16u /* image kind in IDENT and the status block (native-0 = 0) */
 #define STAGE0_STAGE 6u /* app stage "bare-metal" (case-uart.md status block) */
 #define STAGE0_MAJOR 0u
-#define STAGE0_MINOR 2u /* 0.1.0 = stage-0 (W24b), 0.2.0 = stage-0b (W24d) */
+#define STAGE0_MINOR 3u /* 0.1.0 = stage-0 (W24b), 0.2.0 = stage-0b (W24d), 0.3.0 = stage-0c (W24e) */
 #define STAGE0_PATCH 0u
 
 #define WDT_COUNT REG(0x4002400Cu)
