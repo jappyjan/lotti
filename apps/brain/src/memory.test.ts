@@ -110,7 +110,9 @@ test('dreaming: dedupe, contradictions (newest wins), stale, report', async () =
   );
   assert.match(rep.report, /Contradiction/);
   assert.equal(app.dreaming.reports()[0]!.id, rep.id);
-  clock.advance(100 * DAY);
+  // The skill files carry the real wall-clock date (file mtime), so 'unused for 90 days' is
+  // counted from now, not from the test's fixed dates.
+  clock.set(new Date(Date.now() + 100 * DAY));
   const rep2 = await app.dreaming.run();
   assert.match(rep2.report, /Unused skill/);
 });
