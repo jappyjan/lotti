@@ -5,7 +5,8 @@ through the charging case. docs/wisp/recovery.md, "W18 procedure", is the runboo
   bootloader-plan     what will be written, where, the hashes, the preconditions (touches nothing)
   bootloader-install  the one bootloader write, over the stock BLE OTA; needs --go <token>
   loader-hello        read-only: claim the loader through the case, CRC the bootloader twice, release
-                      (--no-release: end holding the temple in its loader, no CONT)
+                      (--no-release: end holding the temple in its loader, no CONT;
+                      --long-listen: wait ~10 min for a late HELO, one reset)
   held-reset-test     read-only: loader-hello --no-release, then a second session that must reset the
                       held temple and get its HELO (rung4.md W21; stop the plan if it does not)
   peek                read-only: allowlisted bootloader RAM/MRAM (NOR part, board strap, UART2, flag)
@@ -369,8 +370,17 @@ def hello_checks(session, side: str) -> dict:
 
 
 def cmd_hello(args) -> int:
+    if args.long_listen:
+        args.case_profile = pins.LISTEN_PROFILE
+        print(f"long listen: the case waits up to ~{pins.RELAY_LISTEN_FACTOR * 29 / 60:.0f} min for the HELO after its "
+              "one reset of the temple; nothing is written. Do not touch the case or the cable.")
+
     def body(session, patched):
         fields = hello_checks(session, args.side)
+        if args.long_listen:
+            waited = round(session.hello_at - session.started, 1)
+            fields["helo_after_relay_s"] = waited
+            print(f"HELO came {waited} s after the relay started")
         if args.no_release:
             session.hold = True  # no CONT: the temple stays in its loader until a reset or the PMIC
             fields["held"] = True
@@ -1043,6 +1053,9 @@ def main(argv=None) -> int:
     sp.add_argument("--no-release", action="store_true",
                     help="end the session without CONT: the temple stays held in its loader (G25; the "
                          "held-temple reset test, normally run as held-reset-test)")
+    sp.add_argument("--long-listen", action="store_true",
+                    help="wait up to ~10 min for the HELO after the case's one reset (observed-33-feed-listen): "
+                         "for a temple whose boot takes minutes. Read-only")
     common(sub.add_parser("held-reset-test", help="read-only: hold the temple in its loader, then reset it from a "
                                                    "second session and require its HELO (rung4.md W21)"))
     common(sub.add_parser("info-dump", help="read-only INFO0/INFOC/debug-lock dump"))

@@ -233,6 +233,18 @@ def build_relay(profile: str, cache: Path = CACHE) -> bytes:
     A profile ending in "-feed" is that relay with our YHM4005 feed (relay_feed.py) on top."""
     from . import relay_feed
 
+    if profile.endswith(pins.RELAY_LISTEN_SUFFIX):
+        base = profile.removesuffix(pins.RELAY_LISTEN_SUFFIX)
+        if base not in pins.RELAY_SHA256 or profile not in pins.RELAY_SHA256:
+            raise ImageError(f"unknown case profile {profile!r}")
+        image = bytearray(build_relay(base, cache))
+        at = pins.RELAY_POLL_LITERAL - pins.RELAY_ADDRESS
+        if struct.unpack_from("<I", image, at)[0] != pins.RELAY_POLL_COUNT:
+            raise ImageError("relay poll bound is not where the reviewed layout has it")
+        struct.pack_into("<I", image, at, pins.RELAY_POLL_COUNT * pins.RELAY_LISTEN_FACTOR)
+        if sha(bytes(image)) != pins.RELAY_SHA256[profile]:
+            raise ImageError(f"{profile} case relay failed its pin")
+        return bytes(image)
     if profile.endswith(pins.RELAY_FEED_SUFFIX):
         base = profile.removesuffix(pins.RELAY_FEED_SUFFIX)
         if base not in pins.RELAY_SHA256 or profile not in pins.RELAY_SHA256:

@@ -211,8 +211,21 @@ RELAY_SHA256 = {
     # 4-byte sites re-pointed and 300 bytes appended at 0x20011584, 5,808 bytes in all. The case
     # watchdog reset every relay session about 20 s in without it (recovery.md).
     "observed-33-feed": "4c7475fada40e748e64d2a47d5d60fa8a189f23d7afd74f7cecd8f95844047d5",
+    "observed-33-feed-listen": "47dc823c8e98cf9c1334d3824641242a032fadcf6bb43a98d1e8ec9da084d67e",
 }
 RELAY_FEED_SUFFIX = "-feed"
+# observed-33-feed with the relay's poll bound scaled: the literal at 0x20010994 (64,000,000 polls,
+# about 29 s of HELO wait with the feed) is the count of the HELO wait (ldr at 0x20010744) and of the
+# temple-frame wait (ldr at 0x200108AE); nothing else reads it. x20 makes the HELO wait about 10 min,
+# for a temple whose boot takes minutes (a NOR reformat, drdaeman 2026-11-15). Only `loader-hello
+# --long-listen` selects it. The temple-frame wait grows with it, so an unanswered request after the
+# claim blocks the relay for minutes: the host's 60 s read then fails and the cleanup runs as always.
+RELAY_LISTEN_SUFFIX = "-listen"
+RELAY_POLL_LITERAL = 0x2001_0994
+RELAY_POLL_COUNT = 64_000_000
+RELAY_LISTEN_FACTOR = 20
+LISTEN_PROFILE = "observed-33-feed-listen"
+LISTEN_BEACON_TIMEOUT_S = 780.0  # host read of the beacon; the relay's own bound is about 580 s
 # The relay the tool loads unless told otherwise, for both temples (one case).
 DEFAULT_CASE_PROFILE = "observed-33-feed"
 RELAY_ADDRESS = 0x2001_0000
