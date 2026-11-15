@@ -116,6 +116,13 @@ class Framing(unittest.TestCase):
         with self.assertRaises(RomError):
             self.arm(pins.LISTEN_BEACON_TIMEOUT_S + 1, listen=True)
 
+    def test_the_link_picks_the_timeout_from_the_profile(self):
+        with mock.patch.object(image, "build_relay", lambda profile, cache=None: b""):
+            listen = links.CaseRelayLink("x", "left", LISTEN)
+            plain = links.CaseRelayLink("x", "left", BASE)
+        self.assertEqual(listen.BEACON_TIMEOUT, pins.LISTEN_BEACON_TIMEOUT_S)
+        self.assertEqual(plain.BEACON_TIMEOUT, 60.0)
+
     def test_relay_bound_is_inside_the_host_bound(self):
         # ~29 s with the feed, x20: the host must outwait the relay's own give-up
         self.assertGreater(pins.LISTEN_BEACON_TIMEOUT_S, 29 * pins.RELAY_LISTEN_FACTOR)
