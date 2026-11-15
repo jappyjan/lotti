@@ -214,6 +214,7 @@ class _RelayFraming:
     relay_started = None
     refused_status = None  # the G2RS status of a refused G2RQ
     sleep = staticmethod(time.sleep)
+    BEACON_TIMEOUT = 60.0  # s; the host's read of the HELO (the long-listen relay waits ~10 min for it)
     IDLE_TIMEOUT = 120.0  # s; the relay answers an empty G2TX after its own poll bound (18 s; ~31 s with the feed)
 
     def _init_recent(self, clock=time.monotonic) -> None:
@@ -242,7 +243,9 @@ class _RelayFraming:
         self.log({"case_uart_registers": [hex(r) for r in registers]})
         if read_exact(port, 11, "arm marker") != b"G2U2_ARMED\n":
             raise LinkError("relay did not arm (route not selected?)")
+        port.timeout = self.BEACON_TIMEOUT
         beacon = read_exact(port, 21, "boot beacon")
+        port.timeout = 60.0
         if read_exact(port, 12, "relay ready") != b"G2RAM_READY\n":
             raise LinkError("relay failed to arm")
         self.ready = True
@@ -409,6 +412,8 @@ class CaseRelayLink(_RelayFraming):
         self.device, self.side, self.route = device, side, case_pins.ROUTES[side]
         self.image = build_relay(profile, image_cache or CACHE)
         self.profile = profile
+        if profile.endswith(pins.RELAY_LISTEN_SUFFIX):
+            self.BEACON_TIMEOUT = pins.LISTEN_BEACON_TIMEOUT_S
         self.opener, self.sleep = opener, sleep
         # How long the case app runs after its banner before start() enters the ROM: 0 for the
         # first session of a command, cli.SETTLE_S for every later one and for a retry after

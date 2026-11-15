@@ -817,6 +817,16 @@ No branch targets the second instruction of a displaced pair. Each enclosing fun
 - **Per-exchange stall.** The probe does not rule out hypothesis 1 (a rare hang in stock HAL code with interrupts masked). If it exists, F1c stops at a random exchange, and the 4005 resets the case about 20 s after the last feed (record phase 1). `recover`'s default 600 s parts and `--resume-at` bound the cost of that.
 - **The unfed ROM time.** The ROM part before Go (case hash and relay load, ~7 s) and after `G2RS` is unfed. A session therefore has to start within ~18 s of the last feed. Back-to-back sessions start ~10 s apart. After a longer pause the case app runs and feeds.
 
+### Long listen: a temple whose boot takes minutes
+
+The relay gives up on a silent temple about 29 s after its reset (observed-33-feed; the HELO wait is the 64,000,000-poll loop at `0x20010744`). Every probe of the left temple since 2026-11-10 ended there, and each one also reset the temple again, so a boot that takes longer than 29 s was never heard and never allowed to finish. drdaeman (g2-bootloader-patch issue 1, 2026-11-15): when the NOR or its littlefs is damaged the bootloader reformats it and sends the `HELO` "very late"; if littlefs mounts but `/boot_count` cannot be opened it spins in the fault handler and never sends one. The two cases look the same through the relay, except for time.
+
+`loader-hello --long-listen` runs the profile `observed-33-feed-listen`: observed-33-feed with the literal at `0x20010994` (64,000,000, read by the HELO wait and by the temple-frame wait, and by nothing else) multiplied by 20 (`0x03D09000` to `0x4C4B4000`), so the case waits about 10 min for the `HELO` after its one reset. The host reads the beacon with a 780 s timeout. The feed hooks still run inside the loop, so the case's YHM4005 stays fed. The temple's nPM1300 watchdog is not a concern while there is no `HELO`: a battery disconnect put the PMIC at its defaults, where the watchdog is off, because stock arms it [I].
+
+What it does: one session; a `HELO` is the answer, then the usual read-only checks (bootloader CRC twice, flag) and `CONT`. The report has `helo_after_relay_s`. Nothing is written to the temple or the case flash. No `HELO` after the bound ends as before: relay timeout, cleanup, route restored. After a late `HELO` the loader is reachable: the next steps are `pmic-read`, `charge-on` and `recover`, each on its own go.
+
+The temple-frame wait grows with the literal too. After the claim every request is answered in milliseconds; a silent temple after the claim would block the relay for minutes, the host's 60 s read would fail, and the cleanup would run as it does for any error. Use the profile only through `--long-listen`.
+
 ### The temple's watchdog: the nPM1300
 
 **Measured on hardware (2026-11-07, left temple, case watchdog fed; reported by the Mac thread).** With the case fed, a held temple now rebooted instead: the patched loader's `HELO` came back in the middle of the session. The relay's reset gives the temple a fresh boot 0.5–0.9 s after the relay starts.
