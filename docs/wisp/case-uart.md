@@ -7,7 +7,7 @@ Status: **emulation only.** Built for `native-0` (W22) and exercised in Renode a
 ## Link
 
 - The temple's **UART2**: GPIO42 TX → case PB9 (USART3 RX), GPIO44 RX ← case PB8 (USART3 TX), **1 000 000 baud, 8N1, no flow control**. The same wires and settings the stock main app and drdaeman's patched loader use ([recovery.md](recovery.md)).
-- **Half duplex: one pogo wire** [C, static analysis of stock 2.4.0.24 and drdaeman's loader; rung4.md [W24d](rung4.md#w24d-stage-0b)]. Pads 42 and 44 both sit on the single case-link pin, so only one of them may be in UART function at a time. Stock and the loader listen by default (pad 44 `UART2RX`, function 4; pad 42 parked: function 3, GPIO, output off) and turn the wire round for each send: park pad 44, pad 42 `UART2TX` (function 4), send, wait until the transmitter is idle, park pad 42, pad 44 `UART2RX`. The loader's pin table (bootloader `0x434210`) is `{42, 44, 4, 4}`, its park function 3, and it waits 6 RTOS ticks (about 6 ms) before every reply. PINCFG is written raw, between GPIO `PADKEY` `0x73` and 0. Wisp Boot and stage-0b do the same since W24d (`boot_uart.c`); the W24/W24b Wisp Boot, stage-0 and native-0 (its Zephyr pinctrl) keep both pads in UART function, so their TX pad drives the wire while the case sends.
+- **Half duplex: one pogo wire** [C, static analysis of stock 2.4.0.24 and drdaeman's loader; rung4.md [W24d](rung4.md#w24d-stage-0b)]. Pads 42 and 44 both sit on the single case-link pin, so only one of them may be in UART function at a time. Stock and the loader listen by default (pad 44 `UART2RX`, function 4; pad 42 parked: function 3, GPIO, output off) and turn the wire round for each send: park pad 44, pad 42 `UART2TX` (function 4), send, wait until the transmitter is idle, park pad 42, pad 44 `UART2RX`. The loader's pin table (bootloader `0x434210`) is `{42, 44, 4, 4}`, its park function 3, and it waits 6 RTOS ticks (about 6 ms) before every reply. PINCFG is written raw, between GPIO `PADKEY` `0x73` and 0. Wisp Boot and stage-0b do the same since W24d (`boot_uart.c`); the W24/W24b Wisp Boot, stage-0 and native-0 (its Zephyr pinctrl) keep both pads in UART function, so their TX pad drives the wire while the case sends. native-1's app does the same in Zephyr (rung4.md [W25](rung4.md#w25-native-1-mvp)): its pinctrl default (`uart2_default`) parks pad 42 and puts pad 44 on `UART2RX`, and `src/case/wisp_case.c` turns the wire round for each reply with raw `PINCFG` writes under `PADKEY`, after the same 6 ms.
 - In the case: through a RAM program in the case's STM32 (drdaeman's relay `observed-33-feed`, or step 0's read-only bridge). The case's own firmware 1.2.57 polls seated temples in its own protocol ([below](#the-case-apps-0x13-poll-not-answered-by-native-0)).
 - The app keeps UART2 powered for good (`pm_device_runtime_get` once at start; every other device starts runtime-suspended) and polls the receiver every 2 ms (`CONFIG_WISP_CASE_UART_POLL_MS`) from a low-priority thread. The PL011 FIFO holds 32 bytes and every request is shorter. A gap of more than 20 ms inside a request drops it.
 - **The temple never sends anything unasked.** Every frame it sends answers one complete request. (drdaeman's loader sends `HELO` unasked, but that is the bootloader at every boot, before Wisp runs.)
@@ -44,9 +44,9 @@ reply:    5A A5 FF L  57 53 50  op|80  status  data..  s   zero-padded to L = 8,
 | `01` | IDENT | 9 bytes, no args | 10 bytes: `major minor patch kind`, `stage u8`, `flags u8`, `battery_mv u16`, `bt_result i16` (the fields as in the [status block](#status-block-version-1)); 21-byte reply |
 | `02` | READ | 25 bytes: `block u8`, `offset u16`, `length u8` (1–17), 12 zero bytes | `block u8`, `offset u16`, `total u16`, then min(length, total − offset) bytes; 32-byte reply at most |
 | `03` | RESET | 25 bytes: `52 53 45 54` (`"RSET"`), 12 zero bytes | none; ~50 ms after the reply the app resets (`sys_reboot`, cold; stage-0: SWPOR). The patched loader's `HELO` is the next frame on the line, then Wisp Boot and the app boot again |
-| `04` | BOOTREP | 9 bytes, no args | 22 bytes: the [boot report](#the-boot-report-op-04) (why the previous boot ended, how far it got); 32-byte reply. Status 1 from an app that predates it (native-0), 3 if the app finds no valid Wisp Boot block |
+| `04` | BOOTREP | 9 bytes, no args | 22 bytes: the [boot report](#the-boot-report-op-04) (why the previous boot ended, how far it got); 32-byte reply. Status 1 from an app that predates it (native-0), 3 if the app finds no valid Wisp Boot block. native-1's app answers it (source 1) |
 
-Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes in version 1, native-0's Wisp Boot, 36 READs; 692 bytes in version 2, 41 READs), and for stage-0 only **3** = its clock measurements (52 bytes) and **4** = this boot's diagnostics record (64 bytes). An unknown block gets status 2. Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus blocks 1 and 2 is about 0.8 s.
+Blocks: **1** = the app's status (56 bytes, 4 READs), **2** = Wisp Boot's status block (612 bytes in version 1, native-0's Wisp Boot, 36 READs; 692 bytes in version 2, 41 READs), for stage-0 **3** = its clock measurements (52 bytes), and for stage-0 and native-1 **4** = this boot's diagnostics record (64 bytes; native-1's app breadcrumbs, below). An unknown block gets status 2. Little-endian throughout. A relay exchange takes about 17.5 ms, so IDENT plus blocks 1 and 2 is about 0.8 s.
 
 The marker keeps these apart from the loader's requests (`HOLD`, `CONT`, … carry their own four-character marker, and `HOLD` an HMAC). A Wisp request that reaches the loader during its boot window is not one of its commands; a loader request that reaches the app is ignored.
 
@@ -126,6 +126,10 @@ Case 1.2.57 polls each seated temple with `13 00 0s 01 E4 01 c` (s = side) and r
 
 Answering `0x13` like stock is gap **G10b** in [rung4.md](rung4.md#gaps): it needs the reply layout from stock's handler (static analysis, W20 follow-up) and an emulation check against the case's parser.
 
+## native-1's breadcrumbs (stage codes `0x80` on)
+
+native-1's app writes its own breadcrumbs into Wisp Boot's record (`src/diag/wisp_app_diag.c`, codes in `src/boot/wisp_diag.h`, names in both `case_uart.py`): `app-soc` (its SoC start-up entered), `app-soc-lp`, `app-soc-buck`, `app-soc-temp` (after each HAL call), `app-soc-done`, `app-pre1`, `app-pre1-end`, `app-pre2`, `app-stimer-ok` (D5: the STIMER counts), `app-post`, `app-post-buses`, `app-post-end`, `app-pmic-thread`, `app-pmic-armed`, `app-main`, `app-case`, `app-hal`, `app-display`, `app-bt-start`, `app-bt-up` / `app-bt-failed`, `app-idle` (main's start-up is over), `app-session` (a BLE session completed HELLO). Faults and stops: `app-fault` (the fatal-error handler recorded the fault and reset at once, D3), `app-stimer-dead` (D5: the STIMER does not count; a polled fallback loop feeds the watchdog and answers BOOTREP, IDENT and READ itself), `app-wdt-starved` (the feed's liveness check stopped feeding: the PMIC thread has not run for 5 s), `app-reset-request` (a case-UART RESET). Each mark is cleaned from the D-cache. The next boot's report (from Wisp Boot's window) names the last one.
+
 ## Status block, version 1
 
 The app's own block (READ block 1), 56 bytes. `tests/boot/case_uart.py decode_status` is the reference decoder.
@@ -151,7 +155,8 @@ The app's own block (READ block 1), 56 bytes. `tests/boot/case_uart.py decode_st
 | 36 | u16 | `confirm()` calls through Wisp Boot's services |
 | 38 | i16 | the last `confirm()` result; `0x7FFF` = never called |
 | 40 | u16 | size of Wisp Boot's status block (0 = none) |
-| 42 | u16 | reserved, 0 |
+| 42 | u8 | display (native-1 on; 0 before): 0 not tried, 1 on (the boot screen drawn), 2 off again after it, 3 refused (the rail gate: the PMIC is not as stock configured it), 4 failed |
+| 43 | i8 | the display's last error (0 or −errno) |
 | 44 | char[12] | firmware git revision, NUL-padded |
 
 Rule 6's case-session threshold for a native temple (battery ≥ 3,900 mV, [safety.md](safety.md)) is read from offset 6, or from IDENT. The percentage Wisp shows elsewhere is a coarse voltage estimate and reads high while charging; the threshold is still to be confirmed against stock's 80 % at W21.

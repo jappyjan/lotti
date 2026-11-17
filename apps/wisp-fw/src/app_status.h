@@ -26,6 +26,8 @@ struct wisp_app_status {
 	volatile uint32_t sessions;
 	volatile uint16_t confirm_calls;
 	volatile int16_t confirm_result;
+	volatile uint8_t display;    /* WISP_CASE_DISPLAY_* */
+	volatile int8_t display_err;
 	uint32_t reset_cause;
 };
 

@@ -27,10 +27,13 @@
 		};
 	};
 
-	/* Case link (UART2): GPIO42 TX, GPIO44 RX (stock pin table, hardware.md). */
+	/* Case link (UART2): GPIO42 TX, GPIO44 RX (stock pin table, hardware.md). One wire, half
+	 * duplex (rung4.md W24c): at rest pad 42 is parked as a GPIO with its output off (FNCSEL 3)
+	 * and pad 44 receives, as stock's UART2 init leaves them. src/case/wisp_case.c turns the
+	 * wire round for each reply (pad 44 parked, pad 42 UART2TX) and back. */
 	uart2_default: uart2_default {
 		group1 {
-			pinmux = <UART2TX_P42>;
+			pinmux = <GPIO_P42>;
 		};
 
 		group2 {

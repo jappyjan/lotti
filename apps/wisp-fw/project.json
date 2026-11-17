@@ -82,7 +82,7 @@
         }
       ],
       "options": {
-        "command": "apps/wisp-fw/scripts/build_native.sh native-0"
+        "command": "apps/wisp-fw/scripts/build_native.sh native-1"
       },
       "cache": false
     },

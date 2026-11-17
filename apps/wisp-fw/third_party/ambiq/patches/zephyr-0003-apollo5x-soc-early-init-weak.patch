@@ -1,0 +1,20 @@
+From: Wisp contributors
+Subject: [PATCH] soc: apollo5x: let an application replace soc_early_init_hook
+
+Wisp's hardware images (rung4.md W25) run their own SoC start-up behind the Even bootloader and
+Wisp Boot instead of the HAL's low-power init, SIMO buck enable and temperature update: the
+weak attribute lets the app's strong definition win. Builds without one are unchanged.
+
+diff --git a/soc/ambiq/apollo5x/soc.c b/soc/ambiq/apollo5x/soc.c
+index 8cdf144c..c0a9b6a0 100644
+--- a/soc/ambiq/apollo5x/soc.c
++++ b/soc/ambiq/apollo5x/soc.c
+@@ -283,7 +283,7 @@ void ambiq_apollo510b_ble_lp_runtime_init(void)
+ }
+ #endif
+ 
+-void soc_early_init_hook(void)
++__weak void soc_early_init_hook(void)
+ {
+ 	/* Enable Loop and branch info cache */
+ 	SCB->CCR |= SCB_CCR_LOB_Msk;

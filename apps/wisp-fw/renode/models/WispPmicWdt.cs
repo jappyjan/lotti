@@ -32,6 +32,8 @@
 // showed them (images/pmic-poweron-w24.json). A pmic_read afterwards sees the charger off and the
 // watchdog disarmed, as on the left temple.
 //
+// PmicLog also has one line per register read made with the offset phase ("<ms> ms read <hi> <lo> n=<bytes>").
+//
 // PmicPcLog: one line per PMIC data write with the PC that issued its CMD ("<ms> pc 0x<pc>
 // wb=<0|1> write <bytes>"), so a case can prove which code made which write (Wisp Boot's only one is the
 // kick 07 04 01).
@@ -46,8 +48,21 @@
 //
 // SUBMODCTRL reads its submodule types as on silicon (WispIomTypes.cs explains why).
 //
+// Register file across Apollo resets (KeepRegisters, set by the native-1 case): the nPM1300 is a
+// separate chip, so what was written to it (and what SetRegister <reg> <value> preloads, e.g. the
+// configuration stock left, images/pmic-baseline-w21.json) is still there after an Apollo reset;
+// G2Iom's own register file is rebuilt at every reset, so the model replays it. A power cycle
+// replaces it with the power-on values.
+//
+// A dead I2C7 for the app (NakApp, review F1 of PR #87): every transaction to 0x6B whose CMD is
+// issued from the app's code (PC in [0x448000, 0x800000)) is not forwarded: nothing reaches the
+// PMIC, and INTSTAT reports CMDCMP | NAK (bit 4) until the driver clears NAK through INTCLR, which
+// hal_ambiq turns into AM_HAL_IOM_ERR_I2C_NAK. Wisp Boot's polled kick (its PC below 0x448000) still
+// gets through, as Wisp Boot's proven path would on silicon. AppNaks counts them.
+//
 // Monitor: Arm <s>, Disarm, Armed, Kicks, Expiries, LastKickMs, PowerCyclePending, AckPowerCycle,
-// PmicLog (one line per PMIC write), PmicPcLog, ActOnWrites, SetPowerOn <reg> <value>, PeriodMs.
+// PmicLog (one line per PMIC write), PmicPcLog, ActOnWrites, SetPowerOn <reg> <value>, PeriodMs,
+// KeepRegisters, SetRegister <reg> <value>.
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -87,18 +102,36 @@ namespace Antmicro.Renode.Peripherals.Wisp
             powerOn[reg] = (byte)value;
         }
 
+        public bool KeepRegisters { get; set; }
+        public bool NakApp { get; set; }
+        public ulong AppNaks { get; private set; }
+
+        public void SetRegister(int reg, int value)
+        {
+            kept[reg] = (byte)value;
+            Poke(reg, (byte)value);
+        }
+
+        // One register into G2Iom's PMIC register file, as a write transaction no code made.
+        private void Poke(int reg, byte value)
+        {
+            var saved = iom.ReadDoubleWord(0x2C4);
+            iom.WriteDoubleWord(0x2C4, 0x6B);
+            iom.WriteDoubleWord(0x10C, (uint)(((reg >> 8) & 0xFF) | ((reg & 0xFF) << 8) | (value << 16)));
+            iom.WriteDoubleWord(0x120, (3u << 8) | 1);
+            iom.WriteDoubleWord(0x2C4, saved);
+        }
+
         public void AckPowerCycle()
         {
             PowerCyclePending = false;
             // The PMIC's own power cycle: its registers back at their power-on values.
-            var saved = iom.ReadDoubleWord(0x2C4);
+            kept.Clear();
             foreach(var kv in powerOn)
             {
-                iom.WriteDoubleWord(0x2C4, 0x6B);
-                iom.WriteDoubleWord(0x10C, (uint)(((kv.Key >> 8) & 0xFF) | ((kv.Key & 0xFF) << 8) | (kv.Value << 16)));
-                iom.WriteDoubleWord(0x120, (3u << 8) | 1);
+                kept[kv.Key] = kv.Value;
+                Poke(kv.Key, kv.Value);
             }
-            iom.WriteDoubleWord(0x2C4, saved);
             timerConfig = 0;
             target = latched = 0;
             log.AppendLine($"{nowMs} ms power-on values restored ({powerOn.Count} registers)");
@@ -133,9 +166,17 @@ namespace Antmicro.Renode.Peripherals.Wisp
         {
             iom.Reset();
             push.Clear();
+            nakPending = false;
             devcfg = 0;
             offsetHi = 0;
             rxBytes = 0;
+            if(KeepRegisters)
+            {
+                foreach(var kv in kept)
+                {
+                    Poke(kv.Key, kv.Value);
+                }
+            }
         }
 
         // Byte and halfword reads go through ReadDoubleWord, so FIFOPTR, FIFOPOP and SUBMODCTRL
@@ -153,12 +194,40 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 return iom.ReadDoubleWord(offset);
             case 0x11C: // SUBMODCTRL: the submodule types, SMOD0 = SPI (0), SMOD1 = I2C (1)
                 return (iom.ReadDoubleWord(offset) & ~0xEEu) | (1u << 5);
+            case 0x204: // INTSTAT: a NAKed app transaction completes with NAK
+                return iom.ReadDoubleWord(offset) | (nakPending ? 0x11u : 0u);
             }
             return iom.ReadDoubleWord(offset);
         }
         public void WriteByte(long offset, byte value) { Observe(offset, value, 1); iom.WriteByte(offset, value); }
         public void WriteWord(long offset, ushort value) { Observe(offset, value, 2); iom.WriteWord(offset, value); }
-        public void WriteDoubleWord(long offset, uint value) { Observe(offset, value, 4); iom.WriteDoubleWord(offset, value); }
+        public void WriteDoubleWord(long offset, uint value)
+        {
+            if((offset & 0xFFF) == 0x208 && (value & 0x10u) != 0)
+            {
+                nakPending = false; // INTCLR of NAK
+            }
+            if((offset & 0xFFF) == 0x120 && NakApp && devcfg == 0x6B && FromApp())
+            {
+                // The app's transaction to the PMIC: NAKed, not forwarded, nothing logged or acted on.
+                AppNaks++;
+                nakPending = true;
+                push.Clear();
+                return;
+            }
+            Observe(offset, value, 4);
+            iom.WriteDoubleWord(offset, value);
+        }
+
+        private bool FromApp()
+        {
+            if(!machine.SystemBus.TryGetCurrentCPU(out var cpu))
+            {
+                return false;
+            }
+            var pc = (ulong)((ICPUWithRegisters)cpu).PC;
+            return pc >= 0x448000 && pc < 0x800000;
+        }
 
         private void Observe(long offset, uint value, int width)
         {
@@ -202,6 +271,12 @@ namespace Antmicro.Renode.Peripherals.Wisp
                 word |= ((offsetHi >> (8 * (i - 1))) & 0xFF) << (8 * n);
             }
             word |= (cmd >> 24) << (8 * n);
+            if(devcfg == 0x6B && offsetCount == 2)
+            {
+                // A register read with the offset phase (no write transaction of its own): logged so
+                // a case can see which registers were read, and when, among the writes.
+                log.AppendLine($"{nowMs} ms read {(offsetHi & 0xFF):x2} {(cmd >> 24) & 0xFF:x2} n={tsize}");
+            }
             iom.WriteDoubleWord(0x10C, word);
             iom.WriteDoubleWord(0x120, ((uint)offsetCount << 8) | 1);
         }
@@ -231,6 +306,10 @@ namespace Antmicro.Renode.Peripherals.Wisp
             }
             var hex = BitConverter.ToString(wire.ToArray()).Replace("-", " ").ToLowerInvariant();
             log.AppendLine($"{nowMs} ms write {hex}");
+            for(var i = 2; i < wire.Count; i++)
+            {
+                kept[((wire[0] << 8) | wire[1]) + i - 2] = wire[i];
+            }
             if(wire.Count > 2)
             {
                 var pc = machine.SystemBus.TryGetCurrentCPU(out var cpu) ? (ulong)((ICPUWithRegisters)cpu).PC : 0;
@@ -318,6 +397,8 @@ namespace Antmicro.Renode.Peripherals.Wisp
         private readonly StringBuilder log;
         private readonly StringBuilder pcLog = new StringBuilder();
         private readonly Dictionary<int, byte> powerOn = new Dictionary<int, byte>();
+        private readonly Dictionary<int, byte> kept = new Dictionary<int, byte>();
+        private bool nakPending;
         private int timerConfig, target, latched;
         private List<byte> push;
         private uint devcfg, offsetHi, rxBytes;

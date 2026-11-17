@@ -269,6 +269,13 @@ class CheckNativeFacts(unittest.TestCase):
         self.assertTrue(cn.check_app_config(good.replace("=0", "=255")))
         self.assertTrue(cn.check_app_config(good + "CONFIG_DT_HAS_NORDIC_NPM1300_CHARGER_ENABLED=y\n"))
         self.assertTrue(cn.check_app_config(good + "CONFIG_DT_HAS_AMBIQ_MSPI_CONTROLLER_ENABLED=y\n"))
+        # native-1 (W25): the panel only with the gated rail switches; never a console.
+        panel = good + "CONFIG_DT_HAS_EVEN_G2_ULED_ENABLED=y\nCONFIG_DT_HAS_AMBIQ_MSPI_CONTROLLER_ENABLED=y\n"
+        self.assertEqual(cn.check_app_config(panel + "CONFIG_WISP_NPM1300_SWITCH=y\n"), [])
+        self.assertEqual(len(cn.check_app_config(panel)), 2)
+        for opt in ("UART_CONSOLE", "CONSOLE", "LOG", "PRINTK"):
+            self.assertTrue(cn.check_app_config(good + f"CONFIG_{opt}=y\n"), opt)
+        self.assertEqual(cn.check_app_config(good + "CONFIG_LOG_MODE_MINIMAL=y\n"), [])
 
     def test_boot_symbols(self):
         self.assertEqual(cn.check_boot_symbols(["nor_read", "lfs_file_read", "wisp_boot_main"]), [])

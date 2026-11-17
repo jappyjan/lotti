@@ -87,6 +87,7 @@ WISP_BOOT_END = 0x448000
 STOCK_MARK = "EM9305 reset status"          # first stock-app (not bootloader) line on UART1
 JUMP_RE = re.compile(r"(just jump to app|APP jumpaddr app)\(0x438000\)")
 APP_BANNER = "*** Wisp native "             # the real app's first line
+REAL_APP_KIND = 1  # the real app is native-1's (image kind 1; tests/boot/app/rung3-console.*)
 APP_BEAT = "wisp: heartbeat "
 APP_CEILING = 0x7F8000
 SERVICES = 0x438200
@@ -888,10 +889,10 @@ class Harness:
         st = q.get("status") or {}
         if not q["version"]["wisp"]:
             fails.append(f"version reply is not Wisp's: {q['version']}")
-        if not q.get("relay_shape") or q.get("ident", {}).get("image_kind") != 0:
+        if not q.get("relay_shape") or q.get("ident", {}).get("image_kind") != REAL_APP_KIND:
             fails.append(f"IDENT {q.get('ident')} (relay shape {q.get('relay_shape')})")
         need = {"pmic-wdt", "boot-services", "boot-status"} | ({"boot-observe"} if self.suite != "fallback" else set())
-        if q.get("status_code") != 0 or not need <= set(st.get("flags", [])) or st.get("image_kind") != 0:
+        if q.get("status_code") != 0 or not need <= set(st.get("flags", [])) or st.get("image_kind") != REAL_APP_KIND:
             fails.append(f"case-UART status {q.get('status_code')} {st}")
         if st.get("stage") not in ("bt-failed", "bt-up"):
             fails.append(f"case-UART stage {st.get('stage')}")

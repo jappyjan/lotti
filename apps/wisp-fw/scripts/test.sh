@@ -11,7 +11,8 @@
 #   4. Renode boot of the built image: banner, drivers up against the bus models, Bluetooth
 #      gives up on the absent EM9305 without any update / recovery attempt, heartbeats on UART1
 #   5. end to end over BLE: the same app on native_sim/native/64 behind a virtual controller
-#      (Bumble), the TypeScript SDK completes HELLO through a GATT central (tests/ble/)
+#      (Bumble), the TypeScript SDK completes HELLO through a GATT central (tests/ble/); then the
+#      Mac session tool (tests/ble/session.mts: HELLO, TIME_SYNC, PINGs, BYE) the same way
 #   6. safety rule 8 negative builds: each must FAIL, with the rule 8 message
 #        a. Bluetooth on without CONFIG_WISP_BT_ALLOWED  -> configure-time gate
 #        b. hal_ambiq without Wisp's patch                -> configure-time gate
@@ -22,7 +23,8 @@
 #        f. the canary ELF with symbols stripped          -> byte check alone still rejects it
 #      and the G13 no-MRAM-write gate (rung4.md):
 #        g. am_hal_mram_main_program linked (canary)      -> post-build gate
-#        h. a hardware image with the panel enabled       -> configure-time gate (G11)
+#        h. hardware images (native-1, W25): with Zephyr's nPM13xx nodes, with UART1, with BUCK1's
+#           switch expecting another code than W21's -> configure-time gate (G11, G12, W25)
 #
 # WISP_TEST_SKIP_NEGATIVE=1 skips step 6 (the full negative builds take about a minute each).
 source "$(dirname "$0")/lib.sh"
@@ -48,6 +50,7 @@ cc "${san[@]}" -I"$APP_DIR/src/case" "$APP_DIR/src/case/wisp_case_proto.c" \
 	"$APP_DIR/tests/case/test_case_proto.c" -o "$out/test_case_proto"
 "$out/test_case_proto"
 python3 -I "$APP_DIR/tests/case/test_case_uart.py"
+python3 -I "$APP_DIR/scripts/gen_boot_font.py" --check || { echo "FAIL: src/display/boot_font.h is not what scripts/gen_boot_font.py writes" >&2; exit 1; }
 "$APP_DIR/scripts/build_boot.sh" >/dev/null
 WISP_BOOT_BUILD_DIR="$CACHE_DIR/build/wisp-boot-observe-plain" "$APP_DIR/scripts/build_boot.sh" \
 	-DWISP_BOOT_OBSERVE=ON -DWISP_BOOT_LOG=OFF >/dev/null
@@ -91,6 +94,16 @@ WISP_E2E_EXE="$sim_build/zephyr/zephyr.exe" WISP_E2E_BRIDGE="$APP_DIR/tests/ble/
 	WISP_E2E_LOG="$out/e2e-firmware.log" \
 	node --test --test-timeout=60000 --test-reporter=spec "$APP_DIR/tests/ble/e2e.test.mts"
 echo "firmware log: $out/e2e-firmware.log"
+# The Mac's session tool (rung4.md G14, W25) on the same firmware: HELLO, TIME_SYNC, PINGs past
+# the session timeout, BYE, through the Bumble bridge here (bleak_bridge.py on the Mac).
+python3 -I "$APP_DIR/tests/ble/test_bleak_bridge.py"
+node "$APP_DIR/tests/ble/session.mts" --bridge "python3 -I $APP_DIR/tests/ble/bumble_bridge.py" \
+	--firmware "$sim_build/zephyr/zephyr.exe" >"$out/session.json" || {
+	cat "$out/session.json" >&2
+	echo "FAIL: session.mts against the native_sim firmware" >&2
+	exit 1
+}
+echo "ok: session.mts (the Mac session tool) against the native_sim firmware: $(grep -c '"ok": true' "$out/session.json") steps ok"
 
 if [[ "${WISP_TEST_SKIP_NEGATIVE:-}" == 1 ]]; then
 	step "6/6 rule 8 negative builds: SKIPPED (WISP_TEST_SKIP_NEGATIVE=1)"
@@ -112,7 +125,7 @@ expect_fail() {
 		exit 1
 	fi
 	echo "ok: '$name' rejected:"
-	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing|check_no_mram_write: FAILED|^  MRAM|WISP HARDWARE IMAGE GATE|an enabled devicetree node" "$log" | sed 's/^/    /' | head -n 8
+	grep -E "WISP SAFETY RULE 8|check_rule8: FAIL|WISP: patch missing|check_no_mram_write: FAILED|^  MRAM|WISP HARDWARE IMAGE GATE|an enabled devicetree node" "$log" | sed 's/^/    /' | head -n 8 || true # head closing the pipe early is not a failure
 }
 west_build() { # <name> <cmake args...>
 	local name="$1"
@@ -182,15 +195,20 @@ grep -q "EM9305 firmware bytes found" "$out/neg-stripped.log" || {
 echo "ok: 'canary, stripped' rejected by the byte check:"
 grep "bytes found" "$out/neg-stripped.log" | sed 's/^/    /' | head -n 3
 
-# g, h: rung4.md G13 and G11.
+# g, h: rung4.md G13; G11, G12 and W25.
 expect_fail mram-canary "MRAM write symbol linked: am_hal_mram_main_program" \
 	west_build mram-canary -DWISP_MRAM_CANARY=ON
-expect_fail hwimage-panel "WISP HARDWARE IMAGE GATE" \
-	west_build hwimage-panel "-DEXTRA_CONF_FILE=$APP_DIR/images/native-0/native-0.conf"
-# The same gate on the panel alone: native-0 as it is, only the panel node enabled again.
-expect_fail hwimage-panel-only "is EVEN_G2_ULED" \
-	env WISP_PANEL=none "WISP_BUILD_DIR=$CACHE_DIR/build/neg-hwimage-panel-only" "$APP_DIR/scripts/build.sh" \
-	"-DEXTRA_CONF_FILE=$APP_DIR/images/native-0/native-0.conf" \
-	"-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/images/native-0/native-0.overlay;$APP_DIR/tests/hwimage/panel-on.overlay"
+n1="$APP_DIR/images/native-1"
+# native-1's configuration on the development devicetree (Zephyr's nPM13xx nodes enabled).
+expect_fail hwimage-pmic "is NORDIC_NPM13" \
+	west_build hwimage-pmic "-DEXTRA_CONF_FILE=$n1/native-1.conf"
+# native-1 as it is, but with UART1 (a console) enabled again.
+expect_fail hwimage-uart1 "UART1 is enabled" \
+	env WISP_PANEL=none "WISP_BUILD_DIR=$CACHE_DIR/build/neg-hwimage-uart1" "$APP_DIR/scripts/build.sh" \
+	"-DEXTRA_CONF_FILE=$n1/native-1.conf" "-DEXTRA_DTC_OVERLAY_FILE=$n1/native-1.overlay;$APP_DIR/tests/hwimage/uart1-on.overlay"
+# native-1 as it is, but BUCK1's switch expecting another code than W21's 0x01.
+expect_fail hwimage-buck1 "no BUCK1 switch expecting W21's code" \
+	env WISP_PANEL=none "WISP_BUILD_DIR=$CACHE_DIR/build/neg-hwimage-buck1" "$APP_DIR/scripts/build.sh" \
+	"-DEXTRA_CONF_FILE=$n1/native-1.conf" "-DEXTRA_DTC_OVERLAY_FILE=$n1/native-1.overlay;$APP_DIR/tests/hwimage/buck1-1v8.overlay"
 
 step "all passed"

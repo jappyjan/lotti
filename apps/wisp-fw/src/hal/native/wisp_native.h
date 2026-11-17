@@ -33,6 +33,7 @@ struct wisp_watchdog_stats {
 	uint32_t pmic_errors;
 	int8_t pmic_last;  /* the last PMIC write's result (0 or -errno) */
 	bool pmic_armed;   /* stock's arming sequence went through */
+	bool starved;      /* the liveness check stopped feeding the Apollo WDT */
 };
 void wisp_native_watchdogs_start(void);
 const struct wisp_watchdog_stats *wisp_native_watchdog_stats(void);

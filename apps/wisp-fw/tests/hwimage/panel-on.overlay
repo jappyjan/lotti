@@ -1,6 +1,0 @@
-/* SPDX-License-Identifier: MIT
- * TEST ONLY (scripts/test.sh): native-0 with the panel node enabled again; the hardware-image
- * gate (cmake/hwimage.cmake, rung4.md G11) must refuse it on the panel alone. */
-&uled {
-	status = "okay";
-};

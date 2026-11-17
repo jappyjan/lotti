@@ -67,7 +67,9 @@ int wisp_hal_display_power(bool on)
 		err = pm_device_runtime_get(panel);
 		if (err == 0) {
 			powered = true;
-			/* Power-up blanked the panel; resend what the core last composed. */
+			/* Power-up blanked the panel and its frame buffer (the JBD init sends a blank frame
+			 * from it): what was composed while unpowered is gone; this resends the buffer as it
+			 * is now. Compose after powering up. */
 			wisp_flush_invalidate(&flush);
 			err = wisp_flush_commit(&flush);
 		}

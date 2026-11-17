@@ -7,8 +7,9 @@
 
 #include "wisp_boot_layout.h"
 
-/* WDT: LFRC/64 = 16 Hz, reset after WISP_BOOT_WDT_TICKS ticks (128 = 8 s) without a feed. The
- * watchdog stays armed and locked for the app, which must feed it (WDT_RSTRT = 0xB2). */
+/* WDT: LFRC/64, reset after WISP_BOOT_WDT_TICKS ticks without a feed: 128 ticks, about 9.1 s at
+ * the LFRC's nominal 900 Hz (apollo510.h; 8 s only if it ran at 1024 Hz). The watchdog stays armed
+ * and locked for the app, which must feed it (WDT_RSTRT = 0xB2). */
 #ifndef WISP_BOOT_WDT_TICKS
 #define WISP_BOOT_WDT_TICKS 128u
 #endif
@@ -106,8 +107,23 @@ _Noreturn void hw_jump(uint32_t vt)
 		NVIC_ICER(n) = 0xFFFFFFFFu;
 		NVIC_ICPR(n) = 0xFFFFFFFFu;
 	}
+	SYST_CSR = 0;
+	SCB_ICSR = SCB_ICSR_PENDSVCLR | SCB_ICSR_PENDSTCLR;
 	SCB_VTOR = vt;
-	__asm volatile("dsb\n isb\n msr msp, %0\n cpsie i\n bx %1" ::"r"(sp), "r"(pc) : "memory");
+	/* The bootloader enters Wisp Boot in Thread mode on PSP with its own stack limits: zero the
+	 * limits first (a new SP below a stale limit would fault), then both stack pointers, then
+	 * CONTROL = 0 (privileged, MSP). Nothing below touches the stack. */
+	__asm volatile("dsb\n"
+		       "msr msplim, %2\n"
+		       "msr psplim, %2\n"
+		       "msr msp, %0\n"
+		       "msr psp, %0\n"
+		       "msr control, %2\n"
+		       "isb\n"
+		       "cpsie i\n"
+		       "bx %1\n" ::"r"(sp),
+		       "r"(pc), "r"(0u)
+		       : "memory");
 	for (;;) {
 	}
 }

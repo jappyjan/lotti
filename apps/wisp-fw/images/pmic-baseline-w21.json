@@ -204,6 +204,10 @@
     "0x0500": "ADC.TASK_VBAT (start one VBAT conversion)",
     "0x0700": "TIMER.TASK_EN (start the watchdog)",
     "0x0703": "TIMER.TARGET_STROBE (load the period)",
-    "0x0704": "TIMER.TASK_KICK (kick the watchdog)"
+    "0x0704": "TIMER.TASK_KICK (kick the watchdog)",
+    "0x0400": "BUCK.TASK_BUCK1_ENA_SET (the panel's rail on; native-1 W25, gated, needs Jan's go)",
+    "0x0401": "BUCK.TASK_BUCK1_ENA_CLR (the panel's rail off; native-1 W25)",
+    "0x0802": "LDSW.TASK_LDSW2_SET (the panel's load switch on; native-1 W25, gated, needs Jan's go)",
+    "0x0803": "LDSW.TASK_LDSW2_CLR (the panel's load switch off; native-1 W25)"
   }
 }

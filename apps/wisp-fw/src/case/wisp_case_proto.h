@@ -85,8 +85,17 @@ struct wisp_case_status {
 	uint16_t confirm_calls;  /* confirm() calls through Wisp Boot's services */
 	int16_t confirm_result;  /* the last one's result, or WISP_CASE_NO_CONFIRM */
 	uint16_t boot_block_size; /* Wisp Boot status block size, 0 if none */
+	uint8_t display;         /* WISP_CASE_DISPLAY_* (native-1 on; 0 before) */
+	int8_t display_err;      /* the panel's last error, 0 or -errno */
 	char rev[12];            /* firmware git revision, NUL-padded */
 };
+
+/* display: what the panel did this boot (offset 42; offset 43 is its error). */
+#define WISP_CASE_DISPLAY_NONE    0 /* not tried (no panel in this image, or not yet) */
+#define WISP_CASE_DISPLAY_ON      1 /* powered, the boot screen drawn */
+#define WISP_CASE_DISPLAY_OFF     2 /* the boot screen was shown and the panel powered down */
+#define WISP_CASE_DISPLAY_REFUSED 3 /* the rail gate refused: the PMIC is not as stock left it */
+#define WISP_CASE_DISPLAY_FAILED  4 /* power-up or drawing failed (display_err) */
 
 #define WISP_CASE_BT_NOT_STARTED 0x7FFF
 #define WISP_CASE_NO_CONFIRM     0x7FFF

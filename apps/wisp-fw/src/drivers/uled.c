@@ -688,7 +688,19 @@ static int uled_init(const struct device *dev)
 		.addr_length = 4,                                                                  \
 	}
 
+/* Hardware images power the panel only through the gated rail switches (cmake/hwimage.cmake). */
+#if defined(CONFIG_WISP_HW_IMAGE)
+#define ULED_HW_IMAGE_RAILS(n)                                                                     \
+	BUILD_ASSERT(DT_NODE_HAS_COMPAT(DT_INST_PHANDLE(n, vdd_supply), wisp_npm1300_switch) &&    \
+			     DT_INST_NODE_HAS_PROP(n, vio_supply) &&                               \
+			     DT_NODE_HAS_COMPAT(DT_INST_PHANDLE(n, vio_supply), wisp_npm1300_switch), \
+		     "hardware image: the panel's rails must be wisp,npm1300-switch nodes");
+#else
+#define ULED_HW_IMAGE_RAILS(n)
+#endif
+
 #define ULED_DEFINE(n)                                                                             \
+	ULED_HW_IMAGE_RAILS(n)                                                                     \
 	static struct uled_data uled_data_##n;                                                     \
 	static const struct uled_config uled_config_##n = {                                        \
 		.bus = DEVICE_DT_GET(DT_INST_BUS(n)),                                              \

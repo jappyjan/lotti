@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: MIT
+description: |
+  One nPM1300 rail switched by its task registers (child of wisp,npm1300-rails). Enabling first
+  reads the rail's configuration and refuses (-EACCES, nothing written) unless it equals the
+  stock values below (W21's snapshot, images/pmic-baseline-w21.json). Of regulator.yaml only the
+  name is allowed: no always-on, boot-on or voltage, so only the panel driver switches the rail
+  and nothing ever writes its configuration.
+
+compatible: "wisp,npm1300-switch"
+
+include:
+  - name: regulator.yaml
+    property-allowlist:
+      - regulator-name
+
+properties:
+  rail:
+    type: string
+    required: true
+    enum:
+      - "buck1"
+      - "ldsw2"
+    description: |
+      buck1: TASKS 0x0400 (enable) / 0x0401 (disable); gate VOUT_NORM 0x0408 = expect-vout and
+      SW_CTRL 0x040F = 0x03 (the voltage from VOUT_NORM, not the VSET pin).
+      ldsw2: TASKS 0x0802 / 0x0803; gate LDSW2.LDOSEL 0x0809 = 0x00 (load-switch mode).
+  expect-vout:
+    type: int
+    description: |
+      buck1 only: the VOUT_NORM code the rail must already hold (JBD4010: 0x01, read on the left
+      temple at W21). The driver never writes it.
